@@ -16,44 +16,30 @@ export const handler = async (event) => {
       }
     }
 
-    // Fetch season list
+    // Fetch season list — links are showseason.php?season=42
     const seasonsRes = await fetch('https://j-archive.com/listseasons.php', fetchOpts)
     const seasonsHtml = await seasonsRes.text()
 
-    // Extract season links via regex — more reliable than DOM parsing
-    // Format: href="listseasonepisodes.php?season=41"
-    const seasonMatches = [...seasonsHtml.matchAll(/href="listseasonepisodes\.php\?season=(\d+)"[^>]*>([^<]+)</g)]
-    
-    // Also try the full URL format
-    const seasonMatchesFull = [...seasonsHtml.matchAll(/href="[^"]*listseasonepisodes[^"]*season=(\d+)"[^>]*>([^<]+)</g)]
-    
-    const allMatches = seasonMatches.length > 0 ? seasonMatches : seasonMatchesFull
+    // Extract numeric seasons only (skip special ones like "cwcpi", "goattournament")
+    const seasonMatches = [...seasonsHtml.matchAll(/href="showseason\.php\?season=(\d+)"[^>]*>([^<]+)</g)]
+    const seasons = seasonMatches.map(m => ({ id: m[1], label: m[2].trim() }))
 
-    // Debug: if still no matches, return what links we DO find
-    if (allMatches.length === 0) {
-      const allLinks = [...seasonsHtml.matchAll(/href="([^"]{0,80})"/g)].slice(0, 20).map(m => m[1])
-      return { statusCode: 502, headers, body: JSON.stringify({
-        error: 'Could not find season links',
-        allLinksFound: allLinks,
-        htmlLength: seasonsHtml.length,
-      })}
+    if (seasons.length === 0) {
+      return { statusCode: 502, headers, body: JSON.stringify({ error: 'No seasons found', htmlLength: seasonsHtml.length }) }
     }
 
-    const seasons = allMatches.map(m => ({ id: m[1], label: m[2].trim() }))
-
-    // Determine which season to fetch
+    // Fetch episodes for target season — showseason.php?season=42
     const targetSeason = season || seasons[0].id
-
-    const epRes = await fetch(`https://j-archive.com/listseasonepisodes.php?season=${targetSeason}`, fetchOpts)
+    const epRes = await fetch(`https://j-archive.com/showseason.php?season=${targetSeason}`, fetchOpts)
     const epHtml = await epRes.text()
 
-    // Extract episodes via regex
-    // Format: href="showgame.php?game_id=9200">#9157, Monday, April 14, 2025
+    // Episodes are linked as showgame.php?game_id=XXXX
     const epMatches = [...epHtml.matchAll(/href="showgame\.php\?game_id=(\d+)"[^>]*>([^<]+)</g)]
 
     const episodes = epMatches.map(m => {
       const gameId = m[1]
       const text = m[2].trim()
+      // Format: "#9200, Monday, April 14, 2025"
       const showMatch = text.match(/#(\d+)/)
       const showNumber = showMatch ? showMatch[1] : ''
       const dateMatch = text.match(/,\s*(.+)$/)

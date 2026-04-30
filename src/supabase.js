@@ -5,14 +5,10 @@ const SUPABASE_ANON_KEY = 'sb_publishable_qJMYyHDRF18PWU6S4nqewA_bi1SDSEM'
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
 
-// ── Auth ──────────────────────────────────────────────────────────────────────
-
 export async function sendMagicLink(email) {
   const { error } = await supabase.auth.signInWithOtp({
     email,
-    options: {
-      emailRedirectTo: window.location.origin,
-    }
+    options: { emailRedirectTo: window.location.origin }
   })
   if (error) throw error
 }
@@ -22,14 +18,6 @@ export async function signOut() {
   if (error) throw error
 }
 
-export async function getSession() {
-  const { data: { session } } = await supabase.auth.getSession()
-  return session
-}
-
-// ── Data sync ─────────────────────────────────────────────────────────────────
-
-// Load user data from Supabase
 export async function loadRemoteData() {
   const { data, error } = await supabase
     .from('user_data')
@@ -37,7 +25,6 @@ export async function loadRemoteData() {
     .single()
 
   if (error) {
-    // No row yet — first time user
     if (error.code === 'PGRST116') return { cards: [], gameHistory: [] }
     throw error
   }
@@ -48,38 +35,53 @@ export async function loadRemoteData() {
   }
 }
 
-// Save user data to Supabase (upsert)
 export async function saveRemoteData(cards, gameHistory) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return
 
-  const { error } = await supabase
+  // First check if a row exists
+  const { data: existing } = await supabase
     .from('user_data')
-    .upsert({
-      user_id: user.id,
-      cards,
-      game_history: gameHistory,
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'user_id' })
+    .select('id')
+    .eq('user_id', user.id)
+    .single()
 
-  if (error) throw error
+  if (existing) {
+    // Update existing row
+    const { error } = await supabase
+      .from('user_data')
+      .update({
+        cards,
+        game_history: gameHistory,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('user_id', user.id)
+    if (error) throw error
+  } else {
+    // Insert new row
+    const { error } = await supabase
+      .from('user_data')
+      .insert({
+        user_id: user.id,
+        cards,
+        game_history: gameHistory,
+        updated_at: new Date().toISOString(),
+      })
+    if (error) throw error
+  }
 }
 
-// Merge remote and local data, preferring the most recently updated card
-// (by createdAt — remote wins for existing cards, local wins for new ones)
 export function mergeData(local, remote) {
-  const merged = { ...local }
-
-  // Merge cards: remote wins on conflict (same id), local-only cards are kept
+  // Merge cards: use remote as base, add local-only cards
   const remoteCardIds = new Set(remote.cards.map(c => c.id))
   const localOnlyCards = local.cards.filter(c => !remoteCardIds.has(c.id))
-  merged.cards = [...remote.cards, ...localOnlyCards]
+  const cards = [...remote.cards, ...localOnlyCards]
 
-  // Merge game history: dedupe by episodeId + round, keep all unique games
-  const remoteGameKeys = new Set(remote.gameHistory.map(g => `${g.episodeId}-${g.round}`))
-  const localOnlyGames = local.gameHistory.filter(g => !remoteGameKeys.has(`${g.episodeId}-${g.round}`))
-  merged.gameHistory = [...remote.gameHistory, ...localOnlyGames]
+  // Merge game history: dedupe by episodeId, keep all unique
+  const remoteGameKeys = new Set(remote.gameHistory.map(g => `${g.episodeId}-${g.airDate}`))
+  const localOnlyGames = local.gameHistory.filter(g => !remoteGameKeys.has(`${g.episodeId}-${g.airDate}`))
+  const gameHistory = [...remote.gameHistory, ...localOnlyGames]
     .sort((a, b) => new Date(b.playedAt) - new Date(a.playedAt))
 
-  return merged
+  return { cards, gameHistory }
 }

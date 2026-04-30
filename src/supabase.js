@@ -5,10 +5,23 @@ const SUPABASE_ANON_KEY = 'sb_publishable_qJMYyHDRF18PWU6S4nqewA_bi1SDSEM'
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
 
-export async function sendMagicLink(email) {
-  const { error } = await supabase.auth.signInWithOtp({
-    email,
-    options: { emailRedirectTo: window.location.origin }
+// ── Auth ──────────────────────────────────────────────────────────────────────
+
+export async function signUp(email, password) {
+  const { data, error } = await supabase.auth.signUp({ email, password })
+  if (error) throw error
+  return data
+}
+
+export async function signIn(email, password) {
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password })
+  if (error) throw error
+  return data
+}
+
+export async function resetPassword(email) {
+  const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    redirectTo: window.location.origin,
   })
   if (error) throw error
 }
@@ -17,6 +30,8 @@ export async function signOut() {
   const { error } = await supabase.auth.signOut()
   if (error) throw error
 }
+
+// ── Data sync ─────────────────────────────────────────────────────────────────
 
 export async function loadRemoteData() {
   const { data, error } = await supabase
@@ -39,7 +54,6 @@ export async function saveRemoteData(cards, gameHistory) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return
 
-  // First check if a row exists
   const { data: existing } = await supabase
     .from('user_data')
     .select('id')
@@ -47,37 +61,24 @@ export async function saveRemoteData(cards, gameHistory) {
     .single()
 
   if (existing) {
-    // Update existing row
     const { error } = await supabase
       .from('user_data')
-      .update({
-        cards,
-        game_history: gameHistory,
-        updated_at: new Date().toISOString(),
-      })
+      .update({ cards, game_history: gameHistory, updated_at: new Date().toISOString() })
       .eq('user_id', user.id)
     if (error) throw error
   } else {
-    // Insert new row
     const { error } = await supabase
       .from('user_data')
-      .insert({
-        user_id: user.id,
-        cards,
-        game_history: gameHistory,
-        updated_at: new Date().toISOString(),
-      })
+      .insert({ user_id: user.id, cards, game_history: gameHistory, updated_at: new Date().toISOString() })
     if (error) throw error
   }
 }
 
 export function mergeData(local, remote) {
-  // Merge cards: use remote as base, add local-only cards
   const remoteCardIds = new Set(remote.cards.map(c => c.id))
   const localOnlyCards = local.cards.filter(c => !remoteCardIds.has(c.id))
   const cards = [...remote.cards, ...localOnlyCards]
 
-  // Merge game history: dedupe by episodeId, keep all unique
   const remoteGameKeys = new Set(remote.gameHistory.map(g => `${g.episodeId}-${g.airDate}`))
   const localOnlyGames = local.gameHistory.filter(g => !remoteGameKeys.has(`${g.episodeId}-${g.airDate}`))
   const gameHistory = [...remote.gameHistory, ...localOnlyGames]

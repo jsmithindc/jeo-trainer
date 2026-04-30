@@ -4,7 +4,7 @@ import { loadCards, saveCards, loadGameHistory, saveGameHistory } from './storag
 import { parseApkg } from './ankiImport.js'
 import { SAMPLE_BOARD } from './boardData.js'
 import { fetchEpisode, episodeToBoard } from './jarchive.js'
-import { supabase, sendMagicLink, signOut, loadRemoteData, saveRemoteData, mergeData } from './supabase.js'
+import { supabase, signIn, signUp, resetPassword, signOut, loadRemoteData, saveRemoteData, mergeData } from './supabase.js'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -81,10 +81,21 @@ export default function App() {
     setStorageReady(true)
   }, [])
 
-  // ── Auto-load latest episode on mount ─────────────────────────────────────
+  // ── Auto-load latest episode + episode list on mount ────────────────────
   useEffect(() => {
     if (!authChecked) return
-    loadEpisode('latest', true)
+    // Load episode list so prev/next work immediately
+    fetch('/.netlify/functions/episodes')
+      .then(r => r.json())
+      .then(data => {
+        if (data.episodes?.length) {
+          setEpisodeList(data.episodes)
+          setCurrentEpIndex(0) // latest is index 0
+        }
+      })
+      .catch(() => {}) // non-critical
+    // Load latest episode, fall back to known recent ID
+    loadEpisode('latest', true).catch(() => loadEpisode('9200', true))
   }, [authChecked])
 
   // ── Sync from Supabase when user logs in ──────────────────────────────────
@@ -134,8 +145,7 @@ export default function App() {
 
   // ── Episode loading ───────────────────────────────────────────────────────
   async function loadEpisode(gameId, silent = false) {
-    if (!silent) setBoardLoading(true)
-    else setBoardLoading(true)
+    setBoardLoading(true)
     setBoardError(null)
     try {
       const episode = await fetchEpisode(gameId)
@@ -156,6 +166,7 @@ export default function App() {
     } catch (err) {
       setBoardError(err.message)
       if (!board) setBoard(SAMPLE_BOARD)
+      throw err // re-throw so callers can catch and fallback
     } finally {
       setBoardLoading(false)
     }
@@ -203,6 +214,20 @@ export default function App() {
     const totalCorrect = Object.values(singleClueStates).filter(s => s === 'correct').length + Object.values(doubleClueStates).filter(s => s === 'correct').length
     const totalIncorrect = Object.values(singleClueStates).filter(s => s === 'incorrect').length + Object.values(doubleClueStates).filter(s => s === 'incorrect').length
     const totalPass = Object.values(singleClueStates).filter(s => s === 'pass').length + Object.values(doubleClueStates).filter(s => s === 'pass').length
+
+    // Build per-category breakdown for history view
+    function buildBreakdown(board, states) {
+      if (!board) return []
+      return board.categories.map((cat, ci) => {
+        let score = 0
+        cat.clues.forEach((clue, ri) => {
+          const state = (states || {})[`${ci}-${ri}`] || 'unanswered'
+          if (!clue.isDailyDouble) score += CORYAT_VAL[state](clue.value)
+        })
+        return { name: cat.name, score }
+      })
+    }
+
     const game = {
       id: `game-${Date.now()}`,
       episodeId: episodeMeta.episodeNumber,
@@ -215,6 +240,8 @@ export default function App() {
       totalIncorrect,
       totalPass,
       finalJeopardy: fjResult || null,
+      singleBreakdown: buildBreakdown(singleBoard, singleClueStates),
+      doubleBreakdown: buildBreakdown(doubleBoard, doubleClueStates),
     }
     setGameHistory(prev => [game, ...prev.filter(g => g.episodeId !== game.episodeId)])
   }
@@ -392,22 +419,46 @@ function NavBar({ view, setView, dueCount, deckSize }) {
 
 // ─── Auth Modal ───────────────────────────────────────────────────────────────
 function AuthModal({ user, syncError, onClose, onSignOut }) {
+  const [authView, setAuthView] = useState('signin') // signin | signup | reset
   const [email, setEmail] = useState('')
-  const [sent, setSent] = useState(false)
+  const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [success, setSuccess] = useState(null)
 
-  async function handleSend() {
+  async function handleSignIn() {
+    if (!email.trim() || !password) return
+    setLoading(true); setError(null)
+    try {
+      await signIn(email.trim(), password)
+      onClose()
+    } catch (err) {
+      setError(err.message)
+    } finally { setLoading(false) }
+  }
+
+  async function handleSignUp() {
+    if (!email.trim() || !password) return
+    if (password.length < 6) { setError('Password must be at least 6 characters'); return }
+    setLoading(true); setError(null)
+    try {
+      await signUp(email.trim(), password)
+      setSuccess('Account created! You are now signed in.')
+      setTimeout(onClose, 1500)
+    } catch (err) {
+      setError(err.message)
+    } finally { setLoading(false) }
+  }
+
+  async function handleReset() {
     if (!email.trim()) return
     setLoading(true); setError(null)
     try {
-      await sendMagicLink(email.trim())
-      setSent(true)
+      await resetPassword(email.trim())
+      setSuccess('Password reset email sent! Check your inbox.')
     } catch (err) {
       setError(err.message)
-    } finally {
-      setLoading(false)
-    }
+    } finally { setLoading(false) }
   }
 
   return (
@@ -415,28 +466,85 @@ function AuthModal({ user, syncError, onClose, onSignOut }) {
       <div style={{ ...S.modal, maxWidth: 360 }} onClick={e => e.stopPropagation()}>
         <button style={S.closeX} onClick={onClose}>✕</button>
         <div style={S.browserTitle}>☁️ SYNC & BACKUP</div>
+
         {user ? (
           <div style={{ marginTop: 16 }}>
-            <div style={{ fontSize: 13, color: '#7cd992', marginBottom: 8 }}>✅ Signed in as</div>
+            <div style={{ fontSize: 13, color: '#7cd992', marginBottom: 6 }}>✅ Signed in as</div>
             <div style={{ fontSize: 13, color: '#c0c8e8', marginBottom: 12, wordBreak: 'break-all' }}>{user.email}</div>
-            <div style={{ fontSize: 12, color: '#6070a0', marginBottom: 16, lineHeight: 1.6 }}>Cards and game history sync automatically across all your devices.</div>
-            {syncError && <div style={{ fontSize: 12, color: '#e07070', marginBottom: 12, padding: '8px', background: 'rgba(224,112,112,0.08)', borderRadius: 6 }}>⚠️ Sync error: {syncError}</div>}
-            <button style={{ ...S.startBtn, background: '#1e2456', color: '#8890d0', border: '1px solid #2e3476' }} onClick={onSignOut}>Sign Out</button>
-          </div>
-        ) : sent ? (
-          <div style={{ marginTop: 16, textAlign: 'center' }}>
-            <div style={{ fontSize: 32, marginBottom: 12 }}>📬</div>
-            <div style={{ fontSize: 15, color: '#7cd992', marginBottom: 8 }}>Check your email!</div>
-            <div style={{ fontSize: 13, color: '#8890c0', lineHeight: 1.6 }}>Sent a magic link to <b style={{ color: '#c0c8e8' }}>{email}</b>. Open it in Safari to sign in.</div>
+            <div style={{ fontSize: 12, color: '#6070a0', marginBottom: 16, lineHeight: 1.6 }}>
+              Cards and game history sync automatically across all your devices.
+            </div>
+            {syncError && (
+              <div style={{ fontSize: 12, color: '#e07070', marginBottom: 12, padding: 8, background: 'rgba(224,112,112,0.08)', borderRadius: 6 }}>
+                ⚠️ Sync error: {syncError}
+              </div>
+            )}
+            <button style={{ ...S.startBtn, background: '#1e2456', color: '#8890d0', border: '1px solid #2e3476' }} onClick={onSignOut}>
+              Sign Out
+            </button>
           </div>
         ) : (
           <div style={{ marginTop: 16 }}>
-            <div style={{ fontSize: 13, color: '#8890c0', lineHeight: 1.6, marginBottom: 16 }}>Sign in to back up your data and sync across devices. No password needed.</div>
-            <div style={S.formLabel}>EMAIL</div>
-            <input style={{ ...S.input, marginBottom: 12 }} type="email" value={email} onChange={e => setEmail(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSend()} placeholder="you@example.com" autoFocus />
-            {error && <div style={{ fontSize: 12, color: '#e07070', marginBottom: 8 }}>{error}</div>}
-            <button style={{ ...S.startBtn, opacity: (!email.trim() || loading) ? 0.5 : 1 }} onClick={handleSend} disabled={!email.trim() || loading}>
-              {loading ? 'Sending...' : 'Send Magic Link →'}
+            {/* Tab switcher */}
+            <div style={{ display: 'flex', gap: 4, marginBottom: 16 }}>
+              {[['signin', 'Sign In'], ['signup', 'Create Account']].map(([v, l]) => (
+                <button key={v} style={{ ...S.toggleBtn, flex: 1, ...(authView === v ? S.toggleActive : {}) }} onClick={() => { setAuthView(v); setError(null); setSuccess(null) }}>
+                  {l}
+                </button>
+              ))}
+            </div>
+
+            {authView !== 'reset' && (
+              <>
+                <div style={S.formLabel}>EMAIL</div>
+                <input
+                  style={{ ...S.input, marginBottom: 10 }}
+                  type="email"
+                  value={email}
+                  onChange={e => setEmail(e.target.value)}
+                  placeholder="you@example.com"
+                  autoComplete="email"
+                />
+                <div style={S.formLabel}>PASSWORD</div>
+                <input
+                  style={{ ...S.input, marginBottom: 4 }}
+                  type="password"
+                  value={password}
+                  onChange={e => setPassword(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && (authView === 'signin' ? handleSignIn() : handleSignUp())}
+                  placeholder={authView === 'signup' ? 'At least 6 characters' : '••••••••'}
+                  autoComplete={authView === 'signin' ? 'current-password' : 'new-password'}
+                />
+                {authView === 'signin' && (
+                  <button style={{ fontSize: 11, color: '#4060a0', letterSpacing: 1, marginBottom: 12, textAlign: 'right', width: '100%' }} onClick={() => { setAuthView('reset'); setError(null) }}>
+                    Forgot password?
+                  </button>
+                )}
+              </>
+            )}
+
+            {authView === 'reset' && (
+              <>
+                <div style={{ fontSize: 13, color: '#8890c0', lineHeight: 1.6, marginBottom: 12 }}>
+                  Enter your email and we'll send a reset link.
+                </div>
+                <div style={S.formLabel}>EMAIL</div>
+                <input style={{ ...S.input, marginBottom: 12 }} type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@example.com" />
+                <button style={{ fontSize: 11, color: '#4060a0', letterSpacing: 1, marginBottom: 12 }} onClick={() => { setAuthView('signin'); setError(null) }}>
+                  ← Back to sign in
+                </button>
+              </>
+            )}
+
+            {error && <div style={{ fontSize: 12, color: '#e07070', marginBottom: 10, padding: '6px 8px', background: 'rgba(224,112,112,0.08)', borderRadius: 6 }}>{error}</div>}
+            {success && <div style={{ fontSize: 12, color: '#7cd992', marginBottom: 10, padding: '6px 8px', background: 'rgba(124,217,146,0.08)', borderRadius: 6 }}>{success}</div>}
+
+            <button
+              style={{ ...S.startBtn, width: '100%', opacity: loading || !email.trim() ? 0.5 : 1 }}
+              onClick={authView === 'signin' ? handleSignIn : authView === 'signup' ? handleSignUp : handleReset}
+              disabled={loading || !email.trim()}
+            >
+              {loading ? 'Please wait...' : authView === 'signin' ? 'Sign In →' : authView === 'signup' ? 'Create Account →' : 'Send Reset Email →'}
             </button>
           </div>
         )}
@@ -962,6 +1070,76 @@ function DeckView({ cards, setCards }) {
   )
 }
 
+// ─── Game History Row ────────────────────────────────────────────────────────
+function GameHistoryRow({ game }) {
+  const [expanded, setExpanded] = useState(false)
+  const hasBreakdown = (game.singleBreakdown?.length > 0) || (game.doubleBreakdown?.length > 0)
+
+  return (
+    <div style={{ borderBottom: '1px solid #1a2040' }}>
+      {/* Summary row — always visible, tappable if breakdown exists */}
+      <div
+        style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '8px 0', cursor: hasBreakdown ? 'pointer' : 'default' }}
+        onClick={() => hasBreakdown && setExpanded(!expanded)}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            {hasBreakdown && (
+              <span style={{ fontSize: 10, color: '#4060a0', transition: 'transform 0.2s', display: 'inline-block', transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>
+            )}
+            <span style={{ fontSize: 13, color: '#c0c8e8' }}>#{game.episodeId} · {game.airDate}</span>
+          </div>
+          <span style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 22, color: game.coryatScore >= 0 ? '#4caf7d' : '#e57373' }}>
+            {game.coryatScore >= 0 ? '+' : ''}{game.coryatScore.toLocaleString()}
+          </span>
+        </div>
+        <div style={{ display: 'flex', gap: 8, fontSize: 10, color: '#4060a0', paddingLeft: hasBreakdown ? 16 : 0 }}>
+          <span>SJ: {game.singleCoryat >= 0 ? '+' : ''}{game.singleCoryat}</span>
+          {game.doubleCoryat !== 0 && <span>DJ: {game.doubleCoryat >= 0 ? '+' : ''}{game.doubleCoryat}</span>}
+          <span>{game.totalCorrect}✓ {game.totalIncorrect}✗ {game.totalPass} pass</span>
+          {game.finalJeopardy && (
+            <span style={{ color: game.finalJeopardy.result === 'correct' ? '#4caf7d' : '#e57373' }}>
+              FJ: {game.finalJeopardy.result === 'correct' ? '✓' : '✗'}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Expanded category breakdown */}
+      {expanded && hasBreakdown && (
+        <div style={{ paddingLeft: 16, paddingBottom: 10 }}>
+          {game.singleBreakdown?.length > 0 && (
+            <div style={{ marginBottom: 8 }}>
+              <div style={{ fontSize: 9, letterSpacing: 3, color: '#4060a0', marginBottom: 6 }}>SINGLE JEOPARDY</div>
+              {game.singleBreakdown.map((cat, i) => (
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid #0f1530' }}>
+                  <span style={{ fontSize: 12, color: '#8890c0' }}>{cat.name}</span>
+                  <span style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 16, color: cat.score >= 0 ? '#4caf7d' : '#e57373' }}>
+                    {cat.score >= 0 ? '+' : ''}{cat.score.toLocaleString()}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+          {game.doubleBreakdown?.length > 0 && (
+            <div>
+              <div style={{ fontSize: 9, letterSpacing: 3, color: '#4060a0', marginBottom: 6 }}>DOUBLE JEOPARDY</div>
+              {game.doubleBreakdown.map((cat, i) => (
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid #0f1530' }}>
+                  <span style={{ fontSize: 12, color: '#8890c0' }}>{cat.name}</span>
+                  <span style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 16, color: cat.score >= 0 ? '#4caf7d' : '#e57373' }}>
+                    {cat.score >= 0 ? '+' : ''}{cat.score.toLocaleString()}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Summary / Stats View ─────────────────────────────────────────────────────
 function SummaryView({ coryatScore, singleBoard, doubleBoard, singleClueStates, doubleClueStates, gameHistory, episodeMeta }) {
   const [historyView, setHistoryView] = useState(false)
@@ -978,11 +1156,11 @@ function SummaryView({ coryatScore, singleBoard, doubleBoard, singleClueStates, 
   const best = gameHistory.length > 0 ? Math.max(...gameHistory.map(g => g.coryatScore)) : null
 
   function calcCategoryBreakdown(board, states) {
-    if (!board || !states || Object.keys(states).length === 0) return []
+    if (!board) return []
     return board.categories.map((cat, ci) => {
       let score = 0
       cat.clues.forEach((clue, ri) => {
-        const state = states[`${ci}-${ri}`] || 'unanswered'
+        const state = (states || {})[`${ci}-${ri}`] || 'unanswered'
         if (!clue.isDailyDouble) score += CORYAT_VAL[state](clue.value)
       })
       return { name: cat.name, score }
@@ -991,7 +1169,8 @@ function SummaryView({ coryatScore, singleBoard, doubleBoard, singleClueStates, 
 
   const singleBreakdown = calcCategoryBreakdown(singleBoard, singleClueStates)
   const doubleBreakdown = calcCategoryBreakdown(doubleBoard, doubleClueStates)
-  const hasCurrentGame = singleBreakdown.length > 0
+  // Show current game section if we have a board loaded (even if no clues answered yet)
+  const hasCurrentGame = !!singleBoard
 
   return (
     <div style={S.summaryWrap}>
@@ -1054,21 +1233,10 @@ function SummaryView({ coryatScore, singleBoard, doubleBoard, singleClueStates, 
         <div style={S.catBreakdown}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
             <div style={S.sectionTitle}>GAME HISTORY</div>
-            <button style={{ fontSize: 10, color: '#4060a0', letterSpacing: 1 }} onClick={() => setHistoryView(!historyView)}>{historyView ? 'COLLAPSE' : 'EXPAND'}</button>
+            <button style={{ fontSize: 10, color: '#4060a0', letterSpacing: 1 }} onClick={() => setHistoryView(!historyView)}>{historyView ? 'COLLAPSE' : 'EXPAND ALL'}</button>
           </div>
           {(historyView ? gameHistory : gameHistory.slice(0, 5)).map((game) => (
-            <div key={game.id} style={{ ...S.catRow, flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-                <span style={{ fontSize: 13, color: '#c0c8e8' }}>#{game.episodeId} · {game.airDate}</span>
-                <span style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 22, color: game.coryatScore >= 0 ? '#4caf7d' : '#e57373' }}>{game.coryatScore >= 0 ? '+' : ''}{game.coryatScore.toLocaleString()}</span>
-              </div>
-              <div style={{ display: 'flex', gap: 8, fontSize: 10, color: '#4060a0' }}>
-                <span>SJ: {game.singleCoryat >= 0 ? '+' : ''}{game.singleCoryat}</span>
-                {game.doubleCoryat !== 0 && <span>DJ: {game.doubleCoryat >= 0 ? '+' : ''}{game.doubleCoryat}</span>}
-                <span>{game.totalCorrect}✓ {game.totalIncorrect}✗</span>
-                {game.finalJeopardy && <span style={{ color: game.finalJeopardy.result === 'correct' ? '#4caf7d' : '#e57373' }}>FJ: {game.finalJeopardy.result === 'correct' ? '✓' : '✗'}</span>}
-              </div>
-            </div>
+            <GameHistoryRow key={game.id} game={game} />
           ))}
           {!historyView && gameHistory.length > 5 && (
             <button style={{ fontSize: 11, color: '#4060a0', padding: '8px 0', width: '100%', letterSpacing: 1 }} onClick={() => setHistoryView(true)}>+ {gameHistory.length - 5} more games</button>

@@ -1,122 +1,123 @@
 import { parse } from 'node-html-parser'
 
-// J-Archive episode fetcher & parser
-// Called by the app as: GET /.netlify/functions/jarchive?episode=8000
-// Or for latest:        GET /.netlify/functions/jarchive?episode=latest
-
 export const handler = async (event) => {
   const headers = {
     'Access-Control-Allow-Origin': '*',
     'Content-Type': 'application/json',
   }
 
+  const debug = event.queryStringParameters?.debug === '1'
+
   try {
     let episodeId = event.queryStringParameters?.episode || 'latest'
 
-    // If latest, fetch the j-archive home page to find the most recent episode ID
+    // ── Find latest episode ID ────────────────────────────────────────────────
     if (episodeId === 'latest') {
-      const homeRes = await fetch('https://j-archive.com/listseasons.php', {
-        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; JeoTrainer/1.0)' }
+      const homeRes = await fetch('https://j-archive.com/', {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        }
       })
       const homeHtml = await homeRes.text()
       const homeDoc = parse(homeHtml)
-      // Most recent episode link is the first showgame link
-      const firstLink = homeDoc.querySelector('a[href*="showgame"]')
-      if (firstLink) {
-        const match = firstLink.getAttribute('href').match(/game_id=(\d+)/)
-        if (match) episodeId = match[1]
+
+      // Find highest game_id across all showgame links
+      let maxId = 0
+      for (const link of homeDoc.querySelectorAll('a[href*="showgame"]')) {
+        const match = (link.getAttribute('href') || '').match(/game_id=(\d+)/)
+        if (match && parseInt(match[1]) > maxId) maxId = parseInt(match[1])
       }
-      if (episodeId === 'latest') episodeId = '8000' // fallback
+      episodeId = maxId > 0 ? String(maxId) : '8000'
     }
 
+    // ── Fetch episode page ────────────────────────────────────────────────────
     const url = `https://j-archive.com/showgame.php?game_id=${episodeId}`
     const res = await fetch(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; JeoTrainer/1.0)' }
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Referer': 'https://j-archive.com/',
+      }
     })
 
     if (!res.ok) {
-      return { statusCode: 404, headers, body: JSON.stringify({ error: `Episode ${episodeId} not found` }) }
+      return { statusCode: 404, headers, body: JSON.stringify({ error: `Episode ${episodeId} not found (HTTP ${res.status})` }) }
     }
 
     const html = await res.text()
     const doc = parse(html)
 
-    // ── Episode metadata ──────────────────────────────────────────────────────
-    const titleEl = doc.querySelector('#game_title h1')
-    const titleText = titleEl?.text?.trim() || ''
+    // ── Debug mode ────────────────────────────────────────────────────────────
+    if (debug) {
+      const titleEl = doc.querySelector('#game_title h1')
+      const clueEl = doc.querySelector('#clue_J_1_1')
+      const responseEl = doc.querySelector('#clue_J_1_1_r')
+      const tdsWithMouseover = doc.querySelectorAll('td[onmouseover]')
 
-    // Title format: "Show #8000 - Wednesday, November 1, 2023"
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({
+          debug: true,
+          episodeId,
+          pageLength: html.length,
+          title: titleEl?.text?.trim(),
+          hasJeopardyRound: !!doc.querySelector('#jeopardy_round'),
+          clueJ11Text: clueEl?.text?.trim(),
+          clueJ11ParentClass: clueEl?.parentNode?.getAttribute('class'),
+          responseJ11Html: responseEl?.toString()?.slice(0, 400),
+          responseJ11Text: responseEl?.querySelector('.correct_response')?.text?.trim(),
+          firstTdOnmouseover: tdsWithMouseover[0]?.getAttribute('onmouseover')?.slice(0, 400),
+          rawAroundClue: html.includes('clue_J_1_1')
+            ? html.slice(html.indexOf('clue_J_1_1') - 100, html.indexOf('clue_J_1_1') + 800)
+            : 'NOT FOUND',
+        })
+      }
+    }
+
+    // ── Episode metadata ──────────────────────────────────────────────────────
+    const titleText = doc.querySelector('#game_title h1')?.text?.trim() || ''
     const showMatch = titleText.match(/Show #(\d+)/)
-    const dateMatch = titleText.match(/- (.+)$/)
+    const dateMatch = titleText.match(/[-–]\s*(.+)$/)
     const episodeNumber = showMatch ? showMatch[1] : episodeId
     const airDate = dateMatch ? dateMatch[1].trim() : ''
-
-    const commentsEl = doc.querySelector('#game_comments')
-    const comments = commentsEl?.text?.trim() || ''
 
     // ── Parse a round ─────────────────────────────────────────────────────────
     function parseRound(roundId) {
       const roundEl = doc.querySelector(`#${roundId}`)
       if (!roundEl) return null
 
-      // Categories
-      const categoryEls = roundEl.querySelectorAll('.category_name')
-      const categoryNames = categoryEls.map(el => el.text.trim())
+      const categoryNames = roundEl.querySelectorAll('.category_name').map(el => el.text.trim())
+      if (categoryNames.length === 0) return null
 
-      // Clues — j-archive lays them out in a table: 5 rows × 6 cols
-      // Each clue cell has id like "clue_J_1_1" (col_row) or "clue_DJ_1_1"
       const prefix = roundId === 'jeopardy_round' ? 'J' : 'DJ'
       const baseValue = roundId === 'jeopardy_round' ? 200 : 400
 
       const categories = categoryNames.map((name, colIdx) => {
         const clues = []
         for (let row = 1; row <= 5; row++) {
-          const colNum = colIdx + 1
-          const clueId = `clue_${prefix}_${colNum}_${row}`
-          const clueEl = doc.querySelector(`#${clueId}`)
+          const clueId = `clue_${prefix}_${colIdx + 1}_${row}`
 
-          // The answer text lives in the clue td
-          const answerText = clueEl?.text?.trim() || ''
+          const clueTextEl = doc.querySelector(`#${clueId}`)
+          const answerText = clueTextEl?.text?.trim() || '(unavailable)'
 
-          // The correct response is in a sibling div with id like "clue_J_1_1_r"
-          // It's hidden in a <em class="correct_response"> inside a onmouseover
-          // J-archive stores it in the mouseover HTML of the clue cell's parent td
-          const clueCell = doc.querySelector(`td#clue_${prefix}_${colNum}_${row}`)?.parentNode
-          let question = ''
-          let isDailyDouble = false
-
-          if (clueCell) {
-            const onmouseover = clueCell.getAttribute('onmouseover') || ''
-            // Extract correct_response from the embedded HTML string
-            const crMatch = onmouseover.match(/<em class=\\"correct_response\\">(.*?)<\/em>/)
-            if (crMatch) {
-              question = crMatch[1]
-                .replace(/\\"/g, '"')
-                .replace(/<[^>]+>/g, '')
-                .replace(/&amp;/g, '&')
-                .replace(/&lt;/g, '<')
-                .replace(/&gt;/g, '>')
-                .replace(/&#39;/g, "'")
-                .replace(/&quot;/g, '"')
-                .trim()
-            }
-            // Check for daily double
-            isDailyDouble = onmouseover.includes('Daily Double') ||
-              (clueCell.getAttribute('onmouseout') || '').includes('Daily Double')
+          // Correct response lives in a hidden div: #clue_J_1_1_r .correct_response
+          const responseEl = doc.querySelector(`#${clueId}_r`)
+          let question = '(unavailable)'
+          if (responseEl) {
+            const crEl = responseEl.querySelector('.correct_response')
+            if (crEl) question = crEl.text.trim()
           }
 
-          // Also check the clue cell class for daily double
-          const clueCellClass = doc.querySelector(`#clue_${prefix}_${colNum}_${row}`)?.parentNode?.getAttribute('class') || ''
-          if (clueCellClass.includes('daily_double')) isDailyDouble = true
+          // Daily double detection
+          let isDailyDouble = false
+          const parentTd = clueTextEl?.parentNode
+          const tdClass = (parentTd?.getAttribute('class') || '') + (parentTd?.parentNode?.getAttribute('class') || '')
+          if (tdClass.includes('daily_double')) isDailyDouble = true
+          if ((parentTd?.getAttribute('onmouseover') || '').toLowerCase().includes('daily double')) isDailyDouble = true
 
-          const value = baseValue * row
-
-          clues.push({
-            value,
-            answer: answerText || `(clue unavailable)`,
-            question: question ? `${question}` : '(response unavailable)',
-            isDailyDouble,
-          })
+          clues.push({ value: baseValue * row, answer: answerText, question, isDailyDouble })
         }
         return { name, clues }
       })
@@ -127,48 +128,36 @@ export const handler = async (event) => {
     const singleJeopardy = parseRound('jeopardy_round')
     const doubleJeopardy = parseRound('double_jeopardy_round')
 
-    // Final jeopardy
+    // ── Final Jeopardy ────────────────────────────────────────────────────────
     let finalJeopardy = null
     const fjEl = doc.querySelector('#final_jeopardy_round')
     if (fjEl) {
-      const fjCat = fjEl.querySelector('.category_name')?.text?.trim() || 'FINAL JEOPARDY'
-      const fjClue = fjEl.querySelector('.clue_text')?.text?.trim() || ''
-      const fjOnmouseover = fjEl.querySelector('td.clue')?.getAttribute('onmouseover') || ''
-      const fjMatch = fjOnmouseover.match(/<em class=\\"correct_response\\">(.*?)<\/em>/)
-      const fjAnswer = fjMatch
-        ? fjMatch[1].replace(/\\"/g, '"').replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&#39;/g, "'").trim()
-        : ''
-      finalJeopardy = { category: fjCat, clue: fjClue, answer: fjAnswer }
+      finalJeopardy = {
+        category: fjEl.querySelector('.category_name')?.text?.trim() || 'FINAL JEOPARDY',
+        clue: fjEl.querySelector('.clue_text')?.text?.trim() || '',
+        answer: fjEl.querySelector('[id$="_r"] .correct_response')?.text?.trim() || '',
+      }
     }
 
     if (!singleJeopardy || singleJeopardy.categories.length === 0) {
       return {
-        statusCode: 404,
+        statusCode: 422,
         headers,
-        body: JSON.stringify({ error: `Could not parse episode ${episodeId}. It may not exist or j-archive may have changed its format.` })
+        body: JSON.stringify({ error: `Could not parse episode ${episodeId}. Add ?debug=1 to diagnose.`, titleFound: titleText })
       }
     }
 
     return {
       statusCode: 200,
       headers,
-      body: JSON.stringify({
-        episodeId,
-        episodeNumber,
-        airDate,
-        comments,
-        url,
-        singleJeopardy,
-        doubleJeopardy,
-        finalJeopardy,
-      })
+      body: JSON.stringify({ episodeId, episodeNumber, airDate, url, singleJeopardy, doubleJeopardy, finalJeopardy })
     }
 
   } catch (err) {
     return {
       statusCode: 500,
       headers,
-      body: JSON.stringify({ error: err.message })
+      body: JSON.stringify({ error: err.message, stack: err.stack?.slice(0, 500) })
     }
   }
 }

@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { sm2, newCard, formatRelative, nextDueLabel } from './srs.js'
-import { loadCards, saveCards } from './storage.js'
+import { loadCards, saveCards, loadGameHistory, saveGameHistory } from './storage.js'
 import { parseApkg } from './ankiImport.js'
 import { SAMPLE_BOARD } from './boardData.js'
 import { fetchEpisode, episodeToBoard } from './jarchive.js'
+import { supabase, sendMagicLink, signOut, loadRemoteData, saveRemoteData, mergeData } from './supabase.js'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -16,25 +17,98 @@ function initClueStates(board) {
   return s
 }
 
+function calcCoryat(states, board) {
+  if (!board) return 0
+  return Object.entries(states).reduce((sum, [key, state]) => {
+    const [ci, ri] = key.split('-').map(Number)
+    const clue = board?.categories?.[ci]?.clues?.[ri]
+    if (!clue || clue.isDailyDouble) return sum
+    return sum + CORYAT_VAL[state](clue.value)
+  }, 0)
+}
+
 export default function App() {
+  const [user, setUser] = useState(null)
+  const [authChecked, setAuthChecked] = useState(false)
+  const [syncing, setSyncing] = useState(false)
+
   const [view, setView] = useState('board')
   const [board, setBoard] = useState(SAMPLE_BOARD)
-  const [episodeMeta, setEpisodeMeta] = useState(null) // { episodeNumber, airDate, url, hasDouble, finalJeopardy }
-  const [clueStates, setClueStates] = useState(() => initClueStates(SAMPLE_BOARD))
+  const [episodeMeta, setEpisodeMeta] = useState(null)
+  const [episodeData, setEpisodeData] = useState(null)
+  const [round, setRound] = useState('single')
+
+  const [singleClueStates, setSingleClueStates] = useState(() => initClueStates(SAMPLE_BOARD))
+  const [doubleClueStates, setDoubleClueStates] = useState({})
+
   const [activeClue, setActiveClue] = useState(null)
   const [showAnswer, setShowAnswer] = useState(false)
-  const [cards, setCards] = useState([])
-  const [storageReady, setStorageReady] = useState(false)
 
+  // Final Jeopardy state
+  const [showFJ, setShowFJ] = useState(false)
+  const [fjAnswered, setFjAnswered] = useState(null) // null | 'correct' | 'incorrect'
+
+  const [cards, setCards] = useState([])
+  const [gameHistory, setGameHistory] = useState([])
+  const [storageReady, setStorageReady] = useState(false)
+  const [showBrowser, setShowBrowser] = useState(false)
+  const [showAuth, setShowAuth] = useState(false)
+
+  const syncTimeout = useRef(null)
+
+  const clueStates = round === 'single' ? singleClueStates : doubleClueStates
+  const setClueStates = round === 'single' ? setSingleClueStates : setDoubleClueStates
+
+  // ── Auth ──────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null)
+      setAuthChecked(true)
+    })
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null)
+    })
+    return () => subscription.unsubscribe()
+  }, [])
+
+  // ── Load local data on mount ──────────────────────────────────────────────
   useEffect(() => {
     setCards(loadCards())
+    setGameHistory(loadGameHistory())
     setStorageReady(true)
   }, [])
 
+  // ── Sync from Supabase when user logs in ──────────────────────────────────
   useEffect(() => {
-    if (storageReady) saveCards(cards)
-  }, [cards, storageReady])
+    if (!user || !storageReady) return
+    setSyncing(true)
+    loadRemoteData()
+      .then(remote => {
+        const local = { cards, gameHistory }
+        const merged = mergeData(local, remote)
+        setCards(merged.cards)
+        setGameHistory(merged.gameHistory)
+        saveCards(merged.cards)
+        saveGameHistory(merged.gameHistory)
+      })
+      .catch(console.error)
+      .finally(() => setSyncing(false))
+  }, [user, storageReady])
 
+  // ── Save locally + debounced remote sync ─────────────────────────────────
+  useEffect(() => {
+    if (!storageReady) return
+    saveCards(cards)
+    saveGameHistory(gameHistory)
+    if (user) {
+      clearTimeout(syncTimeout.current)
+      syncTimeout.current = setTimeout(() => {
+        saveRemoteData(cards, gameHistory).catch(console.error)
+      }, 2000) // debounce 2s to avoid hammering on rapid changes
+    }
+  }, [cards, gameHistory, storageReady, user])
+
+  // ── Card helpers ──────────────────────────────────────────────────────────
   const addMissedAsCard = useCallback((clue, category) => {
     setCards(prev => {
       if (prev.some(c => c.front === clue.answer)) return prev
@@ -42,22 +116,32 @@ export default function App() {
     })
   }, [])
 
-  async function loadEpisode(episodeIdOrParam, round = 'single') {
-    // Support "8000&round=double" format from the DJ button
-    let episodeId = episodeIdOrParam
-    let roundOverride = round
-    if (typeof episodeIdOrParam === 'string' && episodeIdOrParam.includes('&round=')) {
-      const [id, r] = episodeIdOrParam.split('&round=')
-      episodeId = id
-      roundOverride = r
-    }
-    const episode = await fetchEpisode(episodeId)
-    const { board: newBoard, meta } = episodeToBoard(episode, roundOverride)
+  // ── Episode loading ───────────────────────────────────────────────────────
+  async function loadEpisode(gameId) {
+    const episode = await fetchEpisode(gameId)
+    const { board: newBoard, meta } = episodeToBoard(episode, 'single')
+    setEpisodeData(episode)
     setBoard(newBoard)
     setEpisodeMeta(meta)
-    setClueStates(initClueStates(newBoard))
+    setRound('single')
+    setSingleClueStates(initClueStates(newBoard))
+    if (episode.doubleJeopardy) {
+      const { board: djBoard } = episodeToBoard(episode, 'double')
+      setDoubleClueStates(initClueStates(djBoard))
+    } else {
+      setDoubleClueStates({})
+    }
+    setFjAnswered(null)
     setActiveClue(null)
     setView('board')
+  }
+
+  function switchRound(newRound) {
+    if (!episodeData) return
+    const { board: newBoard } = episodeToBoard(episodeData, newRound)
+    setBoard(newBoard)
+    setRound(newRound)
+    setActiveClue(null)
   }
 
   function openClue(ci, ri) {
@@ -75,12 +159,12 @@ export default function App() {
     setActiveClue(null)
   }
 
-  const coryatScore = Object.entries(clueStates).reduce((sum, [key, state]) => {
-    const [ci, ri] = key.split('-').map(Number)
-    const clue = board.categories[ci].clues[ri]
-    if (clue.isDailyDouble) return sum
-    return sum + CORYAT_VAL[state](clue.value)
-  }, 0)
+  // ── Scores ────────────────────────────────────────────────────────────────
+  const singleBoard = episodeData ? episodeToBoard(episodeData, 'single').board : SAMPLE_BOARD
+  const doubleBoard = episodeData?.doubleJeopardy ? episodeToBoard(episodeData, 'double').board : null
+  const singleCoryat = calcCoryat(singleClueStates, singleBoard)
+  const doubleCoryat = doubleBoard ? calcCoryat(doubleClueStates, doubleBoard) : 0
+  const coryatScore = singleCoryat + doubleCoryat
 
   const totalClues = board.categories.length * 5
   const answeredCount = Object.values(clueStates).filter(s => s !== CLUE_STATES.UNANSWERED).length
@@ -88,16 +172,85 @@ export default function App() {
   const incorrectCount = Object.values(clueStates).filter(s => s === CLUE_STATES.INCORRECT).length
   const dueCount = cards.filter(c => c.dueAt <= Date.now()).length
 
+  // ── Save game ─────────────────────────────────────────────────────────────
+  function saveGame(fjResult) {
+    if (!episodeMeta) return
+    const totalCorrect = Object.values(singleClueStates).filter(s => s === 'correct').length + Object.values(doubleClueStates).filter(s => s === 'correct').length
+    const totalIncorrect = Object.values(singleClueStates).filter(s => s === 'incorrect').length + Object.values(doubleClueStates).filter(s => s === 'incorrect').length
+    const totalPass = Object.values(singleClueStates).filter(s => s === 'pass').length + Object.values(doubleClueStates).filter(s => s === 'pass').length
+
+    const game = {
+      id: `game-${Date.now()}`,
+      episodeId: episodeMeta.episodeNumber,
+      airDate: episodeMeta.airDate,
+      playedAt: new Date().toISOString(),
+      singleCoryat,
+      doubleCoryat,
+      coryatScore,
+      totalCorrect,
+      totalIncorrect,
+      totalPass,
+      finalJeopardy: fjResult || null,
+    }
+    setGameHistory(prev => [game, ...prev])
+  }
+
+  function handleFJAnswer(result) {
+    setFjAnswered(result)
+    saveGame({ result, category: episodeData?.finalJeopardy?.category, clue: episodeData?.finalJeopardy?.clue, answer: episodeData?.finalJeopardy?.answer })
+    setShowFJ(false)
+  }
+
+  if (!authChecked) {
+    return <div style={{ background: '#060b1a', minHeight: '100dvh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#f5c518', fontFamily: "'Bebas Neue', sans-serif", fontSize: 24, letterSpacing: 4 }}>JEO TRAINER<style>{`@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&display=swap')`}</style></div>
+  }
+
   return (
     <div style={S.app}>
-      <Header coryatScore={coryatScore} correctCount={correctCount} incorrectCount={incorrectCount} answeredCount={answeredCount} totalClues={totalClues} episodeMeta={episodeMeta} onLoadEpisode={loadEpisode} />
+      <Header
+        coryatScore={coryatScore}
+        correctCount={correctCount}
+        incorrectCount={incorrectCount}
+        answeredCount={answeredCount}
+        totalClues={totalClues}
+        episodeMeta={episodeMeta}
+        user={user}
+        syncing={syncing}
+        onAuthClick={() => setShowAuth(true)}
+      />
       <NavBar view={view} setView={setView} dueCount={dueCount} deckSize={cards.length} />
 
       <main style={S.main}>
-        {view === 'board'      && <BoardView board={board} clueStates={clueStates} onOpen={openClue} episodeMeta={episodeMeta} onLoadEpisode={loadEpisode} />}
-        {view === 'study'      && <StudyView cards={cards} setCards={setCards} />}
-        {view === 'deck'       && <DeckView cards={cards} setCards={setCards} />}
-        {view === 'summary'    && <SummaryView coryatScore={coryatScore} correctCount={correctCount} incorrectCount={incorrectCount} passCount={Object.values(clueStates).filter(s => s === CLUE_STATES.PASS).length} totalClues={totalClues} board={board} clueStates={clueStates} />}
+        {view === 'board' && (
+          <BoardView
+            board={board}
+            clueStates={clueStates}
+            onOpen={openClue}
+            episodeMeta={episodeMeta}
+            episodeData={episodeData}
+            round={round}
+            hasDouble={!!episodeData?.doubleJeopardy}
+            onSwitchRound={switchRound}
+            onBrowse={() => setShowBrowser(true)}
+            singleCoryat={singleCoryat}
+            doubleCoryat={doubleCoryat}
+            fjAnswered={fjAnswered}
+            onShowFJ={() => setShowFJ(true)}
+          />
+        )}
+        {view === 'study'   && <StudyView cards={cards} setCards={setCards} />}
+        {view === 'deck'    && <DeckView cards={cards} setCards={setCards} />}
+        {view === 'summary' && (
+          <SummaryView
+            coryatScore={coryatScore}
+            singleBoard={singleBoard}
+            doubleBoard={doubleBoard}
+            singleClueStates={singleClueStates}
+            doubleClueStates={doubleClueStates}
+            gameHistory={gameHistory}
+            setGameHistory={setGameHistory}
+          />
+        )}
       </main>
 
       {activeClue && (
@@ -110,23 +263,45 @@ export default function App() {
           onClose={() => setActiveClue(null)}
         />
       )}
+
+      {showFJ && episodeData?.finalJeopardy && (
+        <FinalJeopardyModal
+          fj={episodeData.finalJeopardy}
+          onAnswer={handleFJAnswer}
+          onClose={() => setShowFJ(false)}
+        />
+      )}
+
+      {showBrowser && (
+        <EpisodeBrowser
+          onSelect={gameId => { setShowBrowser(false); loadEpisode(gameId) }}
+          onClose={() => setShowBrowser(false)}
+        />
+      )}
+
+      {showAuth && (
+        <AuthModal
+          user={user}
+          onClose={() => setShowAuth(false)}
+          onSignOut={() => { signOut(); setShowAuth(false) }}
+        />
+      )}
+
       <style>{globalCSS}</style>
     </div>
   )
 }
 
 // ─── Header ───────────────────────────────────────────────────────────────────
-function Header({ coryatScore, correctCount, incorrectCount, answeredCount, totalClues, episodeMeta }) {
+function Header({ coryatScore, correctCount, incorrectCount, answeredCount, totalClues, episodeMeta, user, syncing, onAuthClick }) {
   const color = coryatScore >= 0 ? '#f5c518' : '#e74c3c'
   return (
     <header style={S.header}>
       <div>
         <div style={S.logoMain}>JEO TRAINER</div>
-        {episodeMeta ? (
-          <div style={S.logoSub}>#{episodeMeta.episodeNumber} · {episodeMeta.airDate}</div>
-        ) : (
-          <div style={S.logoSub}>CORYAT & FLASHCARDS</div>
-        )}
+        {episodeMeta
+          ? <div style={S.logoSub}>#{episodeMeta.episodeNumber} · {episodeMeta.airDate}</div>
+          : <div style={S.logoSub}>CORYAT & FLASHCARDS</div>}
       </div>
       <div style={S.scoreBox}>
         <div style={S.scoreLbl}>CORYAT SCORE</div>
@@ -135,6 +310,9 @@ function Header({ coryatScore, correctCount, incorrectCount, answeredCount, tota
       <div style={S.headerStats}>
         <div style={S.pill}>{correctCount}✓ {incorrectCount}✗</div>
         <div style={S.pill}>{answeredCount}/{totalClues}</div>
+        <button style={S.authBtn} onClick={onAuthClick} title={user ? 'Synced' : 'Sign in to sync'}>
+          {syncing ? '⏳' : user ? '☁️' : '🔓'}
+        </button>
       </div>
     </header>
   )
@@ -159,53 +337,108 @@ function NavBar({ view, setView, dueCount, deckSize }) {
   )
 }
 
-// ─── Board View ───────────────────────────────────────────────────────────────
-function BoardView({ board, clueStates, onOpen, episodeMeta, onLoadEpisode }) {
-  const [loadInput, setLoadInput] = useState('')
+// ─── Auth Modal ───────────────────────────────────────────────────────────────
+function AuthModal({ user, onClose, onSignOut }) {
+  const [email, setEmail] = useState('')
+  const [sent, setSent] = useState(false)
   const [loading, setLoading] = useState(false)
-  const [loadError, setLoadError] = useState(null)
+  const [error, setError] = useState(null)
 
-  async function handleLoad(episodeId) {
-    setLoading(true)
-    setLoadError(null)
+  async function handleSend() {
+    if (!email.trim()) return
+    setLoading(true); setError(null)
     try {
-      await onLoadEpisode(episodeId || 'latest')
+      await sendMagicLink(email.trim())
+      setSent(true)
     } catch (err) {
-      setLoadError(err.message || 'Could not load episode')
+      setError(err.message)
     } finally {
       setLoading(false)
     }
   }
 
-  const tileBg = { unanswered: '#0f1e6e', correct: '#1a5c2e', incorrect: '#5c1a1a', pass: '#2a2a4a' }
   return (
-    <div>
-      {/* Episode loader bar */}
-      <div style={S.loaderBar}>
-        <input
-          style={S.loaderInput}
-          value={loadInput}
-          onChange={e => setLoadInput(e.target.value.replace(/\D/g, ''))}
-          placeholder="Episode # (blank = latest)"
-          maxLength={6}
-        />
-        <button style={S.loaderBtn} onClick={() => handleLoad(loadInput)} disabled={loading}>
-          {loading ? '⏳' : '▶ Load'}
-        </button>
-        {episodeMeta?.hasDouble && (
-          <button style={{ ...S.loaderBtn, fontSize: 10 }} onClick={() => handleLoad(`${board.episodeId}&round=double`)} disabled={loading}>
-            DJ →
-          </button>
+    <div style={S.overlay} onClick={onClose}>
+      <div style={{ ...S.modal, maxWidth: 360 }} onClick={e => e.stopPropagation()}>
+        <button style={S.closeX} onClick={onClose}>✕</button>
+        <div style={S.browserTitle}>☁️ SYNC & BACKUP</div>
+
+        {user ? (
+          <div style={{ marginTop: 16 }}>
+            <div style={{ fontSize: 13, color: '#7cd992', marginBottom: 8 }}>✅ Signed in as</div>
+            <div style={{ fontSize: 13, color: '#c0c8e8', marginBottom: 20, wordBreak: 'break-all' }}>{user.email}</div>
+            <div style={{ fontSize: 12, color: '#6070a0', marginBottom: 20, lineHeight: 1.6 }}>
+              Your cards and game history are syncing automatically across all your devices.
+            </div>
+            <button style={{ ...S.startBtn, background: '#1e2456', color: '#8890d0', border: '1px solid #2e3476' }} onClick={onSignOut}>
+              Sign Out
+            </button>
+          </div>
+        ) : sent ? (
+          <div style={{ marginTop: 16 }}>
+            <div style={{ fontSize: 32, marginBottom: 12 }}>📬</div>
+            <div style={{ fontSize: 15, color: '#7cd992', marginBottom: 8 }}>Check your email!</div>
+            <div style={{ fontSize: 13, color: '#8890c0', lineHeight: 1.6 }}>
+              We sent a magic link to <b style={{ color: '#c0c8e8' }}>{email}</b>. Tap it to sign in — no password needed.
+            </div>
+          </div>
+        ) : (
+          <div style={{ marginTop: 16 }}>
+            <div style={{ fontSize: 13, color: '#8890c0', lineHeight: 1.6, marginBottom: 16 }}>
+              Sign in with your email to back up your cards and game history, and sync across devices.
+            </div>
+            <div style={S.formLabel}>EMAIL</div>
+            <input
+              style={{ ...S.input, marginBottom: 12 }}
+              type="email"
+              value={email}
+              onChange={e => setEmail(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleSend()}
+              placeholder="you@example.com"
+              autoFocus
+            />
+            {error && <div style={{ fontSize: 12, color: '#e07070', marginBottom: 8 }}>{error}</div>}
+            <button style={{ ...S.startBtn, opacity: (!email.trim() || loading) ? 0.5 : 1 }} onClick={handleSend} disabled={!email.trim() || loading}>
+              {loading ? 'Sending...' : 'Send Magic Link →'}
+            </button>
+          </div>
         )}
       </div>
-      {loadError && <div style={S.loadError}>{loadError}</div>}
-      {episodeMeta?.url && (
-        <div style={S.episodeLink}>
-          <a href={episodeMeta.url} target="_blank" rel="noopener noreferrer" style={{ color: '#4060a0', fontSize: 10, letterSpacing: 1 }}>
-            View on j-archive ↗
-          </a>
+    </div>
+  )
+}
+
+// ─── Board View ───────────────────────────────────────────────────────────────
+function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round, hasDouble, onSwitchRound, onBrowse, singleCoryat, doubleCoryat, fjAnswered, onShowFJ }) {
+  const tileBg = { unanswered: '#0f1e6e', correct: '#1a5c2e', incorrect: '#5c1a1a', pass: '#2a2a4a' }
+  const allAnswered = Object.values(clueStates).every(s => s !== 'unanswered')
+  const hasFJ = !!episodeData?.finalJeopardy
+
+  return (
+    <div>
+      <div style={S.loaderBar}>
+        <button style={S.loaderBtn} onClick={onBrowse}>📺 Browse Episodes</button>
+        {hasDouble && (
+          <div style={S.roundTabs}>
+            <button style={{ ...S.roundTab, ...(round === 'single' ? S.roundTabActive : {}) }} onClick={() => onSwitchRound('single')}>Single J!</button>
+            <button style={{ ...S.roundTab, ...(round === 'double' ? S.roundTabActive : {}) }} onClick={() => onSwitchRound('double')}>Double J!</button>
+          </div>
+        )}
+      </div>
+
+      {hasDouble && (
+        <div style={S.roundScores}>
+          <span style={S.roundScore}>SJ: <b style={{ color: singleCoryat >= 0 ? '#f5c518' : '#e74c3c' }}>{singleCoryat >= 0 ? '+' : ''}{singleCoryat.toLocaleString()}</b></span>
+          <span style={S.roundScore}>DJ: <b style={{ color: doubleCoryat >= 0 ? '#f5c518' : '#e74c3c' }}>{doubleCoryat >= 0 ? '+' : ''}{doubleCoryat.toLocaleString()}</b></span>
         </div>
       )}
+
+      {episodeMeta?.url && (
+        <div style={S.episodeLink}>
+          <a href={episodeMeta.url} target="_blank" rel="noopener noreferrer" style={{ color: '#4060a0', fontSize: 10, letterSpacing: 1 }}>View on j-archive ↗</a>
+        </div>
+      )}
+
       <div style={S.board}>
         {board.categories.map((cat, ci) => (
           <div key={ci} style={S.catHeader}>{cat.name}</div>
@@ -225,10 +458,122 @@ function BoardView({ board, clueStates, onOpen, episodeMeta, onLoadEpisode }) {
           })
         )}
       </div>
+
+      {/* Final Jeopardy prompt */}
+      {hasFJ && (
+        <div style={S.fjBar}>
+          <div style={S.fjLabel}>
+            FINAL JEOPARDY · <span style={{ color: '#f5c518' }}>{episodeData.finalJeopardy.category}</span>
+          </div>
+          {fjAnswered ? (
+            <div style={{ fontSize: 12, color: fjAnswered === 'correct' ? '#7cd992' : '#e07070' }}>
+              {fjAnswered === 'correct' ? '✓ Got it' : '✗ Missed'} <span style={{ color: '#4060a0' }}>(not counted in Coryat)</span>
+            </div>
+          ) : (
+            <button style={S.fjBtn} onClick={onShowFJ}>Play Final J! →</button>
+          )}
+        </div>
+      )}
+
       <div style={S.legend}>
         {[['#4caf7d','Correct'],['#e57373','Incorrect'],['#7986cb','Pass'],['#f5c518','DD = excluded from Coryat']].map(([c,l]) => (
           <span key={l} style={S.legendItem}><span style={{ color: c }}>■</span> {l}</span>
         ))}
+      </div>
+    </div>
+  )
+}
+
+// ─── Final Jeopardy Modal ─────────────────────────────────────────────────────
+function FinalJeopardyModal({ fj, onAnswer, onClose }) {
+  const [showAnswer, setShowAnswer] = useState(false)
+  return (
+    <div style={S.overlay} onClick={onClose}>
+      <div style={{ ...S.modal, borderColor: '#4dd0e1', boxShadow: '0 20px 60px rgba(77,208,225,0.15)' }} onClick={e => e.stopPropagation()}>
+        <button style={S.closeX} onClick={onClose}>✕</button>
+        <div style={{ fontSize: 10, letterSpacing: 4, color: '#4dd0e1', marginBottom: 4 }}>FINAL JEOPARDY</div>
+        <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 22, color: '#4dd0e1', letterSpacing: 2, marginBottom: 16 }}>{fj.category}</div>
+        <div style={S.modalText}>{fj.clue}</div>
+        <div style={{ fontSize: 11, color: '#6070a0', marginBottom: 12, letterSpacing: 1 }}>Not counted in Coryat score</div>
+        {!showAnswer ? (
+          <button style={{ ...S.revealBtn, background: '#4dd0e1' }} onClick={() => setShowAnswer(true)}>Reveal Answer</button>
+        ) : (
+          <>
+            <div style={{ ...S.modalQ, borderColor: 'rgba(77,208,225,0.2)', background: 'rgba(77,208,225,0.06)', color: '#4dd0e1' }}>{fj.answer}</div>
+            <div style={S.markRow}>
+              <button style={{ ...S.markBtn, background: '#1a5c2e', color: '#7cd992', border: '1px solid #2e8c50' }} onClick={() => onAnswer('correct')}>✓ Got It</button>
+              <button style={{ ...S.markBtn, background: '#5c1a1a', color: '#e07070', border: '1px solid #8c2e2e' }} onClick={() => onAnswer('incorrect')}>✗ Wrong</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── Episode Browser Modal ────────────────────────────────────────────────────
+function EpisodeBrowser({ onSelect, onClose }) {
+  const [episodes, setEpisodes] = useState([])
+  const [seasons, setSeasons] = useState([])
+  const [selectedSeason, setSelectedSeason] = useState('')
+  const [search, setSearch] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
+  const searchTimeout = useRef(null)
+
+  useEffect(() => { fetchEps() }, [])
+  useEffect(() => { if (selectedSeason) fetchEps(selectedSeason, search) }, [selectedSeason])
+
+  async function fetchEps(season = '', q = '') {
+    setLoading(true); setError(null)
+    try {
+      const params = new URLSearchParams()
+      if (season) params.set('season', season)
+      if (q) params.set('search', q)
+      const res = await fetch(`/.netlify/functions/episodes?${params}`)
+      const data = await res.json()
+      if (data.error) throw new Error(data.error)
+      setEpisodes(data.episodes || [])
+      if (data.seasons?.length && !seasons.length) setSeasons(data.seasons)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function handleSearch(val) {
+    setSearch(val)
+    clearTimeout(searchTimeout.current)
+    searchTimeout.current = setTimeout(() => fetchEps(selectedSeason, val), 500)
+  }
+
+  return (
+    <div style={S.overlay} onClick={onClose}>
+      <div style={{ ...S.modal, maxWidth: 520, maxHeight: '80vh', display: 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden' }} onClick={e => e.stopPropagation()}>
+        <div style={S.browserHeader}>
+          <div style={S.browserTitle}>📺 BROWSE EPISODES</div>
+          <button style={S.closeX} onClick={onClose}>✕</button>
+        </div>
+        <div style={S.browserControls}>
+          <input style={{ ...S.loaderInput, flex: 1 }} value={search} onChange={e => handleSearch(e.target.value)} placeholder="Search by show # or date..." />
+          <select style={S.seasonSelect} value={selectedSeason} onChange={e => setSelectedSeason(e.target.value)}>
+            <option value="">Latest season</option>
+            {seasons.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+          </select>
+        </div>
+        <div style={S.browserList}>
+          {loading && <div style={S.browserLoading}>⏳ Loading episodes...</div>}
+          {error && <div style={{ ...S.loadError, margin: 12 }}>{error}</div>}
+          {!loading && !error && episodes.length === 0 && <div style={S.browserLoading}>No episodes found</div>}
+          {!loading && episodes.map(ep => (
+            <button key={ep.gameId} style={S.episodeRow} onClick={() => onSelect(ep.gameId)}>
+              <span style={S.epShowNum}>#{ep.showNumber}</span>
+              <span style={S.epDate}>{ep.airDate}</span>
+              <span style={S.epArrow}>▶</span>
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   )
@@ -268,66 +613,53 @@ function StudyView({ cards, setCards }) {
   const [flipped, setFlipped] = useState(false)
   const [sessionDone, setSessionDone] = useState(false)
   const [sessionStats, setSessionStats] = useState({ again: 0, hard: 0, good: 0, easy: 0 })
-
   const dueCards = cards.filter(c => c.dueAt <= Date.now())
 
   function startSession() {
-    setSessionCards([...dueCards])
-    setIdx(0); setFlipped(false); setSessionDone(false)
+    setSessionCards([...dueCards]); setIdx(0); setFlipped(false); setSessionDone(false)
     setSessionStats({ again: 0, hard: 0, good: 0, easy: 0 })
   }
-
   function rate(quality, label) {
     const card = sessionCards[idx]
-    const updated = sm2(card, quality)
-    setCards(prev => prev.map(c => c.id === card.id ? updated : c))
+    setCards(prev => prev.map(c => c.id === card.id ? sm2(card, quality) : c))
     setSessionStats(prev => ({ ...prev, [label]: prev[label] + 1 }))
     const next = idx + 1
     if (next >= sessionCards.length) setSessionDone(true)
     else { setIdx(next); setFlipped(false) }
   }
 
-  if (!sessionCards) {
-    return (
-      <div style={S.studyLanding}>
-        <div style={S.studyIcon}>🔁</div>
-        <div style={S.studyTitle}>STUDY SESSION</div>
-        {dueCards.length === 0 ? (
-          <>
-            <div style={S.studySubtitle}>No cards due right now!</div>
-            <div style={S.studyMeta}>{cards.length === 0 ? 'Mark clues as Wrong or Pass on the board, or add cards manually in the Deck tab.' : `All ${cards.length} card${cards.length !== 1 ? 's' : ''} are scheduled for future review.`}</div>
-            {cards.length > 0 && (
-              <div style={S.nextDueBox}>
-                <div style={S.nextDueLbl}>NEXT CARD DUE</div>
-                <div style={S.nextDueVal}>{formatRelative(Math.min(...cards.map(c => c.dueAt)))}</div>
-              </div>
-            )}
-          </>
-        ) : (
-          <>
-            <div style={S.studySubtitle}>{dueCards.length} card{dueCards.length !== 1 ? 's' : ''} due for review</div>
-            <div style={S.studyMeta}>Rate each card: <b>Again</b> resets it, <b>Hard / Good / Easy</b> schedule it further out using SM-2.</div>
-            <button style={S.startBtn} onClick={startSession}>Start Session →</button>
-          </>
-        )}
-      </div>
-    )
-  }
+  if (!sessionCards) return (
+    <div style={S.studyLanding}>
+      <div style={S.studyIcon}>🔁</div>
+      <div style={S.studyTitle}>STUDY SESSION</div>
+      {dueCards.length === 0 ? (
+        <>
+          <div style={S.studySubtitle}>No cards due!</div>
+          <div style={S.studyMeta}>{cards.length === 0 ? 'Mark clues as Wrong or Pass on the board, or add cards manually.' : `All ${cards.length} cards scheduled for future review.`}</div>
+          {cards.length > 0 && <div style={S.nextDueBox}><div style={S.nextDueLbl}>NEXT DUE</div><div style={S.nextDueVal}>{formatRelative(Math.min(...cards.map(c => c.dueAt)))}</div></div>}
+        </>
+      ) : (
+        <>
+          <div style={S.studySubtitle}>{dueCards.length} card{dueCards.length !== 1 ? 's' : ''} due</div>
+          <div style={S.studyMeta}>Rate each card to schedule the next review.</div>
+          <button style={S.startBtn} onClick={startSession}>Start Session →</button>
+        </>
+      )}
+    </div>
+  )
 
-  if (sessionDone) {
-    return (
-      <div style={S.studyLanding}>
-        <div style={S.studyIcon}>🎉</div>
-        <div style={S.studyTitle}>SESSION COMPLETE</div>
-        <div style={S.statsGrid}>
-          {[['Again', sessionStats.again, '#e57373'], ['Hard', sessionStats.hard, '#ffb74d'], ['Good', sessionStats.good, '#81c784'], ['Easy', sessionStats.easy, '#4dd0e1']].map(([lbl, n, c]) => (
-            <div key={lbl} style={S.statCell}><div style={{ ...S.statN, color: c }}>{n}</div><div style={S.statLbl}>{lbl}</div></div>
-          ))}
-        </div>
-        <button style={S.startBtn} onClick={() => setSessionCards(null)}>Done</button>
+  if (sessionDone) return (
+    <div style={S.studyLanding}>
+      <div style={S.studyIcon}>🎉</div>
+      <div style={S.studyTitle}>SESSION COMPLETE</div>
+      <div style={S.statsGrid}>
+        {[['Again', sessionStats.again, '#e57373'],['Hard', sessionStats.hard, '#ffb74d'],['Good', sessionStats.good, '#81c784'],['Easy', sessionStats.easy, '#4dd0e1']].map(([lbl, n, c]) => (
+          <div key={lbl} style={S.statCell}><div style={{ ...S.statN, color: c }}>{n}</div><div style={S.statLbl}>{lbl}</div></div>
+        ))}
       </div>
-    )
-  }
+      <button style={S.startBtn} onClick={() => setSessionCards(null)}>Done</button>
+    </div>
+  )
 
   const card = sessionCards[idx]
   return (
@@ -342,28 +674,13 @@ function StudyView({ cards, setCards }) {
         </span>
       </div>
       <div style={S.flashCard} onClick={() => setFlipped(!flipped)}>
-        {!flipped ? (
-          <div style={S.flashInner}>
-            <div style={S.flashSide}>CLUE</div>
-            <div style={S.flashFrontText}>{card.front}</div>
-            <div style={S.flashHint}>tap to reveal answer</div>
-          </div>
-        ) : (
-          <div style={S.flashInner}>
-            <div style={{ ...S.flashSide, color: '#7cd992' }}>ANSWER</div>
-            <div style={S.flashBackText}>{card.back}</div>
-            <div style={S.flashHint}>tap to flip back</div>
-          </div>
-        )}
+        {!flipped
+          ? <div style={S.flashInner}><div style={S.flashSide}>CLUE</div><div style={S.flashFrontText}>{card.front}</div><div style={S.flashHint}>tap to reveal</div></div>
+          : <div style={S.flashInner}><div style={{ ...S.flashSide, color: '#7cd992' }}>ANSWER</div><div style={S.flashBackText}>{card.back}</div><div style={S.flashHint}>tap to flip back</div></div>}
       </div>
       {flipped && (
         <div style={S.rateRow}>
-          {[
-            { q: 0, label: 'Again', color: '#e57373', bg: '#3a1010' },
-            { q: 1, label: 'Hard',  color: '#ffb74d', bg: '#3a2510' },
-            { q: 2, label: 'Good',  color: '#81c784', bg: '#103a18' },
-            { q: 3, label: 'Easy',  color: '#4dd0e1', bg: '#0e2e36' },
-          ].map(({ q, label, color, bg }) => (
+          {[{q:0,label:'Again',color:'#e57373',bg:'#3a1010'},{q:1,label:'Hard',color:'#ffb74d',bg:'#3a2510'},{q:2,label:'Good',color:'#81c784',bg:'#103a18'},{q:3,label:'Easy',color:'#4dd0e1',bg:'#0e2e36'}].map(({ q, label, color, bg }) => (
             <button key={q} style={{ ...S.rateBtn, background: bg, borderColor: color }} onClick={() => rate(q, label.toLowerCase())}>
               <span style={{ color, fontWeight: 700, fontSize: 14 }}>{label}</span>
               <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: 10, marginTop: 2 }}>{nextDueLabel(q, card)}</span>
@@ -377,161 +694,88 @@ function StudyView({ cards, setCards }) {
 
 // ─── Deck View ────────────────────────────────────────────────────────────────
 function DeckView({ cards, setCards }) {
-  const [subview, setSubview] = useState('list') // list | add | import
+  const [subview, setSubview] = useState('list')
   const [newFront, setNewFront] = useState('')
   const [newBack, setNewBack] = useState('')
   const [newCat, setNewCat] = useState('')
   const [filter, setFilter] = useState('all')
   const [confirmDelete, setConfirmDelete] = useState(null)
   const [importing, setImporting] = useState(false)
-  const [importResult, setImportResult] = useState(null) // { added, skipped }
+  const [importResult, setImportResult] = useState(null)
   const [importError, setImportError] = useState(null)
   const fileRef = useRef()
-
   const now = Date.now()
 
   function addCard() {
     if (!newFront.trim() || !newBack.trim()) return
     setCards(prev => [...prev, newCard(newFront.trim(), newBack.trim(), newCat.trim())])
-    setNewFront(''); setNewBack(''); setNewCat('')
-    setSubview('list')
+    setNewFront(''); setNewBack(''); setNewCat(''); setSubview('list')
   }
-
-  function deleteCard(id) {
-    setCards(prev => prev.filter(c => c.id !== id))
-    setConfirmDelete(null)
-  }
-
-  function resetCard(id) {
-    setCards(prev => prev.map(c => c.id === id ? { ...c, interval: 0, easeFactor: 2.5, repetitions: 0, dueAt: Date.now(), lastReviewed: null } : c))
-  }
+  function deleteCard(id) { setCards(prev => prev.filter(c => c.id !== id)); setConfirmDelete(null) }
+  function resetCard(id) { setCards(prev => prev.map(c => c.id === id ? { ...c, interval: 0, easeFactor: 2.5, repetitions: 0, dueAt: Date.now(), lastReviewed: null } : c)) }
 
   async function handleApkgImport(e) {
-    const file = e.target.files[0]
-    if (!file) return
-    setImporting(true)
-    setImportError(null)
-    setImportResult(null)
+    const file = e.target.files[0]; if (!file) return
+    setImporting(true); setImportError(null); setImportResult(null)
     try {
       const imported = await parseApkg(file)
-      let added = 0, skipped = 0
+      let added = 0
       setCards(prev => {
-        const existingFronts = new Set(prev.map(c => c.front))
-        const toAdd = imported.filter(c => {
-          if (existingFronts.has(c.front)) { skipped++; return false }
-          added++; return true
-        })
+        const existing = new Set(prev.map(c => c.front))
+        const toAdd = imported.filter(c => { if (existing.has(c.front)) return false; added++; return true })
         return [...prev, ...toAdd]
       })
-      // Small delay so skipped count is accurate after state update
-      setTimeout(() => setImportResult({ added: imported.length, skipped: 0 }), 100)
-    } catch (err) {
-      setImportError(err.message || 'Failed to parse .apkg file.')
-    } finally {
-      setImporting(false)
-      e.target.value = ''
-    }
+      setTimeout(() => setImportResult({ added: imported.length }), 100)
+    } catch (err) { setImportError(err.message) }
+    finally { setImporting(false); e.target.value = '' }
   }
 
-  const filtered = cards.filter(c => {
-    if (filter === 'due')    return c.dueAt <= now
-    if (filter === 'missed') return c.source === 'missed'
-    if (filter === 'manual') return c.source === 'manual'
-    if (filter === 'anki')   return c.source === 'anki'
-    return true
-  })
-
-  const counts = {
-    all: cards.length,
-    due: cards.filter(c => c.dueAt <= now).length,
-    missed: cards.filter(c => c.source === 'missed').length,
-    manual: cards.filter(c => c.source === 'manual').length,
-    anki: cards.filter(c => c.source === 'anki').length,
-  }
+  const counts = { all: cards.length, due: cards.filter(c => c.dueAt <= now).length, missed: cards.filter(c => c.source === 'missed').length, manual: cards.filter(c => c.source === 'manual').length, anki: cards.filter(c => c.source === 'anki').length }
+  const filtered = cards.filter(c => filter === 'all' ? true : filter === 'due' ? c.dueAt <= now : c.source === filter)
 
   return (
     <div style={S.deckWrap}>
-      {/* Action buttons */}
       <div style={S.deckActions}>
-        <button style={{ ...S.actionBtn, ...(subview === 'add' ? S.actionBtnActive : {}) }} onClick={() => setSubview(subview === 'add' ? 'list' : 'add')}>
-          {subview === 'add' ? '✕ Cancel' : '+ Add Card'}
-        </button>
-        <button style={{ ...S.actionBtn, ...(subview === 'import' ? S.actionBtnActive : {}) }} onClick={() => setSubview(subview === 'import' ? 'list' : 'import')}>
-          {subview === 'import' ? '✕ Cancel' : '⬆ Import .apkg'}
-        </button>
+        <button style={{ ...S.actionBtn, ...(subview === 'add' ? S.actionBtnActive : {}) }} onClick={() => setSubview(subview === 'add' ? 'list' : 'add')}>{subview === 'add' ? '✕ Cancel' : '+ Add Card'}</button>
+        <button style={{ ...S.actionBtn, ...(subview === 'import' ? S.actionBtnActive : {}) }} onClick={() => setSubview(subview === 'import' ? 'list' : 'import')}>{subview === 'import' ? '✕ Cancel' : '⬆ Import .apkg'}</button>
       </div>
 
-      {/* Add card form */}
       {subview === 'add' && (
         <div style={S.addForm}>
           <div style={S.formLabel}>CLUE (Front)</div>
-          <textarea style={S.textarea} value={newFront} onChange={e => setNewFront(e.target.value)} placeholder="Enter the clue / question prompt..." rows={3} />
+          <textarea style={S.textarea} value={newFront} onChange={e => setNewFront(e.target.value)} placeholder="Enter the clue..." rows={3} />
           <div style={S.formLabel}>ANSWER (Back)</div>
           <textarea style={S.textarea} value={newBack} onChange={e => setNewBack(e.target.value)} placeholder="What is / Who is..." rows={2} />
           <div style={S.formLabel}>CATEGORY (Optional)</div>
           <input style={S.input} value={newCat} onChange={e => setNewCat(e.target.value)} placeholder="e.g. American History" />
-          <button style={{ ...S.startBtn, marginTop: 12, opacity: (!newFront.trim() || !newBack.trim()) ? 0.4 : 1 }} onClick={addCard} disabled={!newFront.trim() || !newBack.trim()}>
-            Add Card
-          </button>
+          <button style={{ ...S.startBtn, marginTop: 12, opacity: (!newFront.trim() || !newBack.trim()) ? 0.4 : 1 }} onClick={addCard} disabled={!newFront.trim() || !newBack.trim()}>Add Card</button>
         </div>
       )}
 
-      {/* .apkg import */}
       {subview === 'import' && (
         <div style={S.addForm}>
           <div style={S.importTitle}>Import Anki Deck</div>
-          <div style={S.importDesc}>
-            Select a <code style={S.code}>.apkg</code> file exported from Anki. All notes will be imported as flashcards. If a deck has already been studied, its SRS intervals will be preserved.
-          </div>
-          <div style={S.importHowTo}>
-            <b>How to export from Anki:</b> File → Export → select your deck → format: <i>Anki Deck Package (.apkg)</i> → Export
-          </div>
-
+          <div style={S.importDesc}>Select a <code style={S.code}>.apkg</code> file from Anki.</div>
+          <div style={S.importHowTo}><b>Anki:</b> File → Export → format: Anki Deck Package (.apkg)</div>
           <input ref={fileRef} type="file" accept=".apkg" onChange={handleApkgImport} style={{ display: 'none' }} />
-
-          {importing ? (
-            <div style={S.importStatus}>⏳ Parsing deck — this may take a moment for large decks...</div>
-          ) : (
-            <button style={S.startBtn} onClick={() => fileRef.current.click()}>
-              Choose .apkg File
-            </button>
-          )}
-
-          {importResult && (
-            <div style={S.importSuccess}>
-              ✅ Imported {importResult.added} cards successfully!
-            </div>
-          )}
-          {importError && (
-            <div style={S.importError}>
-              ❌ {importError}
-            </div>
-          )}
+          {importing ? <div style={S.importStatus}>⏳ Parsing...</div> : <button style={S.startBtn} onClick={() => fileRef.current.click()}>Choose .apkg File</button>}
+          {importResult && <div style={S.importSuccess}>✅ Imported {importResult.added} cards!</div>}
+          {importError && <div style={S.importError}>❌ {importError}</div>}
         </div>
       )}
 
-      {/* Filter tabs */}
       <div style={S.deckTabs}>
         {['all','due','missed','manual','anki'].map(f => (
-          <button key={f} style={{ ...S.filterTab, ...(filter === f ? S.filterTabActive : {}) }} onClick={() => setFilter(f)}>
-            {f.toUpperCase()} ({counts[f]})
-          </button>
+          <button key={f} style={{ ...S.filterTab, ...(filter === f ? S.filterTabActive : {}) }} onClick={() => setFilter(f)}>{f.toUpperCase()} ({counts[f]})</button>
         ))}
       </div>
 
-      {/* Card list */}
-      {filtered.length === 0 ? (
-        <div style={S.emptyDeck}>
-          <div style={{ fontSize: 32, marginBottom: 8 }}>🗂</div>
-          <div style={{ color: '#6070a0', fontSize: 14, textAlign: 'center' }}>
-            {filter === 'all' ? 'No cards yet. Mark clues Wrong/Pass on the board, add manually, or import an Anki deck.' : `No ${filter} cards.`}
-          </div>
-        </div>
-      ) : (
-        <div style={S.cardList}>
+      {filtered.length === 0
+        ? <div style={S.emptyDeck}><div style={{ fontSize: 32, marginBottom: 8 }}>🗂</div><div style={{ color: '#6070a0', fontSize: 14, textAlign: 'center' }}>{filter === 'all' ? 'No cards yet.' : `No ${filter} cards.`}</div></div>
+        : <div style={S.cardList}>
           {filtered.map(card => {
             const isDue = card.dueAt <= now
-            const sourceColor = card.source === 'missed' ? '#e57373' : card.source === 'anki' ? '#4dd0e1' : '#81c784'
+            const sc = card.source === 'missed' ? '#e57373' : card.source === 'anki' ? '#4dd0e1' : '#81c784'
             return (
               <div key={card.id} style={S.cardRow}>
                 <div style={S.cardRowMain}>
@@ -539,20 +783,20 @@ function DeckView({ cards, setCards }) {
                   <div style={S.cardRowBack}>{card.back}</div>
                   <div style={S.cardRowMeta}>
                     {card.category && <span style={S.metaTag}>{card.category}</span>}
-                    <span style={{ ...S.metaTag, color: sourceColor }}>{card.source.toUpperCase()}</span>
+                    <span style={{ ...S.metaTag, color: sc }}>{card.source.toUpperCase()}</span>
                     <span style={{ ...S.metaTag, color: isDue ? '#f5c518' : '#4060a0' }}>{isDue ? 'DUE NOW' : `Due ${formatRelative(card.dueAt)}`}</span>
                     {card.repetitions > 0 && <span style={S.metaTag}>Rep {card.repetitions} · EF {card.easeFactor.toFixed(2)}</span>}
                   </div>
                 </div>
                 <div style={S.cardRowActions}>
-                  <button style={S.iconBtn} title="Reset progress" onClick={() => resetCard(card.id)}>↺</button>
-                  <button style={{ ...S.iconBtn, color: '#e57373' }} title="Delete" onClick={() => setConfirmDelete(card.id)}>🗑</button>
+                  <button style={S.iconBtn} onClick={() => resetCard(card.id)}>↺</button>
+                  <button style={{ ...S.iconBtn, color: '#e57373' }} onClick={() => setConfirmDelete(card.id)}>🗑</button>
                 </div>
               </div>
             )
           })}
         </div>
-      )}
+      }
 
       {confirmDelete && (
         <div style={S.overlay} onClick={() => setConfirmDelete(null)}>
@@ -569,50 +813,158 @@ function DeckView({ cards, setCards }) {
   )
 }
 
-// ─── Summary View ─────────────────────────────────────────────────────────────
-function SummaryView({ coryatScore, correctCount, incorrectCount, passCount, totalClues, board, clueStates }) {
-  const pct = Math.round((correctCount / totalClues) * 100)
-  const byCategory = board.categories.map((cat, ci) => {
-    let catCoryat = 0
-    cat.clues.forEach((clue, ri) => {
-      const state = clueStates[`${ci}-${ri}`]
-      if (!clue.isDailyDouble) catCoryat += CORYAT_VAL[state](clue.value)
+// ─── Summary / Stats View ─────────────────────────────────────────────────────
+function SummaryView({ coryatScore, singleBoard, doubleBoard, singleClueStates, doubleClueStates, gameHistory, setGameHistory }) {
+  const [historyView, setHistoryView] = useState(false)
+
+  const totalCorrect = Object.values(singleClueStates).filter(s => s === 'correct').length + Object.values(doubleClueStates).filter(s => s === 'correct').length
+  const totalIncorrect = Object.values(singleClueStates).filter(s => s === 'incorrect').length + Object.values(doubleClueStates).filter(s => s === 'incorrect').length
+  const totalPass = Object.values(singleClueStates).filter(s => s === 'pass').length + Object.values(doubleClueStates).filter(s => s === 'pass').length
+  const totalClues = (singleBoard?.categories?.length * 5 || 0) + (doubleBoard?.categories?.length * 5 || 0)
+  const pct = totalClues > 0 ? Math.round((totalCorrect / totalClues) * 100) : 0
+
+  // All-time stats
+  const allTimeAvg = gameHistory.length > 0 ? Math.round(gameHistory.reduce((s, g) => s + g.coryatScore, 0) / gameHistory.length) : null
+  const last10 = gameHistory.slice(0, 10)
+  const last10Avg = last10.length > 0 ? Math.round(last10.reduce((s, g) => s + g.coryatScore, 0) / last10.length) : null
+  const best = gameHistory.length > 0 ? Math.max(...gameHistory.map(g => g.coryatScore)) : null
+
+  function calcCategoryBreakdown(board, states) {
+    if (!board) return []
+    return board.categories.map((cat, ci) => {
+      let score = 0
+      cat.clues.forEach((clue, ri) => {
+        const state = states[`${ci}-${ri}`] || 'unanswered'
+        if (!clue.isDailyDouble) score += CORYAT_VAL[state](clue.value)
+      })
+      return { name: cat.name, score }
     })
-    return { name: cat.name, coryat: catCoryat }
-  })
+  }
 
   return (
     <div style={S.summaryWrap}>
+      {/* Current game */}
       <div style={S.summaryHero}>
-        <div style={S.scoreLbl}>FINAL CORYAT SCORE</div>
-        <div style={{ ...S.scoreVal, fontSize: 64, color: coryatScore >= 0 ? '#f5c518' : '#e74c3c' }}>
+        <div style={S.scoreLbl}>CURRENT GAME</div>
+        <div style={{ ...S.scoreVal, fontSize: 56, color: coryatScore >= 0 ? '#f5c518' : '#e74c3c' }}>
           {coryatScore >= 0 ? '+' : ''}{coryatScore.toLocaleString()}
         </div>
-        <div style={{ fontSize: 12, color: '#6070a0', marginTop: 4, letterSpacing: 1 }}>
-          {correctCount} correct · {incorrectCount} incorrect · {passCount} passed · {totalClues - correctCount - incorrectCount - passCount} unanswered
-        </div>
-        <div style={{ ...S.progressOuter, marginTop: 14 }}><div style={{ ...S.progressInner, width: `${pct}%` }} /></div>
+        <div style={{ fontSize: 12, color: '#6070a0', marginTop: 4 }}>{totalCorrect}✓ {totalIncorrect}✗ {totalPass} pass</div>
+        <div style={{ ...S.progressOuter, marginTop: 12 }}><div style={{ ...S.progressInner, width: `${pct}%` }} /></div>
         <div style={{ fontSize: 11, color: '#8890c0', marginTop: 6, letterSpacing: 2 }}>{pct}% accuracy</div>
       </div>
-      <div style={S.catBreakdown}>
-        <div style={S.sectionTitle}>BY CATEGORY</div>
-        {byCategory.map((cat, i) => (
-          <div key={i} style={S.catRow}>
-            <span style={{ fontSize: 13, color: '#a0acd0' }}>{cat.name}</span>
-            <span style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: cat.coryat >= 0 ? '#4caf7d' : '#e57373' }}>
-              {cat.coryat >= 0 ? '+' : ''}{cat.coryat.toLocaleString()}
-            </span>
+
+      {/* All-time stats */}
+      {gameHistory.length > 0 && (
+        <div style={S.catBreakdown}>
+          <div style={S.sectionTitle}>ALL-TIME STATS ({gameHistory.length} games)</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+            {[['AVG', allTimeAvg], ['LAST 10', last10Avg], ['BEST', best]].map(([lbl, val]) => (
+              <div key={lbl} style={{ ...S.statCell, padding: '10px 4px' }}>
+                <div style={{ ...S.statN, fontSize: 22, color: '#f5c518' }}>{val !== null ? (val >= 0 ? '+' : '') + val.toLocaleString() : '—'}</div>
+                <div style={S.statLbl}>{lbl}</div>
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
+        </div>
+      )}
+
+      {/* Sparkline of last 10 */}
+      {gameHistory.length > 1 && <ScoreSparkline games={gameHistory.slice(0, 10).reverse()} />}
+
+      {/* Category breakdown for current game */}
+      {calcCategoryBreakdown(singleBoard, singleClueStates).length > 0 && (
+        <div style={S.catBreakdown}>
+          <div style={S.sectionTitle}>SINGLE JEOPARDY</div>
+          {calcCategoryBreakdown(singleBoard, singleClueStates).map((cat, i) => (
+            <div key={i} style={S.catRow}>
+              <span style={{ fontSize: 13, color: '#a0acd0' }}>{cat.name}</span>
+              <span style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: cat.score >= 0 ? '#4caf7d' : '#e57373' }}>{cat.score >= 0 ? '+' : ''}{cat.score.toLocaleString()}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {calcCategoryBreakdown(doubleBoard, doubleClueStates).length > 0 && (
+        <div style={S.catBreakdown}>
+          <div style={S.sectionTitle}>DOUBLE JEOPARDY</div>
+          {calcCategoryBreakdown(doubleBoard, doubleClueStates).map((cat, i) => (
+            <div key={i} style={S.catRow}>
+              <span style={{ fontSize: 13, color: '#a0acd0' }}>{cat.name}</span>
+              <span style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: cat.score >= 0 ? '#4caf7d' : '#e57373' }}>{cat.score >= 0 ? '+' : ''}{cat.score.toLocaleString()}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Game history list */}
+      {gameHistory.length > 0 && (
+        <div style={S.catBreakdown}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <div style={S.sectionTitle}>GAME HISTORY</div>
+            <button style={{ fontSize: 10, color: '#4060a0', letterSpacing: 1 }} onClick={() => setHistoryView(!historyView)}>
+              {historyView ? 'COLLAPSE' : 'EXPAND'}
+            </button>
+          </div>
+          {(historyView ? gameHistory : gameHistory.slice(0, 5)).map((game, i) => (
+            <div key={game.id} style={{ ...S.catRow, flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                <span style={{ fontSize: 13, color: '#c0c8e8' }}>#{game.episodeId} · {game.airDate}</span>
+                <span style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 22, color: game.coryatScore >= 0 ? '#4caf7d' : '#e57373' }}>
+                  {game.coryatScore >= 0 ? '+' : ''}{game.coryatScore.toLocaleString()}
+                </span>
+              </div>
+              <div style={{ display: 'flex', gap: 8, fontSize: 10, color: '#4060a0' }}>
+                <span>SJ: {game.singleCoryat >= 0 ? '+' : ''}{game.singleCoryat}</span>
+                {game.doubleCoryat !== 0 && <span>DJ: {game.doubleCoryat >= 0 ? '+' : ''}{game.doubleCoryat}</span>}
+                <span>{game.totalCorrect}✓ {game.totalIncorrect}✗</span>
+                {game.finalJeopardy && <span style={{ color: game.finalJeopardy.result === 'correct' ? '#4caf7d' : '#e57373' }}>FJ: {game.finalJeopardy.result === 'correct' ? '✓' : '✗'}</span>}
+              </div>
+            </div>
+          ))}
+          {!historyView && gameHistory.length > 5 && (
+            <button style={{ fontSize: 11, color: '#4060a0', padding: '8px 0', width: '100%', letterSpacing: 1 }} onClick={() => setHistoryView(true)}>
+              + {gameHistory.length - 5} more games
+            </button>
+          )}
+        </div>
+      )}
+
       <div style={S.explainer}>
         <div style={S.sectionTitle}>ABOUT CORYAT SCORING</div>
-        <p style={{ fontSize: 13, color: '#6878a8', lineHeight: 1.6 }}>
-          Coryat score measures unassisted performance: correct answers add face value, incorrect answers subtract face value, and Daily Doubles are excluded entirely. It's the standard metric serious Jeopardy players use to track improvement over time.
-        </p>
-        <p style={{ fontSize: 13, color: '#6878a8', lineHeight: 1.6, marginTop: 8 }}>
-          A score above $15,000 is competitive. Regular contestants typically average $20,000–$30,000.
-        </p>
+        <p style={{ fontSize: 13, color: '#6878a8', lineHeight: 1.6 }}>Correct answers add face value, incorrect subtract face value, Daily Doubles and Final Jeopardy are excluded. A score above $15,000 is competitive. Regular contestants average $20,000–$30,000.</p>
+      </div>
+    </div>
+  )
+}
+
+// ─── Score Sparkline ──────────────────────────────────────────────────────────
+function ScoreSparkline({ games }) {
+  const scores = games.map(g => g.coryatScore)
+  const min = Math.min(...scores)
+  const max = Math.max(...scores)
+  const range = max - min || 1
+  const w = 280, h = 60, pad = 8
+
+  const points = scores.map((s, i) => {
+    const x = pad + (i / (scores.length - 1)) * (w - pad * 2)
+    const y = pad + (1 - (s - min) / range) * (h - pad * 2)
+    return `${x},${y}`
+  }).join(' ')
+
+  return (
+    <div style={{ ...S.catBreakdown, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+      <div style={S.sectionTitle}>LAST {games.length} GAMES TREND</div>
+      <svg width={w} height={h} style={{ overflow: 'visible' }}>
+        <polyline points={points} fill="none" stroke="#f5c518" strokeWidth="2" strokeLinejoin="round" />
+        {scores.map((s, i) => {
+          const x = pad + (i / (scores.length - 1)) * (w - pad * 2)
+          const y = pad + (1 - (s - min) / range) * (h - pad * 2)
+          return <circle key={i} cx={x} cy={y} r="3" fill="#f5c518" />
+        })}
+      </svg>
+      <div style={{ display: 'flex', justifyContent: 'space-between', width: w, fontSize: 9, color: '#4060a0', marginTop: 4 }}>
+        <span>{games[0]?.airDate?.split(',')[0]}</span>
+        <span>{games[games.length - 1]?.airDate?.split(',')[0]}</span>
       </div>
     </div>
   )
@@ -629,6 +981,7 @@ const S = {
   scoreVal: { fontFamily: "'Bebas Neue', sans-serif", fontSize: 38, lineHeight: 1.1 },
   headerStats: { display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 },
   pill: { fontSize: 11, background: 'rgba(255,255,255,0.07)', borderRadius: 20, padding: '3px 10px', color: '#c0c8e8', letterSpacing: 1 },
+  authBtn: { fontSize: 16, padding: '2px 4px', color: '#8890c0' },
 
   nav: { display: 'flex', background: '#0a0f2e', borderBottom: '1px solid #1a2460', overflowX: 'auto' },
   navBtn: { padding: '11px 12px', fontSize: 11, letterSpacing: 1.5, color: '#5060a0', fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 700, borderBottom: '3px solid transparent', whiteSpace: 'nowrap', flex: 1 },
@@ -644,6 +997,33 @@ const S = {
   ddTag: { display: 'block', fontSize: 8, color: '#fff', background: '#b8960a', borderRadius: 2, padding: '1px 3px', marginBottom: 1 },
   legend: { display: 'flex', flexWrap: 'wrap', gap: 10, justifyContent: 'center', padding: '10px 0 2px', fontSize: 10, color: '#6070a0' },
   legendItem: { display: 'flex', alignItems: 'center', gap: 3 },
+
+  loaderBar: { display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center' },
+  loaderInput: { flex: 1, background: '#0a0f2e', border: '1px solid #1a2460', borderRadius: 8, color: '#e8e8f0', fontSize: 13, padding: '8px 12px', fontFamily: "'Barlow Condensed', sans-serif", letterSpacing: 1 },
+  loaderBtn: { background: 'rgba(245,197,24,0.1)', border: '1px solid rgba(245,197,24,0.3)', borderRadius: 8, color: '#f5c518', fontSize: 12, fontWeight: 700, padding: '8px 14px', fontFamily: "'Barlow Condensed', sans-serif", letterSpacing: 1, whiteSpace: 'nowrap' },
+  loadError: { fontSize: 12, color: '#e07070', background: 'rgba(224,112,112,0.08)', borderRadius: 8, padding: '8px 12px', marginBottom: 8 },
+  episodeLink: { textAlign: 'right', marginBottom: 6 },
+
+  roundTabs: { display: 'flex', gap: 4 },
+  roundTab: { fontSize: 11, letterSpacing: 1, color: '#5060a0', background: 'rgba(255,255,255,0.04)', borderRadius: 6, padding: '7px 12px', fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 700, border: '1px solid #1a2460' },
+  roundTabActive: { color: '#f5c518', background: 'rgba(245,197,24,0.08)', borderColor: '#f5c518' },
+  roundScores: { display: 'flex', gap: 16, marginBottom: 8, fontSize: 12, color: '#6070a0', alignItems: 'center' },
+  roundScore: { letterSpacing: 1 },
+
+  fjBar: { background: '#0a0f2e', border: '1px solid #1a3460', borderRadius: 10, padding: '12px 14px', marginTop: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 },
+  fjLabel: { fontSize: 11, color: '#8890c0', letterSpacing: 1 },
+  fjBtn: { background: 'rgba(77,208,225,0.1)', border: '1px solid rgba(77,208,225,0.3)', borderRadius: 8, color: '#4dd0e1', fontSize: 12, fontWeight: 700, padding: '7px 14px', fontFamily: "'Barlow Condensed', sans-serif", letterSpacing: 1 },
+
+  browserHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', borderBottom: '1px solid #1a2460' },
+  browserTitle: { fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: '#f5c518', letterSpacing: 2 },
+  browserControls: { display: 'flex', gap: 8, padding: '12px 16px', borderBottom: '1px solid #1a2040' },
+  seasonSelect: { background: '#060b1a', border: '1px solid #1a2460', borderRadius: 8, color: '#e8e8f0', fontSize: 12, padding: '8px 10px', fontFamily: "'Barlow Condensed', sans-serif" },
+  browserList: { flex: 1, overflowY: 'auto', padding: '8px 0' },
+  browserLoading: { textAlign: 'center', color: '#6070a0', padding: '24px', fontSize: 13 },
+  episodeRow: { display: 'flex', alignItems: 'center', gap: 12, padding: '11px 20px', width: '100%', textAlign: 'left', borderBottom: '1px solid #0f1530', background: 'none' },
+  epShowNum: { fontFamily: "'Bebas Neue', sans-serif", fontSize: 18, color: '#f5c518', minWidth: 70 },
+  epDate: { flex: 1, fontSize: 13, color: '#a0acd0' },
+  epArrow: { fontSize: 12, color: '#2a3580' },
 
   overlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: 16 },
   modal: { background: 'linear-gradient(160deg,#0f1e6e,#060b1a)', border: '2px solid #f5c518', borderRadius: 12, padding: '28px 20px 20px', maxWidth: 480, width: '100%', textAlign: 'center', position: 'relative', boxShadow: '0 20px 60px rgba(245,197,24,0.2)' },
@@ -679,14 +1059,12 @@ const S = {
   cardCat: { fontSize: 10, letterSpacing: 2, color: '#f5c518', background: 'rgba(245,197,24,0.08)', borderRadius: 4, padding: '2px 8px' },
   cardValBadge: { fontSize: 10, color: '#8890c0', background: 'rgba(255,255,255,0.05)', borderRadius: 4, padding: '2px 8px' },
   cardSource: { fontSize: 10, letterSpacing: 2, borderRadius: 4, padding: '2px 8px', background: 'rgba(255,255,255,0.05)' },
-
   flashCard: { width: '100%', maxWidth: 480, minHeight: 240, background: 'linear-gradient(150deg,#0f1e6e,#060b1a)', border: '2px solid #2a3580', borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', boxShadow: '0 8px 32px rgba(0,0,0,0.4)' },
   flashInner: { padding: 24, textAlign: 'center', width: '100%' },
   flashSide: { fontSize: 10, letterSpacing: 4, color: '#f5c518', marginBottom: 12 },
   flashFrontText: { fontSize: 17, color: '#e8e8f0', lineHeight: 1.55 },
   flashBackText: { fontSize: 20, color: '#7cd992', fontStyle: 'italic', lineHeight: 1.55 },
   flashHint: { fontSize: 10, color: '#2a3480', marginTop: 18, letterSpacing: 2 },
-
   rateRow: { display: 'flex', gap: 8, width: '100%', maxWidth: 480 },
   rateBtn: { flex: 1, borderRadius: 8, padding: '10px 4px', display: 'flex', flexDirection: 'column', alignItems: 'center', border: '1px solid', fontFamily: "'Barlow Condensed', sans-serif" },
 
@@ -694,12 +1072,10 @@ const S = {
   deckActions: { display: 'flex', gap: 8 },
   actionBtn: { flex: 1, fontSize: 12, letterSpacing: 1.5, color: '#f5c518', background: 'rgba(245,197,24,0.06)', borderRadius: 8, padding: '9px 0', fontWeight: 700, fontFamily: "'Barlow Condensed', sans-serif", border: '1px solid rgba(245,197,24,0.2)' },
   actionBtnActive: { background: 'rgba(245,197,24,0.15)', borderColor: 'rgba(245,197,24,0.5)' },
-
   addForm: { background: '#0a0f2e', borderRadius: 12, padding: 16, border: '1px solid #1a2460', display: 'flex', flexDirection: 'column', gap: 6 },
   formLabel: { fontSize: 10, letterSpacing: 3, color: '#6070a0' },
   textarea: { background: '#060b1a', border: '1px solid #1a2460', borderRadius: 8, color: '#e8e8f0', fontSize: 14, padding: '10px 12px', fontFamily: "'Barlow', sans-serif", resize: 'vertical' },
   input: { background: '#060b1a', border: '1px solid #1a2460', borderRadius: 8, color: '#e8e8f0', fontSize: 14, padding: '9px 12px', fontFamily: "'Barlow Condensed', sans-serif" },
-
   importTitle: { fontFamily: "'Bebas Neue', sans-serif", fontSize: 22, color: '#f5c518', letterSpacing: 2, marginBottom: 4 },
   importDesc: { fontSize: 13, color: '#8890c0', lineHeight: 1.6 },
   importHowTo: { fontSize: 12, color: '#6070a0', lineHeight: 1.6, background: '#060b1a', borderRadius: 8, padding: '10px 12px', border: '1px solid #1a2040' },
@@ -707,11 +1083,9 @@ const S = {
   importSuccess: { fontSize: 13, color: '#7cd992', textAlign: 'center', padding: '10px', background: 'rgba(124,217,146,0.08)', borderRadius: 8 },
   importError: { fontSize: 13, color: '#e07070', textAlign: 'center', padding: '10px', background: 'rgba(224,112,112,0.08)', borderRadius: 8 },
   code: { background: '#060b1a', padding: '1px 5px', borderRadius: 4, fontSize: 12, color: '#4dd0e1', border: '1px solid #1a2040' },
-
   deckTabs: { display: 'flex', gap: 4, flexWrap: 'wrap' },
   filterTab: { fontSize: 10, letterSpacing: 1.5, color: '#5060a0', background: 'rgba(255,255,255,0.04)', borderRadius: 6, padding: '5px 10px', fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 700, border: '1px solid #1a2460' },
   filterTabActive: { color: '#f5c518', background: 'rgba(245,197,24,0.08)', borderColor: '#f5c518' },
-
   emptyDeck: { padding: '40px 16px' },
   cardList: { display: 'flex', flexDirection: 'column', gap: 8 },
   cardRow: { background: '#0a0f2e', borderRadius: 10, padding: '12px 14px', border: '1px solid #1a2460', display: 'flex', gap: 12, alignItems: 'flex-start' },
@@ -729,13 +1103,6 @@ const S = {
   sectionTitle: { fontSize: 10, letterSpacing: 3, color: '#6070a0', marginBottom: 10 },
   catRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '7px 0', borderBottom: '1px solid #1a2040' },
   explainer: { background: '#0a0f2e', borderRadius: 12, padding: '14px 16px', border: '1px solid #1a2460' },
-
-  // Episode loader
-  loaderBar: { display: 'flex', gap: 8, marginBottom: 10, alignItems: 'center' },
-  loaderInput: { flex: 1, background: '#0a0f2e', border: '1px solid #1a2460', borderRadius: 8, color: '#e8e8f0', fontSize: 13, padding: '8px 12px', fontFamily: "'Barlow Condensed', sans-serif", letterSpacing: 1 },
-  loaderBtn: { background: 'rgba(245,197,24,0.1)', border: '1px solid rgba(245,197,24,0.3)', borderRadius: 8, color: '#f5c518', fontSize: 12, fontWeight: 700, padding: '8px 14px', fontFamily: "'Barlow Condensed', sans-serif", letterSpacing: 1 },
-  loadError: { fontSize: 12, color: '#e07070', background: 'rgba(224,112,112,0.08)', borderRadius: 8, padding: '8px 12px', marginBottom: 8 },
-  episodeLink: { textAlign: 'right', marginBottom: 6 },
 }
 
 const globalCSS = `
@@ -743,7 +1110,7 @@ const globalCSS = `
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { background: #060b1a; overscroll-behavior: none; }
   button { cursor: pointer; border: none; background: none; font-family: inherit; }
-  textarea:focus, input:focus { outline: 1px solid #f5c518; }
+  textarea:focus, input:focus, select:focus { outline: 1px solid #f5c518; }
   ::-webkit-scrollbar { width: 4px; height: 4px; }
   ::-webkit-scrollbar-track { background: #0a0f2e; }
   ::-webkit-scrollbar-thumb { background: #1a2460; border-radius: 99px; }

@@ -195,17 +195,14 @@ export default function App() {
     if (clueStates[`${ci}-${ri}`] !== CLUE_STATES.UNANSWERED) return
     const clue = board.categories[ci].clues[ri]
     const category = board.categories[ci].name
-    // DD wagering: only if wager mode on, clue is DD, and previous clue was correct
-    if (clue.isDailyDouble && wagerMode) {
+    // In tournament mode, intercept Daily Doubles for wagering
+    if (clue.isDailyDouble && tournamentMode) {
       setWagerState({ type: 'daily_double', ci, ri, clue, category })
       return
     }
     setActiveClue({ ci, ri, clue, category })
     setShowAnswer(false)
   }
-
-  // Wager mode = tournamentMode or just having wagerTrainer on
-  const wagerMode = tournamentMode
 
   function markClue(result) {
     const { ci, ri, clue, category } = activeClue
@@ -337,7 +334,13 @@ export default function App() {
             singleCoryat={singleCoryat}
             doubleCoryat={doubleCoryat}
             fjAnswered={fjAnswered}
-            onShowFJ={() => setShowFJ(true)}
+            onShowFJ={() => {
+              if (tournamentMode) {
+                setWagerState({ type: 'final_jeopardy', ci: null, ri: null, clue: null, category: null })
+              } else {
+                setShowFJ(true)
+              }
+            }}
             boardLoading={boardLoading}
             boardError={boardError}
             onLoadEpisode={loadEpisode}
@@ -438,16 +441,24 @@ export default function App() {
           boardValue={remainingBoardValue}
           opponentScores={tournamentState?.opponents}
           onWager={amount => {
-            // Open the clue with wager context
-            setActiveClue({ ci: wagerState.ci, ri: wagerState.ri, clue: { ...wagerState.clue, wager: amount }, category: wagerState.category })
-            setShowAnswer(false)
-            setWagerState(null)
+            if (wagerState.type === 'final_jeopardy') {
+              setWagerState(null)
+              setShowFJ(true)
+            } else {
+              setActiveClue({ ci: wagerState.ci, ri: wagerState.ri, clue: { ...wagerState.clue, wager: amount }, category: wagerState.category })
+              setShowAnswer(false)
+              setWagerState(null)
+            }
           }}
           onSkip={() => {
-            // Treat as regular clue
-            setActiveClue({ ci: wagerState.ci, ri: wagerState.ri, clue: wagerState.clue, category: wagerState.category })
-            setShowAnswer(false)
-            setWagerState(null)
+            if (wagerState.type === 'final_jeopardy') {
+              setWagerState(null)
+              setShowFJ(true)
+            } else {
+              setActiveClue({ ci: wagerState.ci, ri: wagerState.ri, clue: wagerState.clue, category: wagerState.category })
+              setShowAnswer(false)
+              setWagerState(null)
+            }
           }}
         />
       )}
@@ -727,7 +738,7 @@ function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round,
           <div style={S.fjLabel}>FINAL JEOPARDY · <span style={{ color: '#f5c518' }}>{episodeData.finalJeopardy.category}</span></div>
           {fjAnswered
             ? <div style={{ fontSize: 12, color: fjAnswered === 'correct' ? '#7cd992' : '#e07070' }}>{fjAnswered === 'correct' ? '✓ Got it' : '✗ Missed'} <span style={{ color: '#4060a0' }}>(not in Coryat)</span></div>
-            : <button style={S.fjBtn} onClick={onShowFJ}>Play Final J! →</button>}
+            : <button style={S.fjBtn} onClick={onShowFJ}>{tournamentMode ? '⭐ Wager + Play Final J!' : 'Play Final J!'} →</button>}
         </div>
       )}
 

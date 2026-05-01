@@ -5,6 +5,7 @@ import { parseApkg } from './ankiImport.js'
 import { SAMPLE_BOARD } from './boardData.js'
 import { fetchEpisode, episodeToBoard } from './jarchive.js'
 import { supabase, signIn, signUp, resetPassword, signOut, loadRemoteData, saveRemoteData, mergeData } from './supabase.js'
+import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -50,6 +51,14 @@ export default function App() {
   const [showAnswer, setShowAnswer] = useState(false)
   const [showFJ, setShowFJ] = useState(false)
   const [fjAnswered, setFjAnswered] = useState(null)
+  const [timedMode, setTimedMode] = useState(false)
+  const [tournamentMode, setTournamentMode] = useState(false)
+  const [tournamentState, setTournamentState] = useState(null) // { position, opponents }
+  const [showTournamentSetup, setShowTournamentSetup] = useState(false)
+  const [showConfidence, setShowConfidence] = useState(false)
+  const [confidenceRatings, setConfidenceRatings] = useState(null)
+  const [wagerState, setWagerState] = useState(null) // { type, resolve }
+  const [buzzTimeRef] = useState({ start: null }) // for tracking buzz times
 
   const [cards, setCards] = useState([])
   const [gameHistory, setGameHistory] = useState([])
@@ -163,6 +172,8 @@ export default function App() {
       }
       setFjAnswered(null)
       setActiveClue(null)
+      setConfidenceRatings(null)
+      setShowConfidence(true) // prompt for confidence ratings
     } catch (err) {
       setBoardError(err.message)
       if (!board) setBoard(SAMPLE_BOARD)
@@ -182,9 +193,19 @@ export default function App() {
 
   function openClue(ci, ri) {
     if (clueStates[`${ci}-${ri}`] !== CLUE_STATES.UNANSWERED) return
-    setActiveClue({ ci, ri, clue: board.categories[ci].clues[ri], category: board.categories[ci].name })
+    const clue = board.categories[ci].clues[ri]
+    const category = board.categories[ci].name
+    // DD wagering: only if wager mode on, clue is DD, and previous clue was correct
+    if (clue.isDailyDouble && wagerMode) {
+      setWagerState({ type: 'daily_double', ci, ri, clue, category })
+      return
+    }
+    setActiveClue({ ci, ri, clue, category })
     setShowAnswer(false)
   }
+
+  // Wager mode = tournamentMode or just having wagerTrainer on
+  const wagerMode = tournamentMode
 
   function markClue(result) {
     const { ci, ri, clue, category } = activeClue
@@ -203,6 +224,14 @@ export default function App() {
   const coryatScore = singleCoryat + doubleCoryat
 
   const totalClues = board?.categories?.length * 5 || 0
+
+  // Calculate remaining board value for wager trainer
+  const remainingBoardValue = board?.categories?.reduce((sum, cat, ci) => {
+    return sum + cat.clues.reduce((s, clue, ri) => {
+      const state = clueStates[`${ci}-${ri}`]
+      return s + (state === 'unanswered' && !clue.isDailyDouble ? clue.value : 0)
+    }, 0)
+  }, 0) || 0
   const answeredCount = Object.values(clueStates).filter(s => s !== CLUE_STATES.UNANSWERED).length
   const correctCount = Object.values(clueStates).filter(s => s === CLUE_STATES.CORRECT).length
   const incorrectCount = Object.values(clueStates).filter(s => s === CLUE_STATES.INCORRECT).length
@@ -242,6 +271,12 @@ export default function App() {
       finalJeopardy: fjResult || null,
       singleBreakdown: buildBreakdown(singleBoard, singleClueStates),
       doubleBreakdown: buildBreakdown(doubleBoard, doubleClueStates),
+      confidenceRatings: confidenceRatings || null,
+      tournamentResult: tournamentState ? {
+        position: tournamentState.position,
+        opponents: tournamentState.opponents,
+        finalRank: [coryatScore, ...tournamentState.opponents].sort((a,b)=>b-a).indexOf(coryatScore) + 1,
+      } : null,
     }
     setGameHistory(prev => [game, ...prev.filter(g => g.episodeId !== game.episodeId)])
   }
@@ -310,6 +345,15 @@ export default function App() {
             canGoNext={currentEpIndex > 0}
             onPrev={() => navigateEpisode(1)}
             onNext={() => navigateEpisode(-1)}
+            timedMode={timedMode}
+            onToggleTimedMode={() => setTimedMode(m => !m)}
+            tournamentMode={tournamentMode}
+            tournamentState={tournamentState}
+            coryatScore={coryatScore}
+            onToggleTournament={() => {
+              if (tournamentMode) { setTournamentMode(false); setTournamentState(null) }
+              else setShowTournamentSetup(true)
+            }}
           />
         )}
         {view === 'study'   && <StudyView cards={cards} setCards={setCards} />}
@@ -323,16 +367,26 @@ export default function App() {
             doubleClueStates={doubleClueStates}
             gameHistory={gameHistory}
             episodeMeta={episodeMeta}
+            tournamentState={tournamentState}
+            confidenceRatings={confidenceRatings}
           />
         )}
       </main>
 
-      {activeClue && (
+      {activeClue && !timedMode && (
         <ClueModal
           clue={activeClue.clue}
           category={activeClue.category}
           showAnswer={showAnswer}
           onReveal={() => setShowAnswer(true)}
+          onMark={markClue}
+          onClose={() => setActiveClue(null)}
+        />
+      )}
+      {activeClue && timedMode && (
+        <TimedClueModal
+          clue={activeClue.clue}
+          category={activeClue.category}
           onMark={markClue}
           onClose={() => setActiveClue(null)}
         />
@@ -355,6 +409,46 @@ export default function App() {
             loadEpisode(gameId)
           }}
           onClose={() => setShowBrowser(false)}
+        />
+      )}
+
+      {showConfidence && board && board !== SAMPLE_BOARD && (
+        <CategoryConfidenceModal
+          board={board}
+          onConfirm={ratings => { setConfidenceRatings(ratings); setShowConfidence(false) }}
+          onSkip={() => setShowConfidence(false)}
+        />
+      )}
+
+      {showTournamentSetup && (
+        <TournamentSetupModal
+          onStart={({ position, opponents }) => {
+            setTournamentState({ position, opponents })
+            setTournamentMode(true)
+            setShowTournamentSetup(false)
+          }}
+          onClose={() => setShowTournamentSetup(false)}
+        />
+      )}
+
+      {wagerState && (
+        <WagerTrainer
+          type={wagerState.type}
+          coryatScore={coryatScore}
+          boardValue={remainingBoardValue}
+          opponentScores={tournamentState?.opponents}
+          onWager={amount => {
+            // Open the clue with wager context
+            setActiveClue({ ci: wagerState.ci, ri: wagerState.ri, clue: { ...wagerState.clue, wager: amount }, category: wagerState.category })
+            setShowAnswer(false)
+            setWagerState(null)
+          }}
+          onSkip={() => {
+            // Treat as regular clue
+            setActiveClue({ ci: wagerState.ci, ri: wagerState.ri, clue: wagerState.clue, category: wagerState.category })
+            setShowAnswer(false)
+            setWagerState(null)
+          }}
         />
       )}
 
@@ -554,7 +648,7 @@ function AuthModal({ user, syncError, onClose, onSignOut }) {
 }
 
 // ─── Board View ───────────────────────────────────────────────────────────────
-function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round, hasDouble, onSwitchRound, onBrowse, singleCoryat, doubleCoryat, fjAnswered, onShowFJ, boardLoading, boardError, onLoadEpisode, canGoPrev, canGoNext, onPrev, onNext }) {
+function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round, hasDouble, onSwitchRound, onBrowse, singleCoryat, doubleCoryat, fjAnswered, onShowFJ, boardLoading, boardError, onLoadEpisode, canGoPrev, canGoNext, onPrev, onNext, timedMode, onToggleTimedMode, tournamentMode, tournamentState, coryatScore, onToggleTournament }) {
   const tileBg = { unanswered: '#0f1e6e', correct: '#1a5c2e', incorrect: '#5c1a1a', pass: '#2a2a4a' }
 
   return (
@@ -563,10 +657,29 @@ function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round,
       <div style={S.loaderBar}>
         <button style={{ ...S.loaderBtn, opacity: canGoPrev ? 1 : 0.3 }} onClick={onPrev} disabled={!canGoPrev}>← Prev</button>
         <button style={{ ...S.loaderBtn, flex: 1 }} onClick={onBrowse}>
-          {boardLoading ? '⏳ Loading...' : '📺 Browse Episodes'}
+          {boardLoading ? '⏳ Loading...' : '📺 Browse'}
         </button>
         <button style={{ ...S.loaderBtn, opacity: canGoNext ? 1 : 0.3 }} onClick={onNext} disabled={!canGoNext}>Next →</button>
       </div>
+      {/* Mode toggles */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ fontSize: 10, letterSpacing: 1, color: tournamentMode ? '#4caf7d' : '#4060a0' }}>🏆</span>
+          <button onClick={onToggleTournament} style={{ width: 36, height: 20, borderRadius: 10, border: 'none', background: tournamentMode ? '#4caf7d' : '#1a2460', position: 'relative', transition: 'background 0.2s', cursor: 'pointer' }}>
+            <div style={{ width: 14, height: 14, borderRadius: '50%', background: '#fff', position: 'absolute', top: 3, left: tournamentMode ? 19 : 3, transition: 'left 0.2s' }} />
+          </button>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ fontSize: 10, letterSpacing: 1, color: timedMode ? '#f5c518' : '#4060a0' }}>⏱</span>
+          <button onClick={onToggleTimedMode} style={{ width: 36, height: 20, borderRadius: 10, border: 'none', background: timedMode ? '#f5c518' : '#1a2460', position: 'relative', transition: 'background 0.2s', cursor: 'pointer' }}>
+            <div style={{ width: 14, height: 14, borderRadius: '50%', background: '#fff', position: 'absolute', top: 3, left: timedMode ? 19 : 3, transition: 'left 0.2s' }} />
+          </button>
+        </div>
+      </div>
+      {/* Tournament opponent bar */}
+      {tournamentMode && tournamentState && (
+        <OpponentScoreBar tournamentState={tournamentState} coryatScore={coryatScore} />
+      )}
 
       {boardError && <div style={S.loadError}>⚠️ {boardError}</div>}
 
@@ -602,7 +715,7 @@ function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round,
               <div key={key} onClick={() => onOpen(ci, ri)} style={{ ...S.tile, background: tileBg[state], cursor: state !== 'unanswered' ? 'default' : 'pointer', opacity: state !== 'unanswered' ? 0.65 : 1 }}>
                 {state !== 'unanswered'
                   ? <span style={S.tileIcon}>{state === 'correct' ? '✓' : state === 'incorrect' ? '✗' : '—'}</span>
-                  : <span style={S.tileVal}>{clue.isDailyDouble && <span style={S.ddTag}>DD</span>}${clue.value.toLocaleString()}</span>}
+                  : <span style={S.tileVal}>{clue.isDailyDouble && !tournamentMode && <span style={S.ddTag}>DD</span>}${clue.value.toLocaleString()}</span>}
               </div>
             )
           })
@@ -716,6 +829,178 @@ function EpisodeBrowser({ onSelect, onClose }) {
           ))}
         </div>
       </div>
+    </div>
+  )
+}
+
+// ─── Timed Clue Modal ────────────────────────────────────────────────────────
+// Phases: reading → buzzing → answering → reveal
+function TimedClueModal({ clue, category, onMark, onClose }) {
+  // Calculate reading time: ~200ms per word, min 3s max 8s
+  const wordCount = clue.answer.split(/\s+/).length
+  const readingMs = Math.min(Math.max(wordCount * 200, 3000), 8000)
+  const buzzMs = 5000
+  const answerMs = 5000
+
+  const [phase, setPhase] = useState('reading') // reading | buzzing | answering | reveal
+  const [result, setResult] = useState(null) // correct | incorrect | pass | timeout
+  const [elapsed, setElapsed] = useState(0)
+  const [phaseStart, setPhaseStart] = useState(Date.now())
+  const intervalRef = useRef(null)
+  const phaseRef = useRef('reading')
+  const phaseStartRef = useRef(Date.now())
+
+  const phaseDuration = phase === 'reading' ? readingMs : phase === 'buzzing' ? buzzMs : answerMs
+
+  useEffect(() => {
+    phaseRef.current = phase
+    phaseStartRef.current = Date.now()
+    setPhaseStart(Date.now())
+    setElapsed(0)
+
+    intervalRef.current = setInterval(() => {
+      const now = Date.now()
+      const el = now - phaseStartRef.current
+      setElapsed(el)
+
+      const dur = phaseRef.current === 'reading' ? readingMs
+                : phaseRef.current === 'buzzing' ? buzzMs
+                : answerMs
+
+      if (el >= dur) {
+        clearInterval(intervalRef.current)
+        if (phaseRef.current === 'reading') {
+          phaseRef.current = 'buzzing'
+          setPhase('buzzing')
+        } else if (phaseRef.current === 'buzzing') {
+          // Missed buzz — auto pass
+          phaseRef.current = 'reveal'
+          setResult('pass')
+          setPhase('reveal')
+        } else if (phaseRef.current === 'answering') {
+          // Ran out of answer time — wrong
+          phaseRef.current = 'reveal'
+          setResult('incorrect')
+          setPhase('reveal')
+        }
+      }
+    }, 50)
+
+    return () => clearInterval(intervalRef.current)
+  }, [phase])
+
+  // When we hit reveal phase, call onMark after a short delay
+  useEffect(() => {
+    if (phase === 'reveal' && result) {
+      // Don't auto-close — let user see the answer and tap Done
+    }
+  }, [phase, result])
+
+  function buzzIn() {
+    if (phase !== 'buzzing') return
+    clearInterval(intervalRef.current)
+    setPhase('answering')
+  }
+
+  function submitResult(r) {
+    setResult(r)
+    setPhase('reveal')
+    clearInterval(intervalRef.current)
+  }
+
+  function handleDone() {
+    onMark(result)
+  }
+
+  const progress = Math.min(elapsed / phaseDuration, 1)
+  const timeLeft = Math.max(0, Math.ceil((phaseDuration - elapsed) / 1000))
+
+  const phaseColor = phase === 'reading' ? '#4060a0'
+                   : phase === 'buzzing' ? '#f5c518'
+                   : phase === 'answering' ? '#4caf7d'
+                   : '#8890c0'
+
+  const phasLabel = phase === 'reading' ? 'READ THE CLUE'
+                  : phase === 'buzzing' ? `BUZZ IN — ${timeLeft}s`
+                  : phase === 'answering' ? `ANSWER — ${timeLeft}s`
+                  : 'RESULT'
+
+  return (
+    <div style={S.overlay} onClick={phase === 'reveal' ? undefined : undefined}>
+      <div style={{ ...S.modal, borderColor: phaseColor, boxShadow: `0 20px 60px ${phaseColor}22` }} onClick={e => e.stopPropagation()}>
+
+        {/* Phase label + timer bar */}
+        <div style={{ fontSize: 10, letterSpacing: 3, color: phaseColor, marginBottom: 8 }}>{phasLabel}</div>
+        {phase !== 'reveal' && (
+          <div style={{ width: '100%', height: 4, background: '#1a2040', borderRadius: 99, marginBottom: 16, overflow: 'hidden' }}>
+            <div style={{
+              height: '100%', borderRadius: 99,
+              background: phaseColor,
+              width: `${(1 - progress) * 100}%`,
+              transition: 'width 0.05s linear',
+              ...(phase === 'buzzing' ? { animation: 'pulse 0.5s ease-in-out infinite alternate' } : {})
+            }} />
+          </div>
+        )}
+
+        {/* Category + value */}
+        <div style={S.modalCat}>{category}</div>
+        <div style={S.modalVal}>${clue.value.toLocaleString()}</div>
+        {clue.isDailyDouble && <div style={S.ddBadge}>⭐ DAILY DOUBLE</div>}
+
+        {/* Clue text */}
+        <div style={S.modalText}>{clue.answer}</div>
+
+        {/* Phase-specific controls */}
+        {phase === 'reading' && (
+          <div style={{ fontSize: 12, color: '#4060a0', letterSpacing: 2, marginTop: 8 }}>
+            Buzz window opens in {timeLeft}s...
+          </div>
+        )}
+
+        {phase === 'buzzing' && (
+          <button
+            style={{ ...S.revealBtn, background: '#f5c518', fontSize: 18, padding: '16px 40px', letterSpacing: 3 }}
+            onClick={buzzIn}
+          >
+            BUZZ IN!
+          </button>
+        )}
+
+        {phase === 'answering' && (
+          <>
+            <div style={{ fontSize: 12, color: '#7cd992', letterSpacing: 2, marginBottom: 16 }}>
+              Do you have the answer?
+            </div>
+            <div style={S.markRow}>
+              <button style={{ ...S.markBtn, background: '#1a5c2e', color: '#7cd992', border: '1px solid #2e8c50', fontSize: 15, padding: '14px 0' }} onClick={() => submitResult('correct')}>✓ Got It</button>
+              <button style={{ ...S.markBtn, background: '#5c1a1a', color: '#e07070', border: '1px solid #8c2e2e', fontSize: 15, padding: '14px 0' }} onClick={() => submitResult('incorrect')}>✗ Wrong</button>
+            </div>
+          </>
+        )}
+
+        {phase === 'reveal' && (
+          <>
+            {/* Result banner */}
+            <div style={{
+              fontSize: 13, fontWeight: 700, letterSpacing: 2, padding: '8px 16px', borderRadius: 8, marginBottom: 12,
+              color: result === 'correct' ? '#7cd992' : result === 'pass' ? '#8890d0' : '#e07070',
+              background: result === 'correct' ? 'rgba(124,217,146,0.1)' : result === 'pass' ? 'rgba(136,144,208,0.1)' : 'rgba(224,112,112,0.1)',
+            }}>
+              {result === 'correct' ? '✓ CORRECT' : result === 'pass' ? '— MISSED BUZZ' : '✗ INCORRECT'}
+            </div>
+
+            {/* Always show the answer */}
+            <div style={S.modalQ}>{clue.question}</div>
+            {(result === 'incorrect' || result === 'pass') && (
+              <div style={{ fontSize: 11, color: '#6070a0', marginBottom: 12, letterSpacing: 1 }}>Added to your flashcard deck</div>
+            )}
+
+            <button style={S.revealBtn} onClick={handleDone}>Done</button>
+          </>
+        )}
+      </div>
+      <style>{`@keyframes pulse { from { opacity: 1; } to { opacity: 0.5; } }`}</style>
     </div>
   )
 }
@@ -1141,8 +1426,9 @@ function GameHistoryRow({ game }) {
 }
 
 // ─── Summary / Stats View ─────────────────────────────────────────────────────
-function SummaryView({ coryatScore, singleBoard, doubleBoard, singleClueStates, doubleClueStates, gameHistory, episodeMeta }) {
+function SummaryView({ coryatScore, singleBoard, doubleBoard, singleClueStates, doubleClueStates, gameHistory, episodeMeta, tournamentState, confidenceRatings }) {
   const [historyView, setHistoryView] = useState(false)
+  const [statsTab, setStatsTab] = useState('current') // current | weakness | speed | history
 
   const totalCorrect = Object.values(singleClueStates).filter(s => s === 'correct').length + Object.values(doubleClueStates).filter(s => s === 'correct').length
   const totalIncorrect = Object.values(singleClueStates).filter(s => s === 'incorrect').length + Object.values(doubleClueStates).filter(s => s === 'incorrect').length
@@ -1172,8 +1458,57 @@ function SummaryView({ coryatScore, singleBoard, doubleBoard, singleClueStates, 
   // Show current game section if we have a board loaded (even if no clues answered yet)
   const hasCurrentGame = !!singleBoard
 
+  const streak = calcStreak(gameHistory)
+
   return (
     <div style={S.summaryWrap}>
+      {/* Stats tab bar */}
+      <div style={{ display: 'flex', gap: 4, overflowX: 'auto' }}>
+        {[['current','📋 CURRENT'],['weakness','⚠️ WEAK SPOTS'],['speed','⚡ SPEED'],['history','📜 HISTORY']].map(([id, label]) => (
+          <button key={id} style={{ ...S.navBtn, flex: 1, fontSize: 10, letterSpacing: 1, padding: '9px 6px', ...(statsTab === id ? S.navActive : {}) }} onClick={() => setStatsTab(id)}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* Streak bar — always visible */}
+      {gameHistory.length > 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6 }}>
+          {[
+            ['🔥 STREAK', streak.current > 0 ? `${streak.current}d` : '—'],
+            ['🏆 BEST', `${streak.longest}d`],
+            ['📅 THIS WK', streak.thisWeek],
+            ['🎮 TOTAL', streak.total],
+          ].map(([l, v]) => (
+            <div key={l} style={{ background: '#0a0f2e', borderRadius: 8, padding: '8px 4px', textAlign: 'center', border: '1px solid #1a2460' }}>
+              <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: '#f5c518' }}>{v}</div>
+              <div style={{ fontSize: 8, color: '#6070a0', letterSpacing: 1.5 }}>{l}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Weakness tab */}
+      {statsTab === 'weakness' && <WeaknessTracker gameHistory={gameHistory} />}
+
+      {/* Speed tab */}
+      {statsTab === 'speed' && <SpeedTracker gameHistory={gameHistory} />}
+
+      {/* History tab */}
+      {statsTab === 'history' && gameHistory.length > 0 && (
+        <div style={{ background: '#0a0f2e', borderRadius: 12, padding: '14px 16px', border: '1px solid #1a2460' }}>
+          <div style={S.sectionTitle}>GAME HISTORY ({gameHistory.length})</div>
+          {gameHistory.map(game => <GameHistoryRow key={game.id} game={game} />)}
+        </div>
+      )}
+
+      {statsTab === 'history' && gameHistory.length === 0 && (
+        <div style={{ textAlign: 'center', padding: '40px 16px', color: '#6070a0', fontSize: 13 }}>No games yet.</div>
+      )}
+
+      {/* Current game tab */}
+      {statsTab === 'current' && (
+      <div style={S.summaryWrap}>
       {/* Current game */}
       {hasCurrentGame && (
         <div style={S.summaryHero}>
@@ -1255,6 +1590,58 @@ function SummaryView({ coryatScore, singleBoard, doubleBoard, singleClueStates, 
         <div style={S.sectionTitle}>ABOUT CORYAT SCORING</div>
         <p style={{ fontSize: 13, color: '#6878a8', lineHeight: 1.6 }}>Correct answers add face value, incorrect subtract face value, Daily Doubles and Final Jeopardy are excluded. A score above $15,000 is competitive. Regular contestants average $20,000–$30,000.</p>
       </div>
+
+      {/* Tournament result */}
+      {tournamentState && (
+        <OpponentCoryatResult
+          coryatScore={coryatScore}
+          actualContestants={null}
+          tournamentState={tournamentState}
+        />
+      )}
+
+      {/* Confidence vs actual */}
+      {confidenceRatings && hasCurrentGame && singleBoard && (
+        <ConfidenceComparison
+          ratings={confidenceRatings}
+          singleBreakdown={calcCategoryBreakdown(singleBoard, singleClueStates)}
+          doubleBreakdown={calcCategoryBreakdown(doubleBoard, doubleClueStates)}
+        />
+      )}
+      </div>)} {/* end current tab */}
+    </div>
+  )
+}
+
+function ConfidenceComparison({ ratings, singleBreakdown, doubleBreakdown }) {
+  const all = [...(singleBreakdown || []), ...(doubleBreakdown || [])]
+  const rated = all.filter(cat => ratings[cat.name] !== undefined)
+  if (rated.length === 0) return null
+
+  const LABELS = ['Weak 😬', 'OK 😐', 'Good 🙂', 'Strong 😎']
+
+  return (
+    <div style={{ background: '#0a0f2e', borderRadius: 12, padding: '14px 16px', border: '1px solid #1a2460' }}>
+      <div style={{ fontSize: 10, letterSpacing: 3, color: '#6070a0', marginBottom: 10 }}>CONFIDENCE VS ACTUAL</div>
+      {rated.map(cat => {
+        const confidence = ratings[cat.name]
+        const isPositive = cat.score >= 0
+        const match = (confidence >= 2 && isPositive) || (confidence <= 1 && !isPositive)
+        return (
+          <div key={cat.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #1a2040' }}>
+            <div>
+              <div style={{ fontSize: 12, color: '#a0acd0' }}>{cat.name}</div>
+              <div style={{ fontSize: 10, color: '#4060a0' }}>Predicted: {LABELS[confidence]}</div>
+            </div>
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 18, color: isPositive ? '#4caf7d' : '#e57373' }}>
+                {cat.score >= 0 ? '+' : ''}{cat.score.toLocaleString()}
+              </div>
+              <div style={{ fontSize: 10, color: match ? '#7cd992' : '#f5c518' }}>{match ? '✓ accurate' : '⚠ surprised'}</div>
+            </div>
+          </div>
+        )
+      })}
     </div>
   )
 }

@@ -3,10 +3,15 @@
 export function sm2(card, quality) {
   let { interval, easeFactor, repetitions } = card
 
+  // Track lapses for leech detection
+  let lapses = card.lapses || 0
+
   if (quality === 0) {
     repetitions = 0
     interval = 1
+    lapses += 1
   } else {
+    lapses = 0 // reset consecutive lapses on any passing grade
     if (repetitions === 0) interval = 1
     else if (repetitions === 1) interval = 6
     else interval = Math.round(interval * easeFactor)
@@ -20,7 +25,7 @@ export function sm2(card, quality) {
 
   const dueAt = Date.now() + interval * 24 * 60 * 60 * 1000
 
-  return { ...card, interval, easeFactor, repetitions, dueAt, lastReviewed: Date.now() }
+  return { ...card, interval, easeFactor, repetitions, lapses, dueAt, lastReviewed: Date.now() }
 }
 
 export function newCard(front, back, category = '', value = 0, source = 'manual') {

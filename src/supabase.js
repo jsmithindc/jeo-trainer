@@ -86,3 +86,88 @@ export function mergeData(local, remote) {
 
   return { cards, gameHistory }
 }
+
+// ── Game state sync (in-progress games) ──────────────────────────────────────
+export async function saveGameStateRemote(gameState) {
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return
+
+  const { data: existing } = await supabase
+    .from('user_data')
+    .select('id')
+    .eq('user_id', user.id)
+    .single()
+
+  const payload = {
+    game_state: gameState,
+    updated_at: new Date().toISOString(),
+  }
+
+  if (existing) {
+    await supabase.from('user_data').update(payload).eq('user_id', user.id)
+  } else {
+    await supabase.from('user_data').insert({ user_id: user.id, cards: [], game_history: [], ...payload })
+  }
+}
+
+export async function loadGameStateRemote() {
+  const { data, error } = await supabase
+    .from('user_data')
+    .select('game_state')
+    .single()
+  if (error || !data) return null
+  return data.game_state || null
+}
+
+// ── Media storage (Supabase Storage bucket) ───────────────────────────────────
+
+export async function uploadMedia(filename, arrayBuffer, mimeType) {
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('Not authenticated')
+
+  // Store under user's folder: {userId}/{filename}
+  const path = `${user.id}/${filename}`
+
+  const { data, error } = await supabase.storage
+    .from('media')
+    .upload(path, arrayBuffer, {
+      contentType: mimeType,
+      upsert: true, // overwrite if exists
+    })
+
+  if (error) throw error
+
+  // Return public URL
+  const { data: { publicUrl } } = supabase.storage
+    .from('media')
+    .getPublicUrl(path)
+
+  return publicUrl
+}
+
+export async function deleteMediaRemote(filename) {
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return
+
+  const path = `${user.id}/${filename}`
+  await supabase.storage.from('media').remove([path])
+}
+
+export async function listMediaRemote() {
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return []
+
+  const { data, error } = await supabase.storage
+    .from('media')
+    .list(user.id)
+
+  if (error) return []
+  return data || []
+}
+
+export function getMediaPublicUrl(filename, userId) {
+  const { data: { publicUrl } } = supabase.storage
+    .from('media')
+    .getPublicUrl(`${userId}/${filename}`)
+  return publicUrl
+}

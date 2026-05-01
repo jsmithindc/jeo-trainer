@@ -1,10 +1,14 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { sm2, newCard, formatRelative, nextDueLabel } from './srs.js'
 import { loadCards, saveCards, loadGameHistory, saveGameHistory } from './storage.js'
-import { parseApkg } from './ankiImport.js'
+import { parseApkg, migrateLocalMediaToSupabase } from './ankiImport.js'
 import { SAMPLE_BOARD } from './boardData.js'
-import { fetchEpisode, episodeToBoard } from './jarchive.js'
-import { supabase, signIn, signUp, resetPassword, signOut, loadRemoteData, saveRemoteData, mergeData } from './supabase.js'
+import { fetchEpisode, episodeToBoard, searchEpisodesByCategory } from './jarchive.js'
+import { supabase, signIn, signUp, resetPassword, signOut, loadRemoteData, saveRemoteData, mergeData, saveGameStateRemote, loadGameStateRemote, uploadMedia } from './supabase.js'
+import { buildCategoryHeatMap, buildValueBreakdown, predictCoryat, exportToApkg, getMetaCategory, META_CATEGORY_NAMES } from './analytics.js'
+import { CardContent, cardIsHtml } from './CardContent.jsx'
+import { getMediaStats, clearAllMedia } from './mediaStore.js'
+import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpisodeToCache, getEpisodeFromCache, pinEpisode, unpinEpisode, removeEpisodeFromCache, getCacheStats } from './storage.js'
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
@@ -66,6 +70,13 @@ export default function App() {
   const [storageReady, setStorageReady] = useState(false)
   const [showBrowser, setShowBrowser] = useState(false)
   const [showAuth, setShowAuth] = useState(false)
+  const [gameStarted, setGameStarted] = useState(false) // true after Start button tapped
+  const [showStartScreen, setShowStartScreen] = useState(false)
+  const [actualScore, setActualScore] = useState(0) // real show score including wagers
+  const [wagerAmount, setWagerAmount] = useState(null) // pending wager
+  const [resumePrompt, setResumePrompt] = useState(null) // saved game state to restore
+  const [showCache, setShowCache] = useState(false)
+  const [showCategorySearch, setShowCategorySearch] = useState(false)
 
   const syncTimeout = useRef(null)
 
@@ -124,6 +135,11 @@ export default function App() {
       })
       .catch(err => setSyncError(err.message))
       .finally(() => setSyncing(false))
+
+    // Migrate any local IndexedDB media to Supabase Storage
+    migrateLocalMediaToSupabase(user)
+      .then(count => { if (count > 0) console.log(`Migrated ${count} media files to Supabase`) })
+      .catch(console.warn)
   }, [user, storageReady])
 
   // ── Save locally + debounced remote sync ─────────────────────────────────
@@ -154,11 +170,33 @@ export default function App() {
   }, [episodeMeta])
 
   // ── Episode loading ───────────────────────────────────────────────────────
+  // Auto-save current game state before loading new episode
+  function autoSaveCurrentGame() {
+    if (!episodeMeta || !gameStarted) return
+    const state = {
+      episodeData, episodeMeta, round, board,
+      singleClueStates, doubleClueStates,
+      fjAnswered, coryatScore: singleCoryat + doubleCoryat,
+      actualScore, confidenceRatings, tournamentState,
+    }
+    saveGameState(state)
+    if (user) saveGameStateRemote(state).catch(console.error)
+  }
+
   async function loadEpisode(gameId, silent = false) {
+    // Auto-save current game if one is in progress
+    if (gameStarted && episodeMeta) autoSaveCurrentGame()
+
     setBoardLoading(true)
     setBoardError(null)
+    setGameStarted(false)
+    setActualScore(0)
     try {
-      const episode = await fetchEpisode(gameId)
+      // Check cache first
+      const cached = getEpisodeFromCache(gameId === 'latest' ? gameId : gameId)
+      const episode = cached || await fetchEpisode(gameId)
+      // Cache the fetched episode
+      if (!cached) saveEpisodeToCache(episode.episodeId || gameId, episode)
       const { board: newBoard, meta } = episodeToBoard(episode, 'single')
       setEpisodeData(episode)
       setBoard(newBoard)
@@ -174,7 +212,7 @@ export default function App() {
       setFjAnswered(null)
       setActiveClue(null)
       setConfidenceRatings(null)
-      setShowConfidence(true) // prompt for confidence ratings
+      setShowStartScreen(true) // show start screen with predicted Coryat + confidence
     } catch (err) {
       setBoardError(err.message)
       if (!board) setBoard(SAMPLE_BOARD)
@@ -214,6 +252,10 @@ export default function App() {
     if (result === CLUE_STATES.INCORRECT || result === CLUE_STATES.PASS) {
       addMissedAsCard(clue, category)
     }
+    // Track actual show score (with wagers for DD)
+    const effectiveValue = clue.wager || clue.value
+    if (result === CLUE_STATES.CORRECT) setActualScore(s => s + effectiveValue)
+    else if (result === CLUE_STATES.INCORRECT) setActualScore(s => s - effectiveValue)
     setActiveClue(null)
   }
 
@@ -258,6 +300,40 @@ export default function App() {
       })
     }
 
+    // Build value breakdown for analytics
+    function buildValueBreakdownForGame(board, states) {
+      const tiers = {}
+      board?.categories?.forEach((cat, ci) => {
+        cat.clues.forEach((clue, ri) => {
+          const state = (states || {})[`${ci}-${ri}`] || 'unanswered'
+          const tier = clue.value
+          if (!tiers[tier]) tiers[tier] = { correct: 0, incorrect: 0, pass: 0 }
+          if (state === 'correct') tiers[tier].correct++
+          else if (state === 'incorrect') tiers[tier].incorrect++
+          else if (state === 'pass') tiers[tier].pass++
+        })
+      })
+      return tiers
+    }
+
+    const singleValueBreakdown = buildValueBreakdownForGame(singleBoard, singleClueStates)
+    const doubleValueBreakdown = buildValueBreakdownForGame(doubleBoard, doubleClueStates)
+    const valueBreakdown = {}
+    // Merge single and double, normalizing double values to single equivalents
+    Object.entries(singleValueBreakdown).forEach(([v, s]) => {
+      valueBreakdown[v] = { ...(valueBreakdown[v] || { correct:0, incorrect:0, pass:0 }) }
+      valueBreakdown[v].correct += s.correct
+      valueBreakdown[v].incorrect += s.incorrect
+      valueBreakdown[v].pass += s.pass
+    })
+    Object.entries(doubleValueBreakdown).forEach(([v, s]) => {
+      const normV = parseInt(v) / 2 // normalize DJ values to SJ equivalent
+      valueBreakdown[normV] = { ...(valueBreakdown[normV] || { correct:0, incorrect:0, pass:0 }) }
+      valueBreakdown[normV].correct += s.correct
+      valueBreakdown[normV].incorrect += s.incorrect
+      valueBreakdown[normV].pass += s.pass
+    })
+
     const game = {
       id: `game-${Date.now()}`,
       episodeId: episodeMeta.episodeNumber,
@@ -266,13 +342,16 @@ export default function App() {
       singleCoryat,
       doubleCoryat,
       coryatScore,
+      actualScore,
       totalCorrect,
       totalIncorrect,
       totalPass,
       finalJeopardy: fjResult || null,
       singleBreakdown: buildBreakdown(singleBoard, singleClueStates),
       doubleBreakdown: buildBreakdown(doubleBoard, doubleClueStates),
+      valueBreakdown,
       confidenceRatings: confidenceRatings || null,
+      contestants: episodeMeta.contestants || null,
       tournamentResult: tournamentState ? {
         position: tournamentState.position,
         opponents: tournamentState.opponents,
@@ -284,7 +363,14 @@ export default function App() {
 
   function handleFJAnswer(result) {
     setFjAnswered(result)
-    saveGame({ result, category: episodeData?.finalJeopardy?.category, clue: episodeData?.finalJeopardy?.clue, answer: episodeData?.finalJeopardy?.answer })
+    // Update actual score with FJ wager
+    if (wagerAmount) {
+      if (result === 'correct') setActualScore(s => s + wagerAmount)
+      else setActualScore(s => s - wagerAmount)
+    }
+    saveGame({ result, category: episodeData?.finalJeopardy?.category, clue: episodeData?.finalJeopardy?.clue, answer: episodeData?.finalJeopardy?.answer, wager: wagerAmount })
+    clearGameState()
+    setWagerAmount(null)
     setShowFJ(false)
   }
 
@@ -311,6 +397,7 @@ export default function App() {
     <div style={S.app}>
       <Header
         coryatScore={coryatScore}
+        actualScore={actualScore}
         correctCount={correctCount}
         incorrectCount={incorrectCount}
         answeredCount={answeredCount}
@@ -357,6 +444,8 @@ export default function App() {
             tournamentMode={tournamentMode}
             tournamentState={tournamentState}
             coryatScore={coryatScore}
+            onShowCache={() => setShowCache(true)}
+            onShowCategorySearch={() => setShowCategorySearch(true)}
             onToggleTournament={() => {
               if (tournamentModeRef.current) {
                 setTournamentMode(false)
@@ -424,11 +513,21 @@ export default function App() {
         />
       )}
 
-      {showConfidence && board && board !== SAMPLE_BOARD && (
-        <CategoryConfidenceModal
+      {showStartScreen && board && board !== SAMPLE_BOARD && (
+        <StartScreen
           board={board}
-          onConfirm={ratings => { setConfidenceRatings(ratings); setShowConfidence(false) }}
-          onSkip={() => setShowConfidence(false)}
+          episodeMeta={episodeMeta}
+          gameHistory={gameHistory}
+          onStart={ratings => {
+            setConfidenceRatings(ratings)
+            setShowStartScreen(false)
+            setGameStarted(true)
+          }}
+          onSkip={() => {
+            setConfidenceRatings(null)
+            setShowStartScreen(false)
+            setGameStarted(true)
+          }}
         />
       )}
 
@@ -452,6 +551,7 @@ export default function App() {
           opponentScores={tournamentState?.opponents}
           onWager={amount => {
             if (wagerState.type === 'final_jeopardy') {
+              setWagerAmount(amount)
               setWagerState(null)
               setShowFJ(true)
             } else {
@@ -482,14 +582,29 @@ export default function App() {
         />
       )}
 
+      {showCache && (
+        <EpisodeCacheManager
+          onLoadEpisode={loadEpisode}
+          onClose={() => setShowCache(false)}
+        />
+      )}
+
+      {showCategorySearch && (
+        <CategorySearch
+          onSelect={gameId => { setShowCategorySearch(false); loadEpisode(gameId) }}
+          onClose={() => setShowCategorySearch(false)}
+        />
+      )}
+
       <style>{globalCSS}</style>
     </div>
   )
 }
 
 // ─── Header ───────────────────────────────────────────────────────────────────
-function Header({ coryatScore, correctCount, incorrectCount, answeredCount, totalClues, episodeMeta, user, syncing, syncError, onAuthClick }) {
+function Header({ coryatScore, actualScore, correctCount, incorrectCount, answeredCount, totalClues, episodeMeta, user, syncing, syncError, onAuthClick }) {
   const color = coryatScore >= 0 ? '#f5c518' : '#e74c3c'
+  const showActual = actualScore !== 0 || coryatScore !== actualScore
   return (
     <header style={S.header}>
       <div>
@@ -501,6 +616,11 @@ function Header({ coryatScore, correctCount, incorrectCount, answeredCount, tota
       <div style={S.scoreBox}>
         <div style={S.scoreLbl}>CORYAT SCORE</div>
         <div style={{ ...S.scoreVal, color }}>{coryatScore >= 0 ? '+' : ''}{coryatScore.toLocaleString()}</div>
+        {actualScore !== coryatScore && (
+          <div style={{ fontSize: 9, color: '#6070a0', letterSpacing: 1 }}>
+            show: {actualScore >= 0 ? '+' : ''}{actualScore.toLocaleString()}
+          </div>
+        )}
       </div>
       <div style={S.headerStats}>
         <div style={S.pill}>{correctCount}✓ {incorrectCount}✗</div>
@@ -669,7 +789,7 @@ function AuthModal({ user, syncError, onClose, onSignOut }) {
 }
 
 // ─── Board View ───────────────────────────────────────────────────────────────
-function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round, hasDouble, onSwitchRound, onBrowse, singleCoryat, doubleCoryat, fjAnswered, onShowFJ, boardLoading, boardError, onLoadEpisode, canGoPrev, canGoNext, onPrev, onNext, timedMode, onToggleTimedMode, tournamentMode, tournamentState, coryatScore, onToggleTournament }) {
+function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round, hasDouble, onSwitchRound, onBrowse, singleCoryat, doubleCoryat, fjAnswered, onShowFJ, boardLoading, boardError, onLoadEpisode, canGoPrev, canGoNext, onPrev, onNext, timedMode, onToggleTimedMode, tournamentMode, tournamentState, coryatScore, onToggleTournament, onShowCache, onShowCategorySearch }) {
   const tileBg = { unanswered: '#0f1e6e', correct: '#1a5c2e', incorrect: '#5c1a1a', pass: '#2a2a4a' }
 
   return (
@@ -678,8 +798,10 @@ function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round,
       <div style={S.loaderBar}>
         <button style={{ ...S.loaderBtn, opacity: canGoPrev ? 1 : 0.3 }} onClick={onPrev} disabled={!canGoPrev}>← Prev</button>
         <button style={{ ...S.loaderBtn, flex: 1 }} onClick={onBrowse}>
-          {boardLoading ? '⏳ Loading...' : '📺 Browse'}
+          {boardLoading ? '⏳' : '📺'}
         </button>
+        <button style={S.loaderBtn} onClick={onShowCategorySearch} title="Search by category">🔍</button>
+        <button style={S.loaderBtn} onClick={onShowCache} title="Offline cache">📥</button>
         <button style={{ ...S.loaderBtn, opacity: canGoNext ? 1 : 0.3 }} onClick={onNext} disabled={!canGoNext}>Next →</button>
       </div>
       {/* Mode toggles */}
@@ -781,6 +903,226 @@ function FinalJeopardyModal({ fj, onAnswer, onClose }) {
                 <button style={{ ...S.markBtn, background: '#5c1a1a', color: '#e07070', border: '1px solid #8c2e2e' }} onClick={() => onAnswer('incorrect')}>✗ Wrong</button>
               </div>
             </>}
+      </div>
+    </div>
+  )
+}
+
+// ─── Start Screen ────────────────────────────────────────────────────────────
+function StartScreen({ board, episodeMeta, gameHistory, onStart, onSkip }) {
+  const [ratings, setRatings] = useState({})
+  const [showConfidence, setShowConfidence] = useState(false)
+  const categories = board?.categories?.map(c => c.name) || []
+  const prediction = predictCoryat(gameHistory, board)
+  const LABELS = ['😬', '😐', '🙂', '😎']
+  const LABEL_TEXT = ['Weak', 'OK', 'Good', 'Strong']
+
+  return (
+    <div style={S.overlay}>
+      <div style={{ ...S.modal, maxWidth: 480, maxHeight: '90vh', overflowY: 'auto' }}>
+        <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 26, color: '#f5c518', letterSpacing: 3, marginBottom: 2 }}>
+          READY TO PLAY?
+        </div>
+        <div style={{ fontSize: 11, color: '#6070a0', letterSpacing: 2, marginBottom: 16 }}>
+          #{episodeMeta?.episodeNumber} · {episodeMeta?.airDate}
+        </div>
+
+        {/* Predicted Coryat */}
+        {prediction && (
+          <div style={{ background: '#060b1a', borderRadius: 10, padding: '12px 16px', marginBottom: 16, border: '1px solid #1a2040' }}>
+            <div style={{ fontSize: 9, letterSpacing: 3, color: '#6070a0', marginBottom: 6 }}>PREDICTED CORYAT RANGE</div>
+            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'baseline', gap: 8 }}>
+              <span style={{ fontSize: 14, color: '#4060a0' }}>{prediction.low >= 0 ? '+' : ''}{prediction.low.toLocaleString()}</span>
+              <span style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 32, color: '#f5c518' }}>{prediction.mid >= 0 ? '+' : ''}{prediction.mid.toLocaleString()}</span>
+              <span style={{ fontSize: 14, color: '#4060a0' }}>{prediction.high >= 0 ? '+' : ''}{prediction.high.toLocaleString()}</span>
+            </div>
+            <div style={{ fontSize: 10, color: '#4060a0', letterSpacing: 1, marginTop: 4 }}>Based on {gameHistory.length} games</div>
+          </div>
+        )}
+
+        {/* Categories preview */}
+        <div style={{ marginBottom: 16 }}>
+          <button
+            style={{ fontSize: 11, color: showConfidence ? '#f5c518' : '#4060a0', letterSpacing: 1, marginBottom: showConfidence ? 10 : 0, width: '100%', textAlign: 'left' }}
+            onClick={() => setShowConfidence(!showConfidence)}
+          >
+            {showConfidence ? '▼' : '▶'} Rate your category confidence (optional)
+          </button>
+
+          {showConfidence && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {categories.map(cat => (
+                <div key={cat}>
+                  <div style={{ fontSize: 11, color: '#a0acd0', marginBottom: 4, letterSpacing: 1 }}>
+                    {cat} <span style={{ color: '#4060a0', fontSize: 9 }}>· {getMetaCategory(cat)}</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: 4 }}>
+                    {LABELS.map((emoji, i) => (
+                      <button
+                        key={i}
+                        onClick={() => setRatings(r => ({ ...r, [cat]: i }))}
+                        style={{
+                          flex: 1, padding: '6px 2px', borderRadius: 6, fontSize: 16,
+                          background: ratings[cat] === i ? 'rgba(245,197,24,0.15)' : 'rgba(255,255,255,0.04)',
+                          border: ratings[cat] === i ? '1px solid #f5c518' : '1px solid #1a2460',
+                          cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1,
+                        }}
+                      >
+                        <span>{emoji}</span>
+                        <span style={{ fontSize: 7, color: ratings[cat] === i ? '#f5c518' : '#4060a0' }}>{LABEL_TEXT[i]}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button style={{ ...S.markBtn, background: '#1e2456', color: '#8890d0', border: '1px solid #2e3476', flex: 1 }} onClick={onSkip}>
+            Skip →
+          </button>
+          <button style={{ ...S.revealBtn, flex: 2, fontSize: 16 }} onClick={() => onStart(Object.keys(ratings).length > 0 ? ratings : null)}>
+            Start Game! →
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Episode Cache Manager ────────────────────────────────────────────────────
+function EpisodeCacheManager({ onLoadEpisode, onClose }) {
+  const [stats, setStats] = useState(() => getCacheStats())
+  const [rangeStart, setRangeStart] = useState('')
+  const [rangeEnd, setRangeEnd] = useState('')
+  const [caching, setCaching] = useState(false)
+  const [cacheProgress, setCacheProgress] = useState('')
+
+  async function cacheRange() {
+    const start = parseInt(rangeStart)
+    const end = parseInt(rangeEnd)
+    if (!start || !end || start > end) return
+    setCaching(true)
+    for (let id = start; id <= end; id++) {
+      setCacheProgress(`Caching episode ${id}...`)
+      try {
+        const episode = await fetchEpisode(String(id))
+        saveEpisodeToCache(String(id), episode)
+      } catch {}
+      await new Promise(r => setTimeout(r, 300)) // rate limit
+    }
+    setCaching(false)
+    setCacheProgress('')
+    setStats(getCacheStats())
+  }
+
+  return (
+    <div style={S.overlay} onClick={onClose}>
+      <div style={{ ...S.modal, maxWidth: 440, maxHeight: '85vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
+        <button style={S.closeX} onClick={onClose}>✕</button>
+        <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: '#f5c518', letterSpacing: 2, marginBottom: 4 }}>
+          📥 OFFLINE CACHE
+        </div>
+        <div style={{ fontSize: 11, color: '#6070a0', marginBottom: 16 }}>
+          {stats.total} episodes cached · {stats.sizeKB}KB · {stats.pinned} pinned
+        </div>
+
+        {/* Cache range */}
+        <div style={{ fontSize: 9, color: '#6070a0', letterSpacing: 3, marginBottom: 6 }}>CACHE EPISODE RANGE</div>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+          <input style={{ ...S.input, flex: 1 }} value={rangeStart} onChange={e => setRangeStart(e.target.value)} placeholder="From (e.g. 9150)" type="number" />
+          <input style={{ ...S.input, flex: 1 }} value={rangeEnd} onChange={e => setRangeEnd(e.target.value)} placeholder="To (e.g. 9160)" type="number" />
+          <button style={{ ...S.loaderBtn, opacity: caching ? 0.5 : 1 }} onClick={cacheRange} disabled={caching}>
+            {caching ? '⏳' : 'Cache'}
+          </button>
+        </div>
+        {cacheProgress && <div style={{ fontSize: 12, color: '#f5c518', marginBottom: 8 }}>{cacheProgress}</div>}
+
+        {/* Episode list */}
+        {stats.episodes.length === 0 ? (
+          <div style={{ color: '#6070a0', fontSize: 13, textAlign: 'center', padding: 20 }}>No cached episodes yet.</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {stats.episodes.map(ep => (
+              <div key={ep.episodeId} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0', borderBottom: '1px solid #1a2040' }}>
+                <button onClick={() => { onLoadEpisode(ep.episodeId); onClose() }} style={{ flex: 1, textAlign: 'left', background: 'none', border: 'none', cursor: 'pointer' }}>
+                  <div style={{ fontSize: 13, color: '#c0c8e8' }}>#{ep.episodeNumber || ep.episodeId} · {ep.airDate}</div>
+                </button>
+                <button
+                  style={{ fontSize: 14, color: ep.pinned ? '#f5c518' : '#4060a0' }}
+                  onClick={() => { ep.pinned ? unpinEpisode(ep.episodeId) : pinEpisode(ep.episodeId); setStats(getCacheStats()) }}
+                  title={ep.pinned ? 'Unpin' : 'Pin (won&apos;t be auto-removed)'}
+                >
+                  {ep.pinned ? '📌' : '📍'}
+                </button>
+                <button style={{ fontSize: 14, color: '#e57373' }} onClick={() => { removeEpisodeFromCache(ep.episodeId); setStats(getCacheStats()) }}>🗑</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── Category Search ──────────────────────────────────────────────────────────
+function CategorySearch({ onSelect, onClose }) {
+  const [query, setQuery] = useState('')
+  const [results, setResults] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+
+  async function search() {
+    if (!query.trim()) return
+    setLoading(true); setError(null)
+    try {
+      const episodes = await searchEpisodesByCategory(query.trim())
+      setResults(episodes)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div style={S.overlay} onClick={onClose}>
+      <div style={{ ...S.modal, maxWidth: 480, maxHeight: '85vh', display: 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden' }} onClick={e => e.stopPropagation()}>
+        <div style={S.browserHeader}>
+          <div style={S.browserTitle}>🔍 SEARCH BY CATEGORY</div>
+          <button style={S.closeX} onClick={onClose}>✕</button>
+        </div>
+        <div style={{ padding: '12px 16px', borderBottom: '1px solid #1a2040', display: 'flex', gap: 8 }}>
+          <input
+            style={{ ...S.loaderInput, flex: 1 }}
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && search()}
+            placeholder="e.g. Opera, Potent Potables, Nonfiction..."
+            autoFocus
+          />
+          <button style={S.loaderBtn} onClick={search} disabled={loading}>
+            {loading ? '⏳' : 'Search'}
+          </button>
+        </div>
+        <div style={S.browserList}>
+          {error && <div style={{ ...S.loadError, margin: 12 }}>{error}</div>}
+          {!loading && results.length === 0 && query && !error && (
+            <div style={S.browserLoading}>No episodes found for "{query}"</div>
+          )}
+          {!loading && results.length === 0 && !query && (
+            <div style={S.browserLoading}>Search for any Jeopardy category name to find episodes that featured it.</div>
+          )}
+          {results.map((ep, i) => (
+            <button key={`${ep.gameId}-${i}`} style={S.episodeRow} onClick={() => onSelect(ep.gameId)}>
+              <span style={S.epShowNum}>#{ep.showNumber || ep.gameId}</span>
+              <span style={S.epDate}>{ep.airDate}</span>
+              <span style={S.epArrow}>▶</span>
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   )
@@ -1238,8 +1580,16 @@ function StudyView({ cards, setCards }) {
       </div>
       <div style={S.flashCard} onClick={() => setFlipped(!flipped)}>
         {!flipped
-          ? <div style={S.flashInner}><div style={S.flashSide}>CLUE</div><div style={S.flashFrontText}>{card.front}</div><div style={S.flashHint}>tap to reveal</div></div>
-          : <div style={S.flashInner}><div style={{ ...S.flashSide, color: '#7cd992' }}>ANSWER</div><div style={S.flashBackText}>{card.back}</div><div style={S.flashHint}>tap to flip back</div></div>}
+          ? <div style={S.flashInner}>
+              <div style={S.flashSide}>CLUE</div>
+              <CardContent content={card.front} isHtml={card.hasMedia || cardIsHtml(card.front)} style={S.flashFrontText} />
+              <div style={S.flashHint}>tap to reveal</div>
+            </div>
+          : <div style={S.flashInner}>
+              <div style={{ ...S.flashSide, color: '#7cd992' }}>ANSWER</div>
+              <CardContent content={card.back} isHtml={card.hasMedia || cardIsHtml(card.back)} style={S.flashBackText} />
+              <div style={S.flashHint}>tap to flip back</div>
+            </div>}
       </div>
       {flipped && (
         <div style={S.rateRow}>
@@ -1255,9 +1605,47 @@ function StudyView({ cards, setCards }) {
   )
 }
 
+// ─── Media Storage Info ──────────────────────────────────────────────────────
+function MediaStorageInfo() {
+  const [stats, setStats] = useState(null)
+  const [clearing, setClearing] = useState(false)
+
+  useEffect(() => {
+    getMediaStats().then(setStats).catch(() => {})
+  }, [])
+
+  if (!stats || stats.count === 0) return null
+
+  async function handleClear() {
+    if (!confirm('Clear all stored media? Card images will no longer display.')) return
+    setClearing(true)
+    await clearAllMedia()
+    setStats({ count: 0, sizeKB: 0 })
+    setClearing(false)
+  }
+
+  return (
+    <div style={{ marginTop: 8, padding: '8px 12px', background: '#060b1a', borderRadius: 8, border: '1px solid #1a2040', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <span style={{ fontSize: 11, color: '#6070a0' }}>
+        📁 {stats.count} media files · {stats.sizeKB}KB stored
+      </span>
+      <button style={{ fontSize: 11, color: '#e57373', letterSpacing: 1 }} onClick={handleClear} disabled={clearing}>
+        {clearing ? '...' : 'Clear'}
+      </button>
+    </div>
+  )
+}
+
 // ─── Deck View ────────────────────────────────────────────────────────────────
 function DeckView({ cards, setCards }) {
   const [subview, setSubview] = useState('list')
+  const [editCard, setEditCard] = useState(null) // card being edited
+  const [editFront, setEditFront] = useState('')
+  const [editBack, setEditBack] = useState('')
+  const [editCat, setEditCat] = useState('')
+  const [selectedIds, setSelectedIds] = useState(new Set())
+  const [bulkMode, setBulkMode] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const [newFront, setNewFront] = useState('')
   const [newBack, setNewBack] = useState('')
   const [newCat, setNewCat] = useState('')
@@ -1277,24 +1665,90 @@ function DeckView({ cards, setCards }) {
   function deleteCard(id) { setCards(prev => prev.filter(c => c.id !== id)); setConfirmDelete(null) }
   function resetCard(id) { setCards(prev => prev.map(c => c.id === id ? { ...c, interval: 0, easeFactor: 2.5, repetitions: 0, dueAt: Date.now(), lastReviewed: null } : c)) }
 
+  function startEdit(card) {
+    setEditCard(card)
+    setEditFront(card.front)
+    setEditBack(card.back)
+    setEditCat(card.category || '')
+  }
+
+  function saveEdit() {
+    if (!editFront.trim() || !editBack.trim()) return
+    setCards(prev => prev.map(c => c.id === editCard.id ? { ...c, front: editFront.trim(), back: editBack.trim(), category: editCat.trim() } : c))
+    setEditCard(null)
+  }
+
+  function toggleSelect(id) {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+
+  function selectAll() {
+    setSelectedIds(new Set(filtered.map(c => c.id)))
+  }
+
+  function clearSelection() {
+    setSelectedIds(new Set())
+    setBulkMode(false)
+  }
+
+  function bulkDelete() {
+    setCards(prev => prev.filter(c => !selectedIds.has(c.id)))
+    clearSelection()
+  }
+
+  function bulkReset() {
+    setCards(prev => prev.map(c => selectedIds.has(c.id) ? { ...c, interval: 0, easeFactor: 2.5, repetitions: 0, dueAt: Date.now(), lastReviewed: null } : c))
+    clearSelection()
+  }
+
+  async function handleExport() {
+    setExporting(true)
+    try {
+      const toExport = bulkMode && selectedIds.size > 0 ? cards.filter(c => selectedIds.has(c.id)) : filtered
+      await exportToApkg(toExport)
+    } catch (err) {
+      alert('Export failed: ' + err.message)
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  // Leech detection: 4+ consecutive wrong (lapses)
+  function isLeech(card) {
+    return (card.lapses || 0) >= 4
+  }
+
   async function handleApkgImport(e) {
     const file = e.target.files[0]; if (!file) return
     setImporting(true); setImportError(null); setImportResult(null)
     try {
-      const imported = await parseApkg(file)
+      const result = await parseApkg(file, (progress) => {
+        // Could update progress UI here if needed
+      }, user)
+      const imported = result.cards
       let added = 0
       setCards(prev => {
         const existing = new Set(prev.map(c => c.front))
         const toAdd = imported.filter(c => { if (existing.has(c.front)) return false; added++; return true })
         return [...prev, ...toAdd]
       })
-      setTimeout(() => setImportResult({ added: imported.length }), 100)
+      setTimeout(() => setImportResult({ added: imported.length, mediaCount: result.mediaCount }), 100)
     } catch (err) { setImportError(err.message || String(err)) }
     finally { setImporting(false); e.target.value = '' }
   }
 
-  const counts = { all: cards.length, due: cards.filter(c => c.dueAt <= now).length, missed: cards.filter(c => c.source === 'missed').length, manual: cards.filter(c => c.source === 'manual').length, anki: cards.filter(c => c.source === 'anki').length }
-  const filtered = cards.filter(c => filter === 'all' ? true : filter === 'due' ? c.dueAt <= now : c.source === filter)
+  const leeches = cards.filter(c => (c.lapses || 0) >= 4)
+  const counts = { all: cards.length, due: cards.filter(c => c.dueAt <= now).length, leeches: leeches.length, missed: cards.filter(c => c.source === 'missed').length, manual: cards.filter(c => c.source === 'manual').length, anki: cards.filter(c => c.source === 'anki').length }
+  const filtered = cards.filter(c => {
+    if (filter === 'due') return c.dueAt <= now
+    if (filter === 'leeches') return (c.lapses || 0) >= 4
+    if (filter === 'missed' || filter === 'manual' || filter === 'anki') return c.source === filter
+    return true
+  })
 
   return (
     <div style={S.deckWrap}>
@@ -1318,19 +1772,51 @@ function DeckView({ cards, setCards }) {
       {subview === 'import' && (
         <div style={S.addForm}>
           <div style={S.importTitle}>Import Anki Deck</div>
-          <div style={S.importDesc}>Select a <code style={S.code}>.apkg</code> file from Anki.</div>
-          <div style={S.importHowTo}><b>Anki:</b> File → Export → format: Anki Deck Package (.apkg)</div>
+          <div style={S.importDesc}>
+            Select a <code style={S.code}>.apkg</code> file from Anki. Images and audio are extracted and stored locally — they will display inside your flashcards.
+          </div>
+          <div style={S.importHowTo}><b>Anki:</b> File → Export → Include media ✓ → format: Anki Deck Package (.apkg)</div>
           <input ref={fileRef} type="file" accept=".apkg" onChange={handleApkgImport} style={{ display: 'none' }} />
-          {importing ? <div style={S.importStatus}>⏳ Parsing deck...</div> : <button style={S.startBtn} onClick={() => fileRef.current.click()}>Choose .apkg File</button>}
-          {importResult && <div style={S.importSuccess}>✅ Imported {importResult.added} cards!</div>}
+          {importing ? <div style={S.importStatus}>⏳ Parsing deck and storing media...</div> : <button style={S.startBtn} onClick={() => fileRef.current.click()}>Choose .apkg File</button>}
+          {importResult && (
+            <div style={S.importSuccess}>
+              ✅ Imported {importResult.added} cards!
+              {importResult.mediaCount > 0 && ` · ${importResult.mediaCount} media files stored`}
+            </div>
+          )}
           {importError && <div style={S.importError}>❌ {importError}</div>}
+          <MediaStorageInfo />
         </div>
       )}
 
-      <div style={S.deckTabs}>
-        {['all','due','missed','manual','anki'].map(f => (
-          <button key={f} style={{ ...S.filterTab, ...(filter === f ? S.filterTabActive : {}) }} onClick={() => setFilter(f)}>{f.toUpperCase()} ({counts[f]})</button>
-        ))}
+      {/* Bulk action bar */}
+      {bulkMode && (
+        <div style={{ display: 'flex', gap: 6, background: '#0a0f2e', borderRadius: 8, padding: '8px 12px', border: '1px solid #1a2460', alignItems: 'center' }}>
+          <span style={{ fontSize: 11, color: '#f5c518', flex: 1 }}>{selectedIds.size} selected</span>
+          <button style={{ fontSize: 11, color: '#8890c0', letterSpacing: 1 }} onClick={selectAll}>All</button>
+          <button style={{ fontSize: 11, color: '#4caf7d', letterSpacing: 1 }} onClick={bulkReset}>Reset SRS</button>
+          <button style={{ fontSize: 11, color: '#e57373', letterSpacing: 1 }} onClick={bulkDelete}>Delete</button>
+          <button style={{ fontSize: 11, color: '#4060a0', letterSpacing: 1 }} onClick={clearSelection}>✕</button>
+        </div>
+      )}
+
+      {/* Filter tabs */}
+      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', flex: 1 }}>
+          {['all','due','leeches','missed','manual','anki'].map(f => (
+            <button key={f} style={{ ...S.filterTab, ...(filter === f ? S.filterTabActive : {}), ...(f === 'leeches' && counts.leeches > 0 ? { color: '#e57373' } : {}) }} onClick={() => setFilter(f)}>
+              {f === 'leeches' ? '🐛' : ''}{f.toUpperCase()} ({counts[f]})
+            </button>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 4 }}>
+          <button style={{ ...S.filterTab, color: bulkMode ? '#f5c518' : '#5060a0', ...(bulkMode ? { borderColor: '#f5c518' } : {}) }} onClick={() => setBulkMode(!bulkMode)}>
+            ☑ BULK
+          </button>
+          <button style={{ ...S.filterTab, color: exporting ? '#8890c0' : '#4dd0e1' }} onClick={handleExport} disabled={exporting}>
+            {exporting ? '⏳' : '⬇ ANKI'}
+          </button>
+        </div>
       </div>
 
       {filtered.length === 0
@@ -1340,21 +1826,33 @@ function DeckView({ cards, setCards }) {
             const isDue = card.dueAt <= now
             const sc = card.source === 'missed' ? '#e57373' : card.source === 'anki' ? '#4dd0e1' : '#81c784'
             return (
-              <div key={card.id} style={S.cardRow}>
+              <div key={card.id} style={{ ...S.cardRow, ...(bulkMode && selectedIds.has(card.id) ? { borderColor: '#f5c518', background: 'rgba(245,197,24,0.05)' } : {}) }} onClick={bulkMode ? () => toggleSelect(card.id) : undefined}>
                 <div style={S.cardRowMain}>
-                  <div style={S.cardRowFront}>{card.front}</div>
-                  <div style={S.cardRowBack}>{card.back}</div>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+                    {isLeech(card) && <span style={{ fontSize: 10, flexShrink: 0 }} title="Leech: 4+ consecutive wrong">🐛</span>}
+                    <CardContent content={card.front} isHtml={card.hasMedia || cardIsHtml(card.front)} style={S.cardRowFront} />
+                  </div>
+                  <CardContent content={card.back} isHtml={card.hasMedia || cardIsHtml(card.back)} style={S.cardRowBack} />
                   <div style={S.cardRowMeta}>
                     {card.category && <span style={S.metaTag}>{card.category}</span>}
                     <span style={{ ...S.metaTag, color: sc }}>{card.source.toUpperCase()}</span>
                     <span style={{ ...S.metaTag, color: isDue ? '#f5c518' : '#4060a0' }}>{isDue ? 'DUE NOW' : `Due ${formatRelative(card.dueAt)}`}</span>
                     {card.repetitions > 0 && <span style={S.metaTag}>Rep {card.repetitions} · EF {card.easeFactor.toFixed(2)}</span>}
+                    {isLeech(card) && <span style={{ ...S.metaTag, color: '#e57373' }}>LEECH ({card.lapses} lapses)</span>}
                   </div>
                 </div>
-                <div style={S.cardRowActions}>
-                  <button style={S.iconBtn} onClick={() => resetCard(card.id)}>↺</button>
-                  <button style={{ ...S.iconBtn, color: '#e57373' }} onClick={() => setConfirmDelete(card.id)}>🗑</button>
-                </div>
+                {!bulkMode && (
+                  <div style={S.cardRowActions}>
+                    <button style={S.iconBtn} onClick={() => startEdit(card)}>✏️</button>
+                    <button style={S.iconBtn} onClick={() => resetCard(card.id)}>↺</button>
+                    <button style={{ ...S.iconBtn, color: '#e57373' }} onClick={() => setConfirmDelete(card.id)}>🗑</button>
+                  </div>
+                )}
+                {bulkMode && (
+                  <div style={{ fontSize: 18, color: selectedIds.has(card.id) ? '#f5c518' : '#2a3580', paddingLeft: 8 }}>
+                    {selectedIds.has(card.id) ? '☑' : '☐'}
+                  </div>
+                )}
               </div>
             )
           })}
@@ -1368,6 +1866,25 @@ function DeckView({ cards, setCards }) {
             <div style={{ display: 'flex', gap: 10 }}>
               <button style={{ ...S.markBtn, background: '#5c1a1a', color: '#e07070', border: '1px solid #8c2e2e', flex: 1 }} onClick={() => deleteCard(confirmDelete)}>Delete</button>
               <button style={{ ...S.markBtn, background: '#1e2456', color: '#8890d0', border: '1px solid #2e3476', flex: 1 }} onClick={() => setConfirmDelete(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editCard && (
+        <div style={S.overlay} onClick={() => setEditCard(null)}>
+          <div style={{ ...S.modal, maxWidth: 480 }} onClick={e => e.stopPropagation()}>
+            <button style={S.closeX} onClick={() => setEditCard(null)}>✕</button>
+            <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: '#f5c518', letterSpacing: 2, marginBottom: 16 }}>EDIT CARD</div>
+            <div style={S.formLabel}>CLUE (Front)</div>
+            <textarea style={{ ...S.textarea, marginBottom: 8 }} value={editFront} onChange={e => setEditFront(e.target.value)} rows={3} />
+            <div style={S.formLabel}>ANSWER (Back)</div>
+            <textarea style={{ ...S.textarea, marginBottom: 8 }} value={editBack} onChange={e => setEditBack(e.target.value)} rows={2} />
+            <div style={S.formLabel}>CATEGORY</div>
+            <input style={{ ...S.input, marginBottom: 16 }} value={editCat} onChange={e => setEditCat(e.target.value)} placeholder="e.g. American History" />
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button style={{ ...S.markBtn, background: '#1e2456', color: '#8890d0', border: '1px solid #2e3476', flex: 1 }} onClick={() => setEditCard(null)}>Cancel</button>
+              <button style={{ ...S.revealBtn, flex: 2 }} onClick={saveEdit} disabled={!editFront.trim() || !editBack.trim()}>Save Changes</button>
             </div>
           </div>
         </div>
@@ -1485,8 +2002,8 @@ function SummaryView({ coryatScore, singleBoard, doubleBoard, singleClueStates, 
     <div style={S.summaryWrap}>
       {/* Stats tab bar */}
       <div style={{ display: 'flex', gap: 4, overflowX: 'auto' }}>
-        {[['current','📋 CURRENT'],['weakness','⚠️ WEAK SPOTS'],['speed','⚡ SPEED'],['history','📜 HISTORY']].map(([id, label]) => (
-          <button key={id} style={{ ...S.navBtn, flex: 1, fontSize: 10, letterSpacing: 1, padding: '9px 6px', ...(statsTab === id ? S.navActive : {}) }} onClick={() => setStatsTab(id)}>
+        {[['current','📋 NOW'],['weakness','⚠️ WEAK'],['heatmap','🗺 MAP'],['speed','⚡ SPEED'],['history','📜 LOG']].map(([id, label]) => (
+          <button key={id} style={{ ...S.navBtn, flex: 1, fontSize: 10, letterSpacing: 1, padding: '9px 4px', ...(statsTab === id ? S.navActive : {}) }} onClick={() => setStatsTab(id)}>
             {label}
           </button>
         ))}
@@ -1514,6 +2031,9 @@ function SummaryView({ coryatScore, singleBoard, doubleBoard, singleClueStates, 
 
       {/* Speed tab */}
       {statsTab === 'speed' && <SpeedTracker gameHistory={gameHistory} />}
+
+      {/* Heat map tab */}
+      {statsTab === 'heatmap' && <CategoryHeatMapView gameHistory={gameHistory} />}
 
       {/* History tab */}
       {statsTab === 'history' && gameHistory.length > 0 && (
@@ -1612,11 +2132,13 @@ function SummaryView({ coryatScore, singleBoard, doubleBoard, singleClueStates, 
         <p style={{ fontSize: 13, color: '#6878a8', lineHeight: 1.6 }}>Correct answers add face value, incorrect subtract face value, Daily Doubles and Final Jeopardy are excluded. A score above $15,000 is competitive. Regular contestants average $20,000–$30,000.</p>
       </div>
 
-      {/* Tournament result */}
-      {tournamentState && (
+      {/* Tournament / contestant result */}
+      {(tournamentState || episodeMeta?.contestants?.length > 0) && (
         <OpponentCoryatResult
           coryatScore={coryatScore}
-          actualContestants={null}
+          actualContestants={episodeMeta?.contestants?.length > 0
+            ? episodeMeta.contestants.filter(c => c.name)
+            : null}
           tournamentState={tournamentState}
         />
       )}
@@ -1630,6 +2152,83 @@ function SummaryView({ coryatScore, singleBoard, doubleBoard, singleClueStates, 
         />
       )}
       </div>)} {/* end current tab */}
+    </div>
+  )
+}
+
+// ─── Category Heat Map View ───────────────────────────────────────────────────
+function CategoryHeatMapView({ gameHistory }) {
+  const heatmap = buildCategoryHeatMap(gameHistory)
+  const valueBreakdown = buildValueBreakdown(gameHistory)
+
+  if (heatmap.length === 0) {
+    return (
+      <div style={{ textAlign: 'center', padding: '40px 16px' }}>
+        <div style={{ fontSize: 28, marginBottom: 8 }}>🗺</div>
+        <div style={{ color: '#6070a0', fontSize: 13 }}>Play more games to build your category heat map.</div>
+      </div>
+    )
+  }
+
+  const maxAbs = Math.max(...heatmap.map(c => Math.abs(c.avg)), 1)
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {/* Meta-category heat map */}
+      <div style={{ background: '#0a0f2e', borderRadius: 12, padding: '14px 16px', border: '1px solid #1a2460' }}>
+        <div style={{ fontSize: 10, letterSpacing: 3, color: '#6070a0', marginBottom: 12 }}>META-CATEGORY PERFORMANCE</div>
+        {heatmap.map(cat => {
+          const pct = Math.abs(cat.avg) / maxAbs * 100
+          const isNeg = cat.avg < 0
+          const intensity = pct / 100
+          const bg = isNeg
+            ? `rgba(229,115,115,${0.1 + intensity * 0.3})`
+            : `rgba(76,175,77,${0.1 + intensity * 0.3})`
+          return (
+            <div key={cat.meta} style={{ marginBottom: 8, background: bg, borderRadius: 8, padding: '8px 10px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+                <span style={{ fontSize: 12, color: '#c0c8e8', fontWeight: 700 }}>{cat.meta}</span>
+                <span style={{ fontSize: 12, fontFamily: "'Bebas Neue', sans-serif", color: isNeg ? '#e57373' : '#4caf7d' }}>
+                  {cat.avg >= 0 ? '+' : ''}{cat.avg.toLocaleString()} avg · {cat.games}g
+                </span>
+              </div>
+              <div style={{ height: 3, background: 'rgba(255,255,255,0.1)', borderRadius: 99, overflow: 'hidden' }}>
+                <div style={{ height: '100%', width: `${pct}%`, background: isNeg ? '#e57373' : '#4caf7d', borderRadius: 99 }} />
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Performance by value */}
+      {valueBreakdown.some(v => v.total > 0) && (
+        <div style={{ background: '#0a0f2e', borderRadius: 12, padding: '14px 16px', border: '1px solid #1a2460' }}>
+          <div style={{ fontSize: 10, letterSpacing: 3, color: '#6070a0', marginBottom: 12 }}>PERFORMANCE BY DOLLAR VALUE</div>
+          <div style={{ display: 'flex', gap: 2, alignItems: 'flex-end', height: 80, marginBottom: 8 }}>
+            {valueBreakdown.filter(v => v.total > 0).map(v => {
+              const acc = v.accuracy || 0
+              return (
+                <div key={v.value} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+                  <div style={{ fontSize: 10, color: acc >= 60 ? '#4caf7d' : acc >= 40 ? '#ffb74d' : '#e57373' }}>
+                    {acc}%
+                  </div>
+                  <div style={{ width: '100%', background: acc >= 60 ? '#4caf7d' : acc >= 40 ? '#ffb74d' : '#e57373', borderRadius: '3px 3px 0 0', height: `${acc}%`, minHeight: 4 }} />
+                </div>
+              )
+            })}
+          </div>
+          <div style={{ display: 'flex', gap: 2 }}>
+            {valueBreakdown.filter(v => v.total > 0).map(v => (
+              <div key={v.value} style={{ flex: 1, textAlign: 'center', fontSize: 9, color: '#6070a0' }}>
+                ${v.value}
+              </div>
+            ))}
+          </div>
+          <div style={{ fontSize: 11, color: '#6070a0', marginTop: 10, lineHeight: 1.6 }}>
+            Accuracy by clue value (normalized — DJ $800 = SJ $400 equivalent).
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -1850,6 +2449,12 @@ const S = {
 
 const globalCSS = `
   @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;600;700&family=Barlow:wght@400;500&display=swap');
+  /* Anki card content styles */
+  .card-content img { max-width: 100%; height: auto; border-radius: 6px; margin: 4px 0; display: block; }
+  .card-content audio { width: 100%; margin-top: 8px; }
+  .card-content b, .card-content strong { color: #f5c518; }
+  .card-content em { color: #c0c8e8; font-style: italic; }
+  .card-content br { display: block; margin: 2px 0; content: ''; }
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { background: #060b1a; overscroll-behavior: none; }
   button { cursor: pointer; border: none; background: none; font-family: inherit; }

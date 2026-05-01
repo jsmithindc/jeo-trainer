@@ -137,21 +137,18 @@ export const handler = async (event) => {
           }
 
           // Daily double detection
-          // J-archive marks DDs with class "clue_value_daily_double" on the value td
-          // inside the nested clue_header table
+          // Structure: clue_text td → tr → inner table → td (outer) → tr → outer table
+          // The DD class "clue_value_daily_double" is in the clue_header table
+          // which is a sibling row in the same inner table as the clue text
           let isDailyDouble = false
-          // Walk up from clue text to find the outer clue td
-          let outerTd = clueTextEl?.parentNode
-          while (outerTd && outerTd.tagName !== 'TD') outerTd = outerTd?.parentNode
-          // Then look inside its sibling table for the DD class
-          if (outerTd) {
-            const outerHtml = outerTd?.toString() || ''
-            if (
-              outerHtml.includes('clue_value_daily_double') ||
-              outerHtml.includes('daily_double') ||
-              outerHtml.toLowerCase().includes('daily double')
-            ) {
-              isDailyDouble = true
+          if (clueTextEl) {
+            // Walk up to the inner <table> that wraps both the header and clue text rows
+            let node = clueTextEl.parentNode // <td>
+            if (node) node = node.parentNode  // <tr>
+            if (node) node = node.parentNode  // <table> (inner)
+            if (node) {
+              const tableHtml = node.toString() || ''
+              isDailyDouble = tableHtml.includes('clue_value_daily_double')
             }
           }
 
@@ -177,6 +174,49 @@ export const handler = async (event) => {
       }
     }
 
+    // ── Contestant scores ─────────────────────────────────────────────────────
+    let contestants = []
+    try {
+      const playerDivs = doc.querySelectorAll('.contestants .contestant')
+      if (playerDivs.length === 0) {
+        // Try alternate selector
+        const scoreRows = doc.querySelectorAll('#final_jeopardy_round .score_td, .final_scores td')
+        // Parse scores from the scores table
+        const scoreTable = doc.querySelector('#score_table, .final_round')
+        if (scoreTable) {
+          const cells = scoreTable.querySelectorAll('td')
+          let i = 0
+          while (i < cells.length - 1) {
+            const name = cells[i]?.text?.trim()
+            const score = cells[i+1]?.text?.trim()?.replace(/[$,]/g, '')
+            if (name && score && !isNaN(parseInt(score))) {
+              contestants.push({ name, score: parseInt(score) })
+            }
+            i += 2
+          }
+        }
+      } else {
+        playerDivs.forEach(div => {
+          const name = div.querySelector('.contestant_name')?.text?.trim() ||
+                       div.querySelector('a')?.text?.trim() || ''
+          const scoreEl = div.querySelector('.score')
+          const score = parseInt((scoreEl?.text?.trim() || '0').replace(/[$,]/g, '')) || 0
+          if (name) contestants.push({ name, score })
+        })
+      }
+      // Also try parsing from the final scores section
+      if (contestants.length === 0) {
+        const finalScoresHtml = html.match(/final scores[^<]*<[^>]+>([\s\S]{0,500})/i)?.[1] || ''
+        const scoreMatches = [...finalScoresHtml.matchAll(/\$([\d,]+)/g)]
+        const nameMatches = [...finalScoresHtml.matchAll(/([A-Z][a-z]+ [A-Z][a-z]+)/g)]
+        nameMatches.forEach((m, i) => {
+          if (scoreMatches[i]) {
+            contestants.push({ name: m[1], score: parseInt(scoreMatches[i][1].replace(/,/g, '')) })
+          }
+        })
+      }
+    } catch {}
+
     if (!singleJeopardy || singleJeopardy.categories.length === 0) {
       return {
         statusCode: 422,
@@ -188,7 +228,7 @@ export const handler = async (event) => {
     return {
       statusCode: 200,
       headers,
-      body: JSON.stringify({ episodeId, episodeNumber, airDate, url, singleJeopardy, doubleJeopardy, finalJeopardy })
+      body: JSON.stringify({ episodeId, episodeNumber, airDate, url, singleJeopardy, doubleJeopardy, finalJeopardy, contestants })
     }
 
   } catch (err) {

@@ -6,6 +6,33 @@ export const handler = async (event) => {
   try {
     const search = event.queryStringParameters?.search || ''
     const season = event.queryStringParameters?.season || ''
+    const categorySearch = event.queryStringParameters?.category || ''
+
+    // Category search — j-archive has a search page
+    if (categorySearch) {
+      const searchRes = await fetch(
+        `https://j-archive.com/search.php?search=${encodeURIComponent(categorySearch)}&submit=Search`,
+        { headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' } }
+      )
+      const searchHtml = await searchRes.text()
+      const gameMatches = [...searchHtml.matchAll(/game_id=(\d+)[^>]*>[^<]*#(\d+)[^,]*,\s*([^<"]+)/g)]
+      const episodes = gameMatches.map(m => ({
+        gameId: m[1],
+        showNumber: m[2],
+        airDate: m[3].trim(),
+        season: '',
+      })).filter(e => e.showNumber)
+      // Also try alternate pattern
+      const altMatches = [...searchHtml.matchAll(/showgame\.php\?game_id=(\d+)"[^>]*>([^<]+)<\/a>/g)]
+      const altEps = altMatches.map(m => {
+        const text = m[2].trim()
+        const showMatch = text.match(/#(\d+)/)
+        const dateMatch = text.match(/,\s*(.+)$/)
+        return { gameId: m[1], showNumber: showMatch?.[1] || '', airDate: dateMatch?.[1]?.trim() || text, season: '' }
+      }).filter(e => e.showNumber)
+      const combined = episodes.length > 0 ? episodes : altEps
+      return { statusCode: 200, headers, body: JSON.stringify({ episodes: combined.slice(0, 50), seasons: [] }) }
+    }
 
     const fetchOpts = {
       headers: {

@@ -53,6 +53,7 @@ export default function App() {
   const [fjAnswered, setFjAnswered] = useState(null)
   const [timedMode, setTimedMode] = useState(false)
   const [tournamentMode, setTournamentMode] = useState(false)
+  const tournamentModeRef = useRef(false)
   const [tournamentState, setTournamentState] = useState(null) // { position, opponents }
   const [showTournamentSetup, setShowTournamentSetup] = useState(false)
   const [showConfidence, setShowConfidence] = useState(false)
@@ -191,12 +192,15 @@ export default function App() {
     setActiveClue(null)
   }
 
+  // Keep ref in sync so callbacks always see current tournamentMode
+  useEffect(() => { tournamentModeRef.current = tournamentMode }, [tournamentMode])
+
   function openClue(ci, ri) {
     if (clueStates[`${ci}-${ri}`] !== CLUE_STATES.UNANSWERED) return
     const clue = board.categories[ci].clues[ri]
     const category = board.categories[ci].name
     // In tournament mode, intercept Daily Doubles for wagering
-    if (clue.isDailyDouble && tournamentMode) {
+    if (clue.isDailyDouble && tournamentModeRef.current) {
       setWagerState({ type: 'daily_double', ci, ri, clue, category })
       return
     }
@@ -335,7 +339,7 @@ export default function App() {
             doubleCoryat={doubleCoryat}
             fjAnswered={fjAnswered}
             onShowFJ={() => {
-              if (tournamentMode) {
+              if (tournamentModeRef.current) {
                 setWagerState({ type: 'final_jeopardy', ci: null, ri: null, clue: null, category: null })
               } else {
                 setShowFJ(true)
@@ -354,8 +358,13 @@ export default function App() {
             tournamentState={tournamentState}
             coryatScore={coryatScore}
             onToggleTournament={() => {
-              if (tournamentMode) { setTournamentMode(false); setTournamentState(null) }
-              else setShowTournamentSetup(true)
+              if (tournamentModeRef.current) {
+                setTournamentMode(false)
+                tournamentModeRef.current = false
+                setTournamentState(null)
+              } else {
+                setShowTournamentSetup(true)
+              }
             }}
           />
         )}
@@ -428,6 +437,7 @@ export default function App() {
           onStart={({ position, opponents }) => {
             setTournamentState({ position, opponents })
             setTournamentMode(true)
+            tournamentModeRef.current = true
             setShowTournamentSetup(false)
           }}
           onClose={() => setShowTournamentSetup(false)}

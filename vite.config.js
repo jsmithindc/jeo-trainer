@@ -7,7 +7,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.ico', 'apple-touch-icon.png'],
+      includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'sql-wasm.wasm'],
       manifest: {
         name: 'Jeo Trainer',
         short_name: 'Jeo Trainer',
@@ -30,6 +30,7 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ['sql.js']
   },
+  // Dev server headers (not needed for prod — netlify.toml handles that)
   server: {
     headers: {
       'Cross-Origin-Opener-Policy': 'same-origin',

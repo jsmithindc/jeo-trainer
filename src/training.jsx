@@ -287,13 +287,20 @@ export function CategoryConfidenceModal({ board, onConfirm, onSkip }) {
 }
 
 // ─── Wager Trainer ────────────────────────────────────────────────────────────
-export function WagerTrainer({ type, coryatScore, boardValue, opponentScores, onWager, onSkip }) {
+export function WagerTrainer({ type, coryatScore, boardValue, opponentScores, onWager, onSkip, lastClueResult, answeredCount }) {
   // type: 'daily_double' | 'final_jeopardy'
   const S = styles
   const [wager, setWager] = useState('')
   const [showStrategy, setShowStrategy] = useState(false)
+  const [boardControlOverride, setBoardControlOverride] = useState(false)
 
   const isDD = type === 'daily_double'
+
+  // Board control rule: can only wager on DD if last clue was correct
+  // (or it's the very first clue of the game)
+  const isFirstClue = answeredCount === 0
+  const hasControl = isFirstClue || lastClueResult === 'correct'
+  const showBoardControlWarning = isDD && !hasControl && !boardControlOverride
 
   // Calculate optimal wager advice
   function getStrategy() {
@@ -379,7 +386,26 @@ export function WagerTrainer({ type, coryatScore, boardValue, opponentScores, on
           )}
         </div>
 
+        {/* Board control warning */}
+        {showBoardControlWarning && (
+          <div style={{ background: 'rgba(255,183,77,0.1)', border: '1px solid rgba(255,183,77,0.3)', borderRadius: 8, padding: '10px 12px', marginBottom: 12 }}>
+            <div style={{ fontSize: 12, color: '#ffb74d', fontWeight: 700, marginBottom: 4 }}>
+              ⚠️ You don&apos;t have board control
+            </div>
+            <div style={{ fontSize: 12, color: '#8890c0', lineHeight: 1.6, marginBottom: 8 }}>
+              In real Jeopardy, you can only select a Daily Double if you gave a correct response on the previous clue. Your last answer was {lastClueResult === 'pass' ? 'a pass' : 'incorrect'}.
+            </div>
+            <button
+              style={{ fontSize: 12, color: '#ffb74d', letterSpacing: 1, fontWeight: 700, background: 'rgba(255,183,77,0.1)', border: '1px solid rgba(255,183,77,0.3)', borderRadius: 6, padding: '6px 12px', cursor: 'pointer', fontFamily: "'Barlow Condensed', sans-serif" }}
+              onClick={() => setBoardControlOverride(true)}
+            >
+              Wager anyway (practice mode) →
+            </button>
+          </div>
+        )}
+
         {/* Wager input */}
+        {!showBoardControlWarning && (<>
         <div style={{ fontSize: 10, color: '#6070a0', letterSpacing: 3, marginBottom: 6 }}>
           YOUR WAGER (max ${maxWager.toLocaleString()})
         </div>
@@ -431,6 +457,14 @@ export function WagerTrainer({ type, coryatScore, boardValue, opponentScores, on
             Wager ${parsedWager.toLocaleString()} →
           </button>
         </div>
+        </>)} {/* end !showBoardControlWarning */}
+
+        {/* Always show skip when board control warning visible */}
+        {showBoardControlWarning && (
+          <button style={{ ...overStyles.btn, width: '100%', background: 'rgba(255,255,255,0.04)', color: '#6070a0', border: '1px solid #1a2460', marginTop: 4 }} onClick={onSkip}>
+            Skip (treat as regular clue)
+          </button>
+        )}
       </div>
     </div>
   )

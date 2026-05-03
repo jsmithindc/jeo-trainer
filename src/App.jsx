@@ -74,6 +74,7 @@ export default function App() {
   const [showStartScreen, setShowStartScreen] = useState(false)
   const [actualScore, setActualScore] = useState(0) // real show score including wagers
   const [wagerAmount, setWagerAmount] = useState(null) // pending wager
+  const [lastClueResult, setLastClueResult] = useState(null) // 'correct' | 'incorrect' | 'pass'
   const [resumePrompt, setResumePrompt] = useState(null) // saved game state to restore
   const [showCache, setShowCache] = useState(false)
   const [showCategorySearch, setShowCategorySearch] = useState(false)
@@ -237,8 +238,8 @@ export default function App() {
     if (clueStates[`${ci}-${ri}`] !== CLUE_STATES.UNANSWERED) return
     const clue = board.categories[ci].clues[ri]
     const category = board.categories[ci].name
-    // In tournament mode, intercept Daily Doubles for wagering
-    if (clue.isDailyDouble && tournamentModeRef.current) {
+    // Always intercept Daily Doubles for wagering
+    if (clue.isDailyDouble) {
       setWagerState({ type: 'daily_double', ci, ri, clue, category })
       return
     }
@@ -256,6 +257,7 @@ export default function App() {
     const effectiveValue = clue.wager || clue.value
     if (result === CLUE_STATES.CORRECT) setActualScore(s => s + effectiveValue)
     else if (result === CLUE_STATES.INCORRECT) setActualScore(s => s - effectiveValue)
+    setLastClueResult(result)
     setActiveClue(null)
   }
 
@@ -426,11 +428,8 @@ export default function App() {
             doubleCoryat={doubleCoryat}
             fjAnswered={fjAnswered}
             onShowFJ={() => {
-              if (tournamentModeRef.current) {
-                setWagerState({ type: 'final_jeopardy', ci: null, ri: null, clue: null, category: null })
-              } else {
-                setShowFJ(true)
-              }
+              // Always show wager trainer before FJ
+              setWagerState({ type: 'final_jeopardy', ci: null, ri: null, clue: null, category: null })
             }}
             boardLoading={boardLoading}
             boardError={boardError}
@@ -548,7 +547,9 @@ export default function App() {
           type={wagerState.type}
           coryatScore={coryatScore}
           boardValue={remainingBoardValue}
-          opponentScores={tournamentState?.opponents}
+          lastClueResult={lastClueResult}
+          answeredCount={answeredCount}
+          opponentScores={tournamentState?.opponents || (wagerState.type === 'final_jeopardy' ? [generateOpponent('second'), generateOpponent('third')] : undefined)}
           onWager={amount => {
             if (wagerState.type === 'final_jeopardy') {
               setWagerAmount(amount)
@@ -870,7 +871,7 @@ function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round,
           <div style={S.fjLabel}>FINAL JEOPARDY · <span style={{ color: '#f5c518' }}>{episodeData.finalJeopardy.category}</span></div>
           {fjAnswered
             ? <div style={{ fontSize: 12, color: fjAnswered === 'correct' ? '#7cd992' : '#e07070' }}>{fjAnswered === 'correct' ? '✓ Got it' : '✗ Missed'} <span style={{ color: '#4060a0' }}>(not in Coryat)</span></div>
-            : <button style={S.fjBtn} onClick={onShowFJ}>{tournamentMode ? '⭐ Wager + Play Final J!' : 'Play Final J!'} →</button>}
+            : <button style={S.fjBtn} onClick={onShowFJ}>⭐ Wager + Play Final J! →</button>}
         </div>
       )}
 
@@ -1261,11 +1262,31 @@ function TimedClueModal({ clue, category, onMark, onClose }) {
 
   function buzzIn() {
     if (phase !== 'buzzing') return
+    // Haptic feedback via Vibration API (works on iOS Safari PWA)
+    if (navigator.vibrate) navigator.vibrate(60)
     clearInterval(intervalRef.current)
     setPhase('answering')
   }
 
+  // Listen for keyboard / Bluetooth clicker events during buzz window
+  // Bluetooth selfie remotes typically send Space, Enter, or ArrowUp/VolumeUp
+  useEffect(() => {
+    function handleKey(e) {
+      const buzzKeys = [' ', 'Enter', 'ArrowUp', 'ArrowDown', 'MediaPlayPause']
+      if (buzzKeys.includes(e.key) && phase === 'buzzing') {
+        e.preventDefault()
+        buzzIn()
+      }
+    }
+    window.addEventListener('keydown', handleKey)
+    return () => window.removeEventListener('keydown', handleKey)
+  }, [phase])
+
   function submitResult(r) {
+    // Short buzz for correct, double buzz for wrong
+    if (navigator.vibrate) {
+      navigator.vibrate(r === 'correct' ? 40 : [40, 60, 40])
+    }
     setResult(r)
     setPhase('reveal')
     clearInterval(intervalRef.current)

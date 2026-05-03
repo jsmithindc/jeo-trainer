@@ -234,7 +234,7 @@ export async function migrateLocalMediaToSupabase(user, onProgress = null) {
     if (!record.key.startsWith('anki:')) continue
     const filename = record.key.replace('anki:', '')
     try {
-      await uploadMedia(filename, record.blob, record.mimeType)
+      await uploadMedia(filename, record.blob, record.mimeType) // uploadMedia handles Blob wrapping
       migrated++
       if (onProgress) onProgress({ migrated, total: records.length })
     } catch {}

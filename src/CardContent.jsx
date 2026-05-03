@@ -7,6 +7,8 @@ import { getMediaUrl } from './mediaStore.js'
  */
 export function CardContent({ content, style, isHtml = false }) {
   const [resolvedHtml, setResolvedHtml] = useState(null)
+  // Initialize to content so HTML renders immediately even before media resolves
+  const initialHtml = isHtml ? content : null
   const containerRef = useRef(null)
   const urlsRef = useRef([]) // track created object URLs for cleanup
 
@@ -73,7 +75,7 @@ export function CardContent({ content, style, isHtml = false }) {
     return <span style={style}>{content}</span>
   }
 
-  const htmlToRender = resolvedHtml || content
+  const htmlToRender = resolvedHtml || initialHtml || content
 
   return (
     <div
@@ -90,5 +92,8 @@ export function CardContent({ content, style, isHtml = false }) {
  * True if the content contains HTML tags.
  */
 export function cardIsHtml(content) {
-  return /<[a-z][\s\S]*>/i.test(content)
+  if (!content) return false
+  return /<[a-z][\s\S]*>/i.test(content) ||
+         content.includes('data-anki-src') ||
+         content.includes('audio-ref')
 }

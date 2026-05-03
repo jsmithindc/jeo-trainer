@@ -144,11 +144,14 @@ export async function uploadMedia(filename, arrayBuffer, mimeType) {
   // Store under user's folder: {userId}/{filename}
   const path = `${user.id}/${filename}`
 
+  // Supabase Storage requires a Blob or File, not a raw ArrayBuffer
+  const blob = new Blob([arrayBuffer], { type: mimeType })
+
   const { data, error } = await supabase.storage
     .from('media')
-    .upload(path, arrayBuffer, {
+    .upload(path, blob, {
       contentType: mimeType,
-      upsert: true, // overwrite if exists
+      upsert: true,
     })
 
   if (error) throw error

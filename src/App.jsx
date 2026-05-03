@@ -103,6 +103,15 @@ export default function App() {
     setStorageReady(true)
   }, [])
 
+  // ── Check for saved game state to resume ────────────────────────────────
+  useEffect(() => {
+    if (!authChecked) return
+    const saved = loadGameState()
+    if (saved && saved.episodeMeta) {
+      setResumePrompt(saved)
+    }
+  }, [authChecked])
+
   // ── Auto-load latest episode + episode list on mount ────────────────────
   useEffect(() => {
     if (!authChecked) return
@@ -128,7 +137,7 @@ export default function App() {
     loadRemoteData()
       .then(remote => {
         const local = { cards, gameHistory }
-        const merged = mergeData(local, remote)
+        const merged = mergeData(local, remote, remote.updatedAt)
         setCards(merged.cards)
         setGameHistory(merged.gameHistory)
         saveCards(merged.cards)
@@ -445,6 +454,8 @@ export default function App() {
             coryatScore={coryatScore}
             onShowCache={() => setShowCache(true)}
             onShowCategorySearch={() => setShowCategorySearch(true)}
+            gameStarted={gameStarted}
+            onShowStartScreen={() => setShowStartScreen(true)}
             onToggleTournament={() => {
               if (tournamentModeRef.current) {
                 setTournamentMode(false)
@@ -457,7 +468,7 @@ export default function App() {
           />
         )}
         {view === 'study'   && <StudyView cards={cards} setCards={setCards} />}
-        {view === 'deck'    && <DeckView cards={cards} setCards={setCards} />}
+        {view === 'deck'    && <DeckView cards={cards} setCards={setCards} user={user} />}
         {view === 'summary' && (
           <SummaryView
             coryatScore={coryatScore}
@@ -526,6 +537,29 @@ export default function App() {
             setConfidenceRatings(null)
             setShowStartScreen(false)
             setGameStarted(true)
+          }}
+        />
+      )}
+      {resumePrompt && (
+        <ResumePrompt
+          resumeData={resumePrompt}
+          onResume={() => {
+            const r = resumePrompt
+            setEpisodeData(r.episodeData)
+            setEpisodeMeta(r.episodeMeta)
+            setBoard(r.board)
+            setRound(r.round)
+            setSingleClueStates(r.singleClueStates)
+            setDoubleClueStates(r.doubleClueStates)
+            setFjAnswered(r.fjAnswered)
+            setActualScore(r.actualScore || 0)
+            setGameStarted(true)
+            setResumePrompt(null)
+            clearGameState()
+          }}
+          onDiscard={() => {
+            clearGameState()
+            setResumePrompt(null)
           }}
         />
       )}
@@ -790,7 +824,7 @@ function AuthModal({ user, syncError, onClose, onSignOut }) {
 }
 
 // ─── Board View ───────────────────────────────────────────────────────────────
-function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round, hasDouble, onSwitchRound, onBrowse, singleCoryat, doubleCoryat, fjAnswered, onShowFJ, boardLoading, boardError, onLoadEpisode, canGoPrev, canGoNext, onPrev, onNext, timedMode, onToggleTimedMode, tournamentMode, tournamentState, coryatScore, onToggleTournament, onShowCache, onShowCategorySearch }) {
+function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round, hasDouble, onSwitchRound, onBrowse, singleCoryat, doubleCoryat, fjAnswered, onShowFJ, boardLoading, boardError, onLoadEpisode, canGoPrev, canGoNext, onPrev, onNext, timedMode, onToggleTimedMode, tournamentMode, tournamentState, coryatScore, onToggleTournament, onShowCache, onShowCategorySearch, gameStarted, onShowStartScreen }) {
   const tileBg = { unanswered: '#0f1e6e', correct: '#1a5c2e', incorrect: '#5c1a1a', pass: '#2a2a4a' }
 
   return (
@@ -823,6 +857,41 @@ function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round,
       {/* Tournament opponent bar */}
       {tournamentMode && tournamentState && (
         <OpponentScoreBar tournamentState={tournamentState} coryatScore={coryatScore} />
+      )}
+
+      {/* Start game bar — always visible when episode loaded but not started */}
+      {episodeMeta && !gameStarted && (
+        <div style={{
+          background: 'linear-gradient(135deg, #0f1e6e, #060b1a)',
+          border: '1px solid #f5c518',
+          borderRadius: 10,
+          padding: '10px 14px',
+          marginBottom: 8,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: 10,
+        }}>
+          <div>
+            <div style={{ fontSize: 11, color: '#f5c518', letterSpacing: 2, fontFamily: "'Bebas Neue', sans-serif" }}>
+              READY TO PLAY?
+            </div>
+            <div style={{ fontSize: 10, color: '#6070a0', letterSpacing: 1 }}>
+              #{episodeMeta.episodeNumber} · {episodeMeta.airDate}
+            </div>
+          </div>
+          <button
+            style={{
+              background: '#f5c518', color: '#060b1a', borderRadius: 8,
+              padding: '10px 20px', fontSize: 14, fontWeight: 700,
+              letterSpacing: 2, fontFamily: "'Barlow Condensed', sans-serif",
+              border: 'none', cursor: 'pointer',
+            }}
+            onClick={onShowStartScreen}
+          >
+            START →
+          </button>
+        </div>
       )}
 
       {boardError && <div style={S.loadError}>⚠️ {boardError}</div>}
@@ -904,6 +973,51 @@ function FinalJeopardyModal({ fj, onAnswer, onClose }) {
                 <button style={{ ...S.markBtn, background: '#5c1a1a', color: '#e07070', border: '1px solid #8c2e2e' }} onClick={() => onAnswer('incorrect')}>✗ Wrong</button>
               </div>
             </>}
+      </div>
+    </div>
+  )
+}
+
+// ─── Resume Prompt ───────────────────────────────────────────────────────────
+function ResumePrompt({ resumeData, onResume, onDiscard }) {
+  const meta = resumeData?.episodeMeta
+  const savedAt = resumeData?.savedAt
+    ? new Date(resumeData.savedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+    : ''
+
+  return (
+    <div style={S.overlay}>
+      <div style={{ ...S.modal, maxWidth: 360 }}>
+        <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 24, color: '#f5c518', letterSpacing: 3, marginBottom: 4 }}>
+          RESUME GAME?
+        </div>
+        <div style={{ fontSize: 13, color: '#8890c0', lineHeight: 1.6, marginBottom: 16 }}>
+          You have an unfinished game:
+        </div>
+        <div style={{ background: '#060b1a', borderRadius: 10, padding: '12px 14px', marginBottom: 20, border: '1px solid #1a2460' }}>
+          <div style={{ fontSize: 14, color: '#c0c8e8', marginBottom: 4 }}>
+            #{meta?.episodeNumber} · {meta?.airDate}
+          </div>
+          {savedAt && (
+            <div style={{ fontSize: 11, color: '#4060a0', letterSpacing: 1 }}>
+              Saved {savedAt}
+            </div>
+          )}
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            style={{ ...S.markBtn, background: '#1e2456', color: '#8890d0', border: '1px solid #2e3476', flex: 1 }}
+            onClick={onDiscard}
+          >
+            Discard
+          </button>
+          <button
+            style={{ ...S.revealBtn, flex: 2 }}
+            onClick={onResume}
+          >
+            Resume →
+          </button>
+        </div>
       </div>
     </div>
   )
@@ -1658,7 +1772,7 @@ function MediaStorageInfo() {
 }
 
 // ─── Deck View ────────────────────────────────────────────────────────────────
-function DeckView({ cards, setCards }) {
+function DeckView({ cards, setCards, user }) {
   const [subview, setSubview] = useState('list')
   const [editCard, setEditCard] = useState(null) // card being edited
   const [editFront, setEditFront] = useState('')

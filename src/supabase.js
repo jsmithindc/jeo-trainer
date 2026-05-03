@@ -36,17 +36,18 @@ export async function signOut() {
 export async function loadRemoteData() {
   const { data, error } = await supabase
     .from('user_data')
-    .select('cards, game_history')
+    .select('cards, game_history, updated_at')
     .single()
 
   if (error) {
-    if (error.code === 'PGRST116') return { cards: [], gameHistory: [] }
+    if (error.code === 'PGRST116') return { cards: [], gameHistory: [], updatedAt: null }
     throw error
   }
 
   return {
     cards: data.cards || [],
     gameHistory: data.game_history || [],
+    updatedAt: data.updated_at || null,
   }
 }
 
@@ -74,13 +75,28 @@ export async function saveRemoteData(cards, gameHistory) {
   }
 }
 
-export function mergeData(local, remote) {
+export function mergeData(local, remote, remoteUpdatedAt = null) {
+  // Strategy: remote is authoritative for deletions.
+  // We only add local cards that were created AFTER the last remote sync,
+  // meaning they haven't been pushed yet. Cards deleted remotely stay deleted.
+
   const remoteCardIds = new Set(remote.cards.map(c => c.id))
-  const localOnlyCards = local.cards.filter(c => !remoteCardIds.has(c.id))
+
+  // Only add local cards that don't exist remotely AND were created after
+  // the last remote sync (so they're genuinely new, not just deleted remotely)
+  const syncCutoff = remoteUpdatedAt ? new Date(remoteUpdatedAt).getTime() : 0
+  const localOnlyCards = local.cards.filter(c =>
+    !remoteCardIds.has(c.id) &&
+    (c.createdAt || 0) > syncCutoff
+  )
   const cards = [...remote.cards, ...localOnlyCards]
 
-  const remoteGameKeys = new Set(remote.gameHistory.map(g => `${g.episodeId}-${g.airDate}`))
-  const localOnlyGames = local.gameHistory.filter(g => !remoteGameKeys.has(`${g.episodeId}-${g.airDate}`))
+  // For game history, merge by unique game ID — remote wins on conflict
+  const remoteGameIds = new Set(remote.gameHistory.map(g => g.id))
+  const localOnlyGames = local.gameHistory.filter(g =>
+    !remoteGameIds.has(g.id) &&
+    (new Date(g.playedAt).getTime() || 0) > syncCutoff
+  )
   const gameHistory = [...remote.gameHistory, ...localOnlyGames]
     .sort((a, b) => new Date(b.playedAt) - new Date(a.playedAt))
 

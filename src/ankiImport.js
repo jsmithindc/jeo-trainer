@@ -42,6 +42,7 @@ export async function parseApkg(file, onProgress = null, user = null) {
 
       // Always store locally in IndexedDB
       await storeMedia(`anki:${filename}`, arrayBuffer, mimeType)
+      console.log(`[Anki] Stored locally: ${filename} (${mimeType}, ${arrayBuffer.byteLength} bytes)`)
 
       let publicUrl = null
 
@@ -49,26 +50,47 @@ export async function parseApkg(file, onProgress = null, user = null) {
       if (user) {
         try {
           publicUrl = await uploadMedia(filename, arrayBuffer, mimeType)
+          console.log(`[Anki] Uploaded to Supabase: ${filename} → ${publicUrl}`)
           if (onProgress) onProgress({ phase: 'upload', file: filename, stored: ++storedCount, total: mediaKeys.length })
         } catch (uploadErr) {
-          console.warn('Media upload failed for', filename, uploadErr.message)
+          console.error('[Anki] Upload failed for', filename, ':', uploadErr.message, uploadErr)
         }
       } else {
+        console.log('[Anki] Not logged in, skipping Supabase upload for', filename)
         storedCount++
         if (onProgress) onProgress({ phase: 'media', stored: storedCount, total: mediaKeys.length })
       }
 
       mediaIndex[filename] = { arrayBuffer, mimeType, publicUrl }
-    } catch {}
+      console.log(`[Anki] mediaIndex[${filename}] = { publicUrl: ${publicUrl ? 'YES' : 'NO'} }`)
+    } catch (e) {
+      console.error('[Anki] Failed to process media file', filename, e)
+    }
   }
 
   // 4. Load sql.js
   const initSqlJs = (await import('sql.js')).default
   const SQL = await initSqlJs({ locateFile: () => '/sql-wasm.wasm' })
 
-  // 5. Find database
-  const dbFile = zip.file('collection.anki21') || zip.file('collection.anki2')
-  if (!dbFile) throw new Error('No Anki database found in this file.')
+  // 5. Find database — check all possible format names
+  const dbFile = zip.file('collection.anki21') ||
+                 zip.file('collection.anki2') ||
+                 zip.file('collection.anki21b') // newer compressed format
+
+  if (!dbFile) {
+    const files = Object.keys(zip.files).join(', ')
+    throw new Error(`No Anki database found. Files in archive: ${files}`)
+  }
+
+  // Detect the newer .anki21b format (zstd-compressed SQLite)
+  // We can't decompress zstd in the browser without a library, so give a clear message
+  if (dbFile.name === 'collection.anki21b') {
+    throw new Error(
+      'This deck uses the newer Anki 2.1.50+ format (.anki21b) which requires zstd decompression. ' +
+      'To import it: open Anki → File → Export → select the deck → ' +
+      'check "Legacy format" or change format to "Anki Deck Package (.apkg, older format)" → Export.'
+    )
+  }
 
   const dbBuffer = await dbFile.async('arraybuffer')
   const db = new SQL.Database(new Uint8Array(dbBuffer))
@@ -165,6 +187,10 @@ export async function parseApkg(file, onProgress = null, user = null) {
  */
 function processAnkiHtml(html, mediaIndex, user) {
   if (!html) return ''
+  // Log if there are img tags to process
+  if (html.includes('<img')) {
+    console.log('[Anki] Processing HTML with img tags:', html.substring(0, 200))
+  }
 
   // Convert sound tags
   html = html.replace(/\[sound:([^\]]+)\]/g, (_, filename) => {

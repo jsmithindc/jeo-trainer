@@ -20,7 +20,7 @@ export function CardContent({ content, style, isHtml = false }) {
     async function resolve() {
       let html = content
 
-      // Find all data-anki-src references
+      // Find all data-anki-src references (local IndexedDB fallback)
       const srcMatches = [...html.matchAll(/data-anki-src="([^"]+)"/g)]
 
       for (const match of srcMatches) {
@@ -30,12 +30,15 @@ export function CardContent({ content, style, isHtml = false }) {
           const url = await getMediaUrl(key)
           if (url && !cancelled) {
             urlsRef.current.push(url)
+            // Replace the data-anki-src placeholder with the real object URL
             html = html.replace(
-              `data-anki-src="${key}" src=""`,
+              new RegExp(`data-anki-src="${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}" src=""`,'g'),
               `src="${url}"`
             )
           }
-        } catch {}
+        } catch (e) {
+          console.warn('[CardContent] Failed to resolve media key:', key, e)
+        }
       }
 
       // Find audio-ref tags

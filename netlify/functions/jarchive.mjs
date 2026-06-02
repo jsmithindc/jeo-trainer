@@ -79,6 +79,19 @@ export const handler = async (event) => {
           rawAroundClue: html.includes('clue_J_1_1')
             ? html.slice(html.indexOf('clue_J_1_1') - 100, html.indexOf('clue_J_1_1') + 800)
             : 'NOT FOUND',
+          contestantHtml: (() => {
+            // Find score-related HTML
+            const scoreIdx = html.toLowerCase().indexOf('score')
+            const contestantIdx = html.toLowerCase().indexOf('contestant')
+            return {
+              scoreContext: scoreIdx >= 0 ? html.slice(Math.max(0, scoreIdx - 50), scoreIdx + 300) : 'not found',
+              contestantContext: contestantIdx >= 0 ? html.slice(Math.max(0, contestantIdx - 50), contestantIdx + 300) : 'not found',
+              finalScoresSection: (() => {
+                const idx = html.indexOf('final_scores')
+                return idx >= 0 ? html.slice(idx - 100, idx + 500) : 'final_scores not found'
+              })(),
+            }
+          })(),
           ddClassSearch: (() => {
             const idx = html.indexOf('clue_value_daily_double')
             const idx2 = html.indexOf('daily_double')
@@ -175,46 +188,64 @@ export const handler = async (event) => {
     }
 
     // ── Contestant scores ─────────────────────────────────────────────────────
+    // J-archive stores final scores in a table with class "score_td"
+    // Format: <td class="score_td">$12,345</td> adjacent to contestant name
     let contestants = []
     try {
-      const playerDivs = doc.querySelectorAll('.contestants .contestant')
-      if (playerDivs.length === 0) {
-        // Try alternate selector
-        const scoreRows = doc.querySelectorAll('#final_jeopardy_round .score_td, .final_scores td')
-        // Parse scores from the scores table
-        const scoreTable = doc.querySelector('#score_table, .final_round')
-        if (scoreTable) {
-          const cells = scoreTable.querySelectorAll('td')
-          let i = 0
-          while (i < cells.length - 1) {
-            const name = cells[i]?.text?.trim()
-            const score = cells[i+1]?.text?.trim()?.replace(/[$,]/g, '')
-            if (name && score && !isNaN(parseInt(score))) {
-              contestants.push({ name, score: parseInt(score) })
-            }
-            i += 2
+      // Try: final scores table at bottom of page
+      // j-archive uses a scores section with player names and final scores
+      const finalScoreSection = doc.querySelector('#final_jeopardy_round')
+      if (finalScoreSection) {
+        // Look for score rows: each contestant has a <td class="right"> with score
+        const rightTds = finalScoreSection.querySelectorAll('td.right')
+        const wrongTds = finalScoreSection.querySelectorAll('td.wrong')
+        const allScoreTds = [...rightTds, ...wrongTds]
+        allScoreTds.forEach(td => {
+          const scoreText = td.text?.trim()
+          const score = parseInt((scoreText || '0').replace(/[$,]/g, ''))
+          if (!isNaN(score) && score > 0) {
+            // Try to get contestant name from nearby context
+            contestants.push({ name: `Player`, score })
           }
-        }
-      } else {
-        playerDivs.forEach(div => {
-          const name = div.querySelector('.contestant_name')?.text?.trim() ||
-                       div.querySelector('a')?.text?.trim() || ''
-          const scoreEl = div.querySelector('.score')
-          const score = parseInt((scoreEl?.text?.trim() || '0').replace(/[$,]/g, '')) || 0
-          if (name) contestants.push({ name, score })
         })
       }
-      // Also try parsing from the final scores section
+
+      // Better approach: parse the scores from the HTML directly
+      // j-archive has a section like: <td class="score_td">$15,200</td>
       if (contestants.length === 0) {
-        const finalScoresHtml = html.match(/final scores[^<]*<[^>]+>([\s\S]{0,500})/i)?.[1] || ''
-        const scoreMatches = [...finalScoresHtml.matchAll(/\$([\d,]+)/g)]
-        const nameMatches = [...finalScoresHtml.matchAll(/([A-Z][a-z]+ [A-Z][a-z]+)/g)]
-        nameMatches.forEach((m, i) => {
-          if (scoreMatches[i]) {
-            contestants.push({ name: m[1], score: parseInt(scoreMatches[i][1].replace(/,/g, '')) })
-          }
+        const scoreTds = doc.querySelectorAll('.score_td')
+        scoreTds.forEach(td => {
+          const score = parseInt((td.text?.trim() || '').replace(/[$,]/g, ''))
+          if (!isNaN(score) && score >= 0) contestants.push({ score })
         })
       }
+
+      // Try regex on raw HTML as fallback
+      // j-archive final scores appear as: "Matt $15,200" in a score table
+      if (contestants.length === 0) {
+        // Find the scores table HTML
+        const scoresIdx = html.indexOf('class="score_td"')
+        if (scoresIdx >= 0) {
+          const scoresSection = html.slice(Math.max(0, scoresIdx - 2000), scoresIdx + 2000)
+          const scoreMatches = [...scoresSection.matchAll(/class="score_td"[^>]*>\$?([\d,]+)/g)]
+          scoreMatches.forEach((m, i) => {
+            const score = parseInt(m[1].replace(/,/g, ''))
+            if (!isNaN(score)) contestants.push({ name: `Contestant ${i + 1}`, score })
+          })
+        }
+      }
+
+      // Name extraction: look for contestant names near scores
+      // j-archive format: contestant names appear in .contestant_name or similar
+      const nameTds = doc.querySelectorAll('.contestant_name, .player_nick')
+      if (nameTds.length > 0 && contestants.length > 0) {
+        nameTds.forEach((td, i) => {
+          if (contestants[i]) contestants[i].name = td.text?.trim() || contestants[i].name
+        })
+      }
+
+      // Filter to valid scores only (remove 0s which are parsing artifacts)
+      contestants = contestants.filter(c => c.score > 0)
     } catch {}
 
     if (!singleJeopardy || singleJeopardy.categories.length === 0) {

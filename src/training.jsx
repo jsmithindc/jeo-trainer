@@ -304,44 +304,72 @@ export function WagerTrainer({ type, coryatScore, boardValue, opponentScores, on
 
   // Calculate optimal wager advice
   function getStrategy() {
-    if (isDD) {
-      const maxWager = Math.max(coryatScore, 1000) // can always wager at least $1000 on DD
-      const trueDDMin = 5 // minimum $5 wager
-      const remaining = boardValue
+    const fmt = n => Math.abs(n).toLocaleString()
 
+    if (isDD) {
+      const maxWager = Math.max(coryatScore > 0 ? coryatScore : 0, 1000)
+      const remaining = boardValue
       const advice = []
       if (coryatScore <= 0) {
-        advice.push(`With a score of ${coryatScore.toLocaleString()}, wager the minimum ($5) — you can't afford to go deeper in the hole.`)
+        advice.push(`Your score is ${coryatScore.toLocaleString()}. Wager the minimum ($5) — you can't afford to go deeper in the hole.`)
       } else if (coryatScore > remaining * 2) {
-        advice.push(`You have a commanding lead. A small wager (e.g. $1,000) protects your position. True Daily Double (${maxWager.toLocaleString()}) is only worth it if you're very confident.`)
+        advice.push(`You have a big lead over the remaining board value ($${fmt(remaining)}). A small wager protects your position. True Daily Double ($${fmt(maxWager)}) is only worth it if you're very confident.`)
       } else {
-        advice.push(`With $${remaining.toLocaleString()} left on the board, a True Daily Double ($${maxWager.toLocaleString()}) is high-risk but can dramatically change the game.`)
-        advice.push(`A conservative wager of $${Math.round(coryatScore * 0.3).toLocaleString()} keeps you competitive even if wrong.`)
-      }
-      return advice
-    } else {
-      // FJ wagering
-      const [opp1, opp2] = opponentScores || [0, 0]
-      const leader = Math.max(coryatScore, opp1, opp2)
-      const isLeader = coryatScore === leader
-      const secondPlace = [coryatScore, opp1, opp2].sort((a, b) => b - a)[1]
-
-      const advice = []
-      if (isLeader) {
-        const lockout = Math.floor(secondPlace / 2) // wager to lock out second place
-        const safeWager = coryatScore - secondPlace - 1
-        advice.push(`You're in the lead. Wager at most $${safeWager.toLocaleString()} to guarantee a win even if you're wrong and 2nd place bets everything correctly.`)
-        advice.push(`"Lock" strategy: wager exactly $${Math.max(0, coryatScore - lockout).toLocaleString()} — if correct, you'll have ${(coryatScore + Math.max(0, coryatScore - lockout)).toLocaleString()} which beats 2nd place doubling up.`)
-      } else {
-        const needed = leader - coryatScore + 1
-        const maxWager = coryatScore
-        advice.push(`You need to gain at least $${needed.toLocaleString()} on the leader. Wager everything ($${maxWager.toLocaleString()}) if you're confident — it's your only path to winning.`)
-        if (coryatScore > secondPlace) {
-          advice.push(`You're in 2nd — even a conservative bet could work if the leader bets big and gets it wrong.`)
-        }
+        advice.push(`$${fmt(remaining)} remains on the board. A True Daily Double ($${fmt(maxWager)}) can dramatically swing the game — high risk, high reward.`)
+        advice.push(`A conservative wager of $${fmt(Math.round(coryatScore * 0.3))} keeps you competitive even if you're wrong.`)
       }
       return advice
     }
+
+    // ── Final Jeopardy strategy ───────────────────────────────────────────
+    const [opp1, opp2] = opponentScores || [0, 0]
+    const scores = [coryatScore, opp1, opp2].sort((a, b) => b - a)
+    const [first, second, third] = scores
+    const isLeader = coryatScore === first
+    const isSecond = !isLeader && coryatScore === second
+
+    const advice = []
+
+    if (isLeader) {
+      // "Cover" wager: stay ahead if 2nd place bets everything and gets it right
+      // You need: your_score - wager > second * 2
+      // So: wager < your_score - second * 2
+      const maxSafeWager = coryatScore - second * 2 - 1
+
+      // "Lock" wager: wager enough that even if 2nd doubles up, you still beat them if correct
+      // You need: your_score + wager > second * 2
+      // So: wager > second * 2 - your_score
+      const lockWager = Math.max(0, second * 2 - coryatScore + 1)
+      const lockFinalScore = coryatScore + lockWager
+
+      if (maxSafeWager > 0) {
+        // You have enough cushion to guarantee a win even if wrong
+        advice.push(`✅ Safe wager: bet at most $${fmt(maxSafeWager)}. Even if you're wrong, your remaining $${fmt(coryatScore - maxSafeWager)} beats 2nd place ($${fmt(second)}) doubling up to $${fmt(second * 2)}.`)
+      } else {
+        // 2nd place has more than half your score — no safe wager exists
+        advice.push(`⚠️ No "safe" wager exists — 2nd place ($${fmt(second)}) has more than half your score ($${fmt(coryatScore)}). If they bet everything and get it right, they'll have $${fmt(second * 2)} and could beat you no matter what you wager.`)
+      }
+
+      advice.push(`🔒 Lock strategy: wager $${fmt(lockWager)}. If correct, you'll have $${fmt(lockFinalScore)} — that beats 2nd place doubling up ($${fmt(second * 2)}). If wrong, you'll have $${fmt(coryatScore - lockWager)}.`)
+
+      if (lockWager === 0) {
+        advice.push(`Since you already have more than double 2nd place, wagering $0 is valid — you win regardless of what opponents do.`)
+      }
+    } else {
+      // Not in the lead
+      const needed = first - coryatScore + 1
+      advice.push(`You're behind the leader ($${fmt(first)}). You need to gain at least $${fmt(needed)}, so wager $${fmt(needed)} or more — and hope the leader gets it wrong.`)
+
+      if (isSecond) {
+        // Best case: leader gets it wrong and bets big
+        const leaderWrong = first - first // leader bets everything and gets it wrong = $0 extreme
+        advice.push(`If the leader bets big and gets it wrong, you could win by betting $${fmt(needed)} and getting it right. This is your best realistic path.`)
+      }
+
+      advice.push(`Wager everything ($${fmt(coryatScore)}) if you're confident — you need to swing as much as possible.`)
+    }
+
+    return advice
   }
 
   const maxWager = isDD
@@ -563,43 +591,90 @@ export function OpponentScoreBar({ tournamentState, coryatScore }) {
 }
 
 // ─── Opponent Coryat (end of game) ───────────────────────────────────────────
-export function OpponentCoryatResult({ coryatScore, actualContestants, tournamentState }) {
+export function OpponentCoryatResult({ coryatScore, actualScore, fjAnswered, actualContestants, tournamentState }) {
   const S = styles
-  const contestants = actualContestants?.length
-    ? actualContestants
-    : tournamentState?.opponents?.map((s, i) => ({ name: `Simulated Opp ${i + 1}`, score: s, simulated: true })) || []
+
+  // Determine if we have real contestant data
+  const hasRealContestants = actualContestants?.length > 0
+
+  // Build contestant list
+  // Real contestants from j-archive already have post-FJ scores
+  // Simulated opponents are pre-FJ, so we need to apply simulated FJ wagering
+  let contestants = []
+
+  if (hasRealContestants) {
+    contestants = actualContestants
+  } else if (tournamentState?.opponents) {
+    // Simulated opponents: apply a typical FJ wager to their scores
+    // Assume the leader wagers to cover, others bet it all
+    const oppScores = tournamentState.opponents
+    const sorted = [...oppScores].sort((a, b) => b - a)
+    contestants = oppScores.map((score, i) => {
+      let finalScore = score
+      if (fjAnswered) {
+        // Simulate opponent FJ: leader bets conservatively, others bet big
+        const isLeader = score === sorted[0]
+        const wager = isLeader
+          ? Math.min(Math.round(score * 0.3), 5000) // conservative
+          : Math.round(score * 0.8) // aggressive
+        // Assume opponents answer correctly ~60% of the time
+        const oppCorrect = Math.random() > 0.4
+        finalScore = oppCorrect ? score + wager : score - wager
+      }
+      return { name: `Simulated Opp ${i + 1}`, score: finalScore, simulated: true }
+    })
+  } else {
+    return null
+  }
 
   if (contestants.length === 0) return null
 
+  // Your score: use actualScore (includes all wagers) if FJ played, else Coryat
+  const yourScore = fjAnswered ? actualScore : coryatScore
+  const hasWagers = actualScore !== coryatScore
+
   const allScores = [
-    { name: 'You', score: coryatScore, isYou: true },
+    { name: 'You', score: yourScore, isYou: true },
     ...contestants,
   ].sort((a, b) => b.score - a.score)
 
   const yourRank = allScores.findIndex(s => s.isYou) + 1
+  const rankSuffix = yourRank === 1 ? 'st' : yourRank === 2 ? 'nd' : 'rd'
   const medalEmoji = yourRank === 1 ? '🥇' : yourRank === 2 ? '🥈' : '🥉'
+  const isSimulated = contestants.some(c => c.simulated)
 
   return (
     <div style={S.card}>
       <div style={S.sectionTitle}>
-        {contestants.some(c => c.simulated) ? 'SIMULATED OPPONENT SCORES' : 'ACTUAL CONTESTANT SCORES'}
+        {isSimulated ? 'SIMULATED OPPONENT SCORES' : 'ACTUAL CONTESTANT SCORES'}
       </div>
+
+      <div style={{ fontSize: 11, color: '#6070a0', marginBottom: 10, lineHeight: 1.6 }}>
+        {fjAnswered
+          ? `Your final score includes DD and FJ wagers. Coryat: ${coryatScore >= 0 ? '+' : ''}${coryatScore.toLocaleString()} · FJ: ${fjAnswered === 'correct' ? '✓ correct' : '✗ wrong'}.`
+          : 'Final Jeopardy not yet played — showing Coryat scores.'}
+        {isSimulated && fjAnswered && ' Opponent FJ wagers are simulated.'}
+      </div>
+
       {allScores.map((player, i) => (
         <div key={player.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #1a2040' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span>{i === 0 ? '🥇' : i === 1 ? '🥈' : '🥉'}</span>
-            <span style={{ fontSize: 13, color: player.isYou ? '#f5c518' : '#a0acd0' }}>
+            <div style={{ fontSize: 13, color: player.isYou ? '#f5c518' : '#a0acd0' }}>
               {player.name}{player.simulated ? ' *' : ''}
-            </span>
+            </div>
           </div>
           <span style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: player.isYou ? '#f5c518' : player.score >= 0 ? '#4caf7d' : '#e57373' }}>
             {player.score >= 0 ? '+' : ''}{player.score.toLocaleString()}
           </span>
         </div>
       ))}
+
       <div style={{ fontSize: 11, color: '#6070a0', marginTop: 10, lineHeight: 1.6 }}>
-        {yourRank === 1 ? `${medalEmoji} You would have won this game!` : `${medalEmoji} You finished in ${yourRank}${yourRank === 2 ? 'nd' : 'rd'} place.`}
-        {contestants.some(c => c.simulated) && ' * Simulated based on historical contestant data.'}
+        {yourRank === 1
+          ? `${medalEmoji} You would have won!`
+          : `${medalEmoji} You finished in ${yourRank}${rankSuffix} place.`}
+        {isSimulated && ' * Simulated opponents — enable Tournament Mode for more control.'}
       </div>
     </div>
   )

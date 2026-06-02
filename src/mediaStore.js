@@ -1,6 +1,6 @@
 // ─── IndexedDB media store ────────────────────────────────────────────────────
 const DB_NAME = 'jeo-trainer-media'
-const DB_VERSION = 1
+const DB_VERSION = 2  // bumped to force onupgradeneeded to re-run
 const STORE = 'media'
 
 function openDB() {
@@ -8,12 +8,14 @@ function openDB() {
     const req = indexedDB.open(DB_NAME, DB_VERSION)
     req.onupgradeneeded = e => {
       const db = e.target.result
+      // Create store if it doesn't exist (handles fresh install and upgrades)
       if (!db.objectStoreNames.contains(STORE)) {
         db.createObjectStore(STORE, { keyPath: 'key' })
       }
     }
     req.onsuccess = e => resolve(e.target.result)
-    req.onerror = () => reject(req.error)
+    req.onerror = e => reject(e.target.error)
+    req.onblocked = () => reject(new Error('IndexedDB upgrade blocked — close other tabs and retry'))
   })
 }
 

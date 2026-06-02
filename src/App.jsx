@@ -75,6 +75,7 @@ export default function App() {
   const [actualScore, setActualScore] = useState(0) // real show score including wagers
   const [wagerAmount, setWagerAmount] = useState(null) // pending wager
   const [lastClueResult, setLastClueResult] = useState(null) // 'correct' | 'incorrect' | 'pass'
+  const [showDJPrompt, setShowDJPrompt] = useState(false)
   const [resumePrompt, setResumePrompt] = useState(null) // saved game state to restore
   const [showCache, setShowCache] = useState(false)
   const [showCategorySearch, setShowCategorySearch] = useState(false)
@@ -187,7 +188,7 @@ export default function App() {
       episodeData, episodeMeta, round, board,
       singleClueStates, doubleClueStates,
       fjAnswered, coryatScore: singleCoryat + doubleCoryat,
-      actualScore, confidenceRatings, tournamentState,
+      actualScore: finalActualScore !== null ? finalActualScore : actualScore, confidenceRatings, tournamentState,
     }
     saveGameState(state)
     if (user) saveGameStateRemote(state).catch(console.error)
@@ -222,7 +223,7 @@ export default function App() {
       setFjAnswered(null)
       setActiveClue(null)
       setConfidenceRatings(null)
-      setShowStartScreen(true) // show start screen with predicted Coryat + confidence
+      // Start screen shown when user taps START button on board, not automatically
     } catch (err) {
       setBoardError(err.message)
       if (!board) setBoard(SAMPLE_BOARD)
@@ -244,9 +245,17 @@ export default function App() {
   useEffect(() => { tournamentModeRef.current = tournamentMode }, [tournamentMode])
 
   function openClue(ci, ri) {
-    if (clueStates[`${ci}-${ri}`] !== CLUE_STATES.UNANSWERED) return
     const clue = board.categories[ci].clues[ri]
     const category = board.categories[ci].name
+    const currentState = clueStates[`${ci}-${ri}`]
+
+    // Allow re-answering already-answered clues (shows answer immediately)
+    if (currentState !== CLUE_STATES.UNANSWERED) {
+      setActiveClue({ ci, ri, clue, category, isReanswer: true, previousResult: currentState })
+      setShowAnswer(true) // show answer immediately since they've seen it
+      return
+    }
+
     // Always intercept Daily Doubles for wagering
     if (clue.isDailyDouble) {
       setWagerState({ type: 'daily_double', ci, ri, clue, category })
@@ -257,17 +266,35 @@ export default function App() {
   }
 
   function markClue(result) {
-    const { ci, ri, clue, category } = activeClue
+    const { ci, ri, clue, category, isReanswer, previousResult } = activeClue
     setClueStates(prev => ({ ...prev, [`${ci}-${ri}`]: result }))
+
     if (result === CLUE_STATES.INCORRECT || result === CLUE_STATES.PASS) {
       addMissedAsCard(clue, category)
     }
+
     // Track actual show score (with wagers for DD)
     const effectiveValue = clue.wager || clue.value
+
+    if (isReanswer && previousResult) {
+      // Reverse the old score effect first
+      if (previousResult === CLUE_STATES.CORRECT) setActualScore(s => s - effectiveValue)
+      else if (previousResult === CLUE_STATES.INCORRECT) setActualScore(s => s + effectiveValue)
+    }
+
+    // Apply new result
     if (result === CLUE_STATES.CORRECT) setActualScore(s => s + effectiveValue)
     else if (result === CLUE_STATES.INCORRECT) setActualScore(s => s - effectiveValue)
+
     setLastClueResult(result)
     setActiveClue(null)
+
+    // Check if Single Jeopardy just completed — prompt for Double Jeopardy
+    if (round === 'single' && episodeData?.doubleJeopardy) {
+      const updatedStates = { ...clueStates, [`${ci}-${ri}`]: result }
+      const allDone = Object.values(updatedStates).every(s => s !== CLUE_STATES.UNANSWERED)
+      if (allDone) setShowDJPrompt(true)
+    }
   }
 
   // ── Scores ────────────────────────────────────────────────────────────────
@@ -292,7 +319,7 @@ export default function App() {
   const dueCount = cards.filter(c => c.dueAt <= Date.now()).length
 
   // ── Save game ─────────────────────────────────────────────────────────────
-  function saveGame(fjResult) {
+  function saveGame(fjResult, finalActualScore = null) {
     if (!episodeMeta) return
     const totalCorrect = Object.values(singleClueStates).filter(s => s === 'correct').length + Object.values(doubleClueStates).filter(s => s === 'correct').length
     const totalIncorrect = Object.values(singleClueStates).filter(s => s === 'incorrect').length + Object.values(doubleClueStates).filter(s => s === 'incorrect').length
@@ -353,7 +380,7 @@ export default function App() {
       singleCoryat,
       doubleCoryat,
       coryatScore,
-      actualScore,
+      actualScore: finalActualScore !== null ? finalActualScore : actualScore,
       totalCorrect,
       totalIncorrect,
       totalPass,
@@ -374,12 +401,16 @@ export default function App() {
 
   function handleFJAnswer(result) {
     setFjAnswered(result)
-    // Update actual score with FJ wager
-    if (wagerAmount) {
-      if (result === 'correct') setActualScore(s => s + wagerAmount)
-      else setActualScore(s => s - wagerAmount)
-    }
-    saveGame({ result, category: episodeData?.finalJeopardy?.category, clue: episodeData?.finalJeopardy?.clue, answer: episodeData?.finalJeopardy?.answer, wager: wagerAmount })
+    // Calculate final actual score synchronously so saveGame gets the right value
+    const fjWager = wagerAmount || 0
+    const finalActualScore = result === 'correct'
+      ? actualScore + fjWager
+      : actualScore - fjWager
+    setActualScore(finalActualScore)
+    saveGame(
+      { result, category: episodeData?.finalJeopardy?.category, clue: episodeData?.finalJeopardy?.clue, answer: episodeData?.finalJeopardy?.answer, wager: fjWager },
+      finalActualScore // pass final score explicitly
+    )
     clearGameState()
     setWagerAmount(null)
     setShowFJ(false)
@@ -472,6 +503,8 @@ export default function App() {
         {view === 'summary' && (
           <SummaryView
             coryatScore={coryatScore}
+            actualScore={actualScore}
+            fjAnswered={fjAnswered}
             singleBoard={singleBoard}
             doubleBoard={doubleBoard}
             singleClueStates={singleClueStates}
@@ -492,6 +525,8 @@ export default function App() {
           onReveal={() => setShowAnswer(true)}
           onMark={markClue}
           onClose={() => setActiveClue(null)}
+          isReanswer={activeClue.isReanswer}
+          previousResult={activeClue.previousResult}
         />
       )}
       {activeClue && timedMode && (
@@ -579,7 +614,7 @@ export default function App() {
       {wagerState && (
         <WagerTrainer
           type={wagerState.type}
-          coryatScore={coryatScore}
+          coryatScore={actualScore || coryatScore}
           boardValue={remainingBoardValue}
           lastClueResult={lastClueResult}
           answeredCount={answeredCount}
@@ -614,6 +649,20 @@ export default function App() {
           syncError={syncError}
           onClose={() => setShowAuth(false)}
           onSignOut={() => { signOut(); setShowAuth(false) }}
+        />
+      )}
+
+      {showDJPrompt && (
+        <DJPrompt
+          singleCoryat={singleCoryat}
+          doubleBoard={doubleBoard}
+          onStart={(djRatings) => {
+            // Merge DJ confidence ratings with existing SJ ratings
+            if (djRatings) setConfidenceRatings(prev => ({ ...(prev || {}), ...djRatings }))
+            switchRound('double')
+            setShowDJPrompt(false)
+          }}
+          onSkip={() => setShowDJPrompt(false)}
         />
       )}
 
@@ -925,7 +974,7 @@ function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round,
             const state = clueStates[key]
             const clue = cat.clues[ri]
             return (
-              <div key={key} onClick={() => onOpen(ci, ri)} style={{ ...S.tile, background: tileBg[state], cursor: state !== 'unanswered' ? 'default' : 'pointer', opacity: state !== 'unanswered' ? 0.65 : 1 }}>
+              <div key={key} onClick={() => onOpen(ci, ri)} style={{ ...S.tile, background: tileBg[state], cursor: 'pointer', opacity: state !== 'unanswered' ? 0.65 : 1 }}>
                 {state !== 'unanswered'
                   ? <span style={S.tileIcon}>{state === 'correct' ? '✓' : state === 'incorrect' ? '✗' : '—'}</span>
                   : <span style={S.tileVal}>{clue.isDailyDouble && !tournamentMode && <span style={S.ddTag}>DD</span>}${clue.value.toLocaleString()}</span>}
@@ -1100,6 +1149,75 @@ function StartScreen({ board, episodeMeta, gameHistory, onStart, onSkip }) {
           </button>
           <button style={{ ...S.revealBtn, flex: 2, fontSize: 16 }} onClick={() => onStart(Object.keys(ratings).length > 0 ? ratings : null)}>
             Start Game! →
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Double Jeopardy Prompt ──────────────────────────────────────────────────
+function DJPrompt({ singleCoryat, doubleBoard, onStart, onSkip }) {
+  const [ratings, setRatings] = useState({})
+  const [showConfidence, setShowConfidence] = useState(false)
+  const categories = doubleBoard?.categories?.map(c => c.name) || []
+  const LABELS = ['😬','😐','🙂','😎']
+  const LABEL_TEXT = ['Weak','OK','Good','Strong']
+
+  return (
+    <div style={S.overlay}>
+      <div style={{ ...S.modal, maxWidth: 420, maxHeight: '90vh', overflowY: 'auto', textAlign: 'center' }}>
+        <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 28, color: '#f5c518', letterSpacing: 3, marginBottom: 4 }}>
+          SINGLE JEOPARDY COMPLETE!
+        </div>
+        <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 22, color: singleCoryat >= 0 ? '#4caf7d' : '#e57373', marginBottom: 16 }}>
+          SJ Coryat: {singleCoryat >= 0 ? '+' : ''}{singleCoryat.toLocaleString()}
+        </div>
+        <div style={{ fontSize: 13, color: '#8890c0', lineHeight: 1.6, marginBottom: 16 }}>
+          Ready for Double Jeopardy? Values double and there are two Daily Doubles.
+        </div>
+
+        {/* Optional DJ category confidence */}
+        {categories.length > 0 && (
+          <div style={{ marginBottom: 16, textAlign: 'left' }}>
+            <button
+              style={{ fontSize: 11, color: showConfidence ? '#f5c518' : '#4060a0', letterSpacing: 1, width: '100%', textAlign: 'left', marginBottom: showConfidence ? 10 : 0 }}
+              onClick={() => setShowConfidence(!showConfidence)}
+            >
+              {showConfidence ? '▼' : '▶'} Rate your DJ category confidence (optional)
+            </button>
+            {showConfidence && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {categories.map(cat => (
+                  <div key={cat}>
+                    <div style={{ fontSize: 11, color: '#a0acd0', marginBottom: 4, letterSpacing: 1 }}>
+                      {cat} <span style={{ color: '#4060a0', fontSize: 9 }}>· {getMetaCategory(cat)}</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      {LABELS.map((emoji, i) => (
+                        <button key={i} onClick={() => setRatings(r => ({ ...r, [cat]: i }))}
+                          style={{ flex: 1, padding: '5px 2px', borderRadius: 6, fontSize: 14,
+                            background: ratings[cat] === i ? 'rgba(245,197,24,0.15)' : 'rgba(255,255,255,0.04)',
+                            border: ratings[cat] === i ? '1px solid #f5c518' : '1px solid #1a2460',
+                            cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
+                          <span>{emoji}</span>
+                          <span style={{ fontSize: 7, color: ratings[cat] === i ? '#f5c518' : '#4060a0' }}>{LABEL_TEXT[i]}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button style={{ ...S.markBtn, background: '#1e2456', color: '#8890d0', border: '1px solid #2e3476', flex: 1 }} onClick={onSkip}>
+            Skip DJ
+          </button>
+          <button style={{ ...S.revealBtn, flex: 2, fontSize: 16 }} onClick={() => onStart(Object.keys(ratings).length > 0 ? ratings : null)}>
+            Play Double J! →
           </button>
         </div>
       </div>
@@ -1320,15 +1438,16 @@ function TimedClueModal({ clue, category, onMark, onClose }) {
   const buzzMs = 5000
   const answerMs = 5000
 
-  const [phase, setPhase] = useState('reading') // reading | buzzing | answering | reveal
+  const [phase, setPhase] = useState('reading') // reading | buzzing | answering | committed | reveal
   const [result, setResult] = useState(null) // correct | incorrect | pass | timeout
+  const [committed, setCommitted] = useState(null) // 'know' | 'dontknow' — what player claimed before seeing answer
   const [elapsed, setElapsed] = useState(0)
   const [phaseStart, setPhaseStart] = useState(Date.now())
   const intervalRef = useRef(null)
   const phaseRef = useRef('reading')
   const phaseStartRef = useRef(Date.now())
 
-  const phaseDuration = phase === 'reading' ? readingMs : phase === 'buzzing' ? buzzMs : answerMs
+  const phaseDuration = phase === 'reading' ? readingMs : phase === 'buzzing' ? buzzMs : phase === 'answering' ? answerMs : 1
 
   useEffect(() => {
     phaseRef.current = phase
@@ -1421,6 +1540,7 @@ function TimedClueModal({ clue, category, onMark, onClose }) {
   const phasLabel = phase === 'reading' ? 'READ THE CLUE'
                   : phase === 'buzzing' ? `BUZZ IN — ${timeLeft}s`
                   : phase === 'answering' ? `ANSWER — ${timeLeft}s`
+                  : phase === 'committed' ? 'REVEAL'
                   : 'RESULT'
 
   return (
@@ -1429,7 +1549,7 @@ function TimedClueModal({ clue, category, onMark, onClose }) {
 
         {/* Phase label + timer bar */}
         <div style={{ fontSize: 10, letterSpacing: 3, color: phaseColor, marginBottom: 8 }}>{phasLabel}</div>
-        {phase !== 'reveal' && (
+        {phase !== 'reveal' && phase !== 'committed' && (
           <div style={{ width: '100%', height: 4, background: '#1a2040', borderRadius: 99, marginBottom: 16, overflow: 'hidden' }}>
             <div style={{
               height: '100%', borderRadius: 99,
@@ -1457,12 +1577,24 @@ function TimedClueModal({ clue, category, onMark, onClose }) {
         )}
 
         {phase === 'buzzing' && (
-          <button
-            style={{ ...S.revealBtn, background: '#f5c518', fontSize: 18, padding: '16px 40px', letterSpacing: 3 }}
-            onClick={buzzIn}
-          >
-            BUZZ IN!
-          </button>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
+            <button
+              style={{ ...S.revealBtn, background: '#f5c518', fontSize: 18, padding: '16px 40px', letterSpacing: 3 }}
+              onClick={buzzIn}
+            >
+              BUZZ IN!
+            </button>
+            <button
+              style={{ fontSize: 11, color: '#4060a0', letterSpacing: 2 }}
+              onClick={() => {
+                clearInterval(intervalRef.current)
+                setResult('pass')
+                setPhase('reveal')
+              }}
+            >
+              Skip (I don&apos;t know)
+            </button>
+          </div>
         )}
 
         {phase === 'answering' && (
@@ -1471,9 +1603,63 @@ function TimedClueModal({ clue, category, onMark, onClose }) {
               Do you have the answer?
             </div>
             <div style={S.markRow}>
-              <button style={{ ...S.markBtn, background: '#1a5c2e', color: '#7cd992', border: '1px solid #2e8c50', fontSize: 15, padding: '14px 0' }} onClick={() => submitResult('correct')}>✓ Got It</button>
-              <button style={{ ...S.markBtn, background: '#5c1a1a', color: '#e07070', border: '1px solid #8c2e2e', fontSize: 15, padding: '14px 0' }} onClick={() => submitResult('incorrect')}>✗ Wrong</button>
+              <button
+                style={{ ...S.markBtn, background: '#1a5c2e', color: '#7cd992', border: '1px solid #2e8c50', fontSize: 15, padding: '14px 0' }}
+                onClick={() => {
+                  clearInterval(intervalRef.current)
+                  setCommitted('know')
+                  setPhase('committed')
+                }}
+              >
+                ✓ I know it
+              </button>
+              <button
+                style={{ ...S.markBtn, background: '#5c1a1a', color: '#e07070', border: '1px solid #8c2e2e', fontSize: 15, padding: '14px 0' }}
+                onClick={() => {
+                  clearInterval(intervalRef.current)
+                  setCommitted('dontknow')
+                  submitResult('incorrect')
+                }}
+              >
+                ✗ I don&apos;t know
+              </button>
             </div>
+          </>
+        )}
+
+        {/* Committed — reveal the answer, then confirm */}
+        {phase === 'committed' && (
+          <>
+            <div style={{ fontSize: 11, color: committed === 'know' ? '#7cd992' : '#8890c0', letterSpacing: 2, marginBottom: 10 }}>
+              {committed === 'know' ? 'You said you know it. The answer was:' : 'You passed. The answer was:'}
+            </div>
+            <div style={S.modalQ}>{clue.question}</div>
+            {committed === 'know' ? (
+              <>
+                <div style={{ fontSize: 11, color: '#6070a0', marginBottom: 16, letterSpacing: 1 }}>
+                  Were you right?
+                </div>
+                <div style={S.markRow}>
+                  <button
+                    style={{ ...S.markBtn, background: '#1a5c2e', color: '#7cd992', border: '1px solid #2e8c50', fontSize: 15, padding: '14px 0' }}
+                    onClick={() => submitResult('correct')}
+                  >
+                    ✓ Got it right
+                  </button>
+                  <button
+                    style={{ ...S.markBtn, background: '#5c1a1a', color: '#e07070', border: '1px solid #8c2e2e', fontSize: 15, padding: '14px 0' }}
+                    onClick={() => submitResult('incorrect')}
+                  >
+                    ✗ Got it wrong
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize: 11, color: '#6070a0', marginBottom: 16, letterSpacing: 1 }}>Added to your flashcard deck</div>
+                <button style={S.revealBtn} onClick={() => submitResult('incorrect')}>Done</button>
+              </>
+            )}
           </>
         )}
 
@@ -1486,9 +1672,15 @@ function TimedClueModal({ clue, category, onMark, onClose }) {
               background: result === 'correct' ? 'rgba(124,217,146,0.1)' : result === 'pass' ? 'rgba(136,144,208,0.1)' : 'rgba(224,112,112,0.1)',
             }}>
               {result === 'correct' ? '✓ CORRECT' : result === 'pass' ? '— MISSED BUZZ' : '✗ INCORRECT'}
+              {committed === 'dontknow' && result === 'incorrect' && (
+                <span style={{ fontSize: 10, color: '#6070a0', marginLeft: 8 }}>(didn&apos;t know)</span>
+              )}
             </div>
 
             {/* Always show the answer */}
+            {(result === 'pass' || committed === 'dontknow') && (
+              <div style={{ fontSize: 11, color: '#8890c0', marginBottom: 8 }}>The correct response was:</div>
+            )}
             <div style={S.modalQ}>{clue.question}</div>
             {(result === 'incorrect' || result === 'pass') && (
               <div style={{ fontSize: 11, color: '#6070a0', marginBottom: 12, letterSpacing: 1 }}>Added to your flashcard deck</div>
@@ -1504,7 +1696,9 @@ function TimedClueModal({ clue, category, onMark, onClose }) {
 }
 
 // ─── Clue Modal ───────────────────────────────────────────────────────────────
-function ClueModal({ clue, category, showAnswer, onReveal, onMark, onClose }) {
+function ClueModal({ clue, category, showAnswer, onReveal, onMark, onClose, isReanswer, previousResult }) {
+  const prevColors = { correct: '#4caf7d', incorrect: '#e57373', pass: '#7986cb' }
+  const prevLabels = { correct: '✓ Correct', incorrect: '✗ Wrong', pass: '— Pass' }
   return (
     <div style={S.overlay} onClick={onClose}>
       <div style={S.modal} onClick={e => e.stopPropagation()}>
@@ -1512,6 +1706,11 @@ function ClueModal({ clue, category, showAnswer, onReveal, onMark, onClose }) {
         <div style={S.modalCat}>{category}</div>
         <div style={S.modalVal}>${clue.value.toLocaleString()}</div>
         {clue.isDailyDouble && <div style={S.ddBadge}>⭐ DAILY DOUBLE</div>}
+        {isReanswer && previousResult && (
+          <div style={{ fontSize: 10, letterSpacing: 2, color: prevColors[previousResult], marginBottom: 4, background: `${prevColors[previousResult]}18`, borderRadius: 6, padding: '3px 10px', display: 'inline-block' }}>
+            Previously: {prevLabels[previousResult]} — change answer?
+          </div>
+        )}
         <div style={S.modalText}>{clue.answer}</div>
         {!showAnswer
           ? <button style={S.revealBtn} onClick={onReveal}>Reveal Answer</button>
@@ -1529,69 +1728,93 @@ function ClueModal({ clue, category, showAnswer, onReveal, onMark, onClose }) {
 }
 
 // ─── Study View ───────────────────────────────────────────────────────────────
-// ─── Study View ───────────────────────────────────────────────────────────────
 function StudyView({ cards, setCards }) {
-  const [phase, setPhase] = useState('configure') // configure | session | done
-  const [sessionCards, setSessionCards] = useState([])
-  const [idx, setIdx] = useState(0)
+  const CHUNK_PRESETS = { quick: 10, standard: 20, long: 40 }
+  const DEFAULT_CHUNK = 'standard'
+
+  const [phase, setPhase] = useState('configure') // configure | session | chunkdone
+  const [sessionCards, setSessionCards] = useState([])   // all cards for this run
+  const [allChunks, setAllChunks] = useState([])         // pre-split chunks
+  const [chunkIdx, setChunkIdx] = useState(0)            // which chunk we're on
+  const [cardIdx, setCardIdx] = useState(0)              // card within current chunk
   const [flipped, setFlipped] = useState(false)
   const [sessionStats, setSessionStats] = useState({ again: 0, hard: 0, good: 0, easy: 0 })
+  const [chunkStats, setChunkStats] = useState({ again: 0, hard: 0, good: 0, easy: 0 })
+  const [chunkPreset, setChunkPreset] = useState(DEFAULT_CHUNK)
+  const [customChunk, setCustomChunk] = useState('')
+  const [showCustom, setShowCustom] = useState(false)
 
   // Filter state
   const [dueOnly, setDueOnly] = useState(true)
-  const [sourceFilter, setSourceFilter] = useState('all') // all | missed | anki | manual
+  const [sourceFilter, setSourceFilter] = useState('all')
   const [categoryFilter, setCategoryFilter] = useState('all')
-  const [episodeFilter, setEpisodeFilter] = useState('all')
 
   const now = Date.now()
 
-  // Derive available filter options from cards
-  const allCategories = [...new Set(cards.flatMap(c => {
-    if (!c.category) return []
-    // Split multi-category strings and take first meaningful segment
-    return c.category.split(' · ').map(s => s.trim()).filter(Boolean)
-  }))].sort()
+  const allMetaCategories = [...new Set(cards
+    .filter(c => c.category)
+    .map(c => getMetaCategory(c.category.split(' · ')[0] || c.category))
+  )].sort()
 
-  const allEpisodes = [...new Set(cards
-    .filter(c => c.source === 'missed' && c.category)
-    .map(c => {
-      // Episode info may be embedded in category like "WORLD CAPITALS"
-      // We track it via the card's episodeId if present, else skip
-      return c.episodeId || null
-    })
-    .filter(Boolean)
-  )].sort((a, b) => b - a)
-
-  // Apply filters to get matching cards
   function getFilteredCards() {
     let filtered = [...cards]
     if (dueOnly) filtered = filtered.filter(c => c.dueAt <= now)
     if (sourceFilter !== 'all') filtered = filtered.filter(c => c.source === sourceFilter)
-    if (categoryFilter !== 'all') filtered = filtered.filter(c => c.category?.includes(categoryFilter))
-    if (episodeFilter !== 'all') filtered = filtered.filter(c => c.episodeId === episodeFilter)
+    if (categoryFilter !== 'all') filtered = filtered.filter(c => getMetaCategory(c.category?.split(' · ')[0] || c.category || '') === categoryFilter)
     return filtered
   }
 
   const matchingCards = getFilteredCards()
   const dueCount = cards.filter(c => c.dueAt <= now).length
 
+  function getChunkSize() {
+    if (showCustom && customChunk) return Math.max(1, parseInt(customChunk) || 20)
+    return CHUNK_PRESETS[chunkPreset] || 20
+  }
+
+  function buildChunks(cardList, size) {
+    const chunks = []
+    for (let i = 0; i < cardList.length; i += size) {
+      chunks.push(cardList.slice(i, i + size))
+    }
+    return chunks
+  }
+
   function startSession() {
-    const toStudy = [...matchingCards].sort(() => Math.random() - 0.5)
-    setSessionCards(toStudy)
-    setIdx(0); setFlipped(false)
+    const shuffled = [...matchingCards].sort(() => Math.random() - 0.5)
+    const size = getChunkSize()
+    const chunks = buildChunks(shuffled, size)
+    setAllChunks(chunks)
+    setSessionCards(shuffled)
+    setChunkIdx(0)
+    setCardIdx(0)
+    setFlipped(false)
     setSessionStats({ again: 0, hard: 0, good: 0, easy: 0 })
+    setChunkStats({ again: 0, hard: 0, good: 0, easy: 0 })
     setPhase('session')
   }
 
   function rate(quality, label) {
-    const card = sessionCards[idx]
-    // Always update SRS schedule when rating
+    const currentChunk = allChunks[chunkIdx] || []
+    const card = currentChunk[cardIdx]
+    if (!card) return
     setCards(prev => prev.map(c => c.id === card.id ? sm2(card, quality) : c))
+    const statUpdate = { again: 0, hard: 0, good: 0, easy: 0, [label]: 1 }
     setSessionStats(prev => ({ ...prev, [label]: prev[label] + 1 }))
-    const next = idx + 1
-    if (next >= sessionCards.length) setPhase('done')
-    else { setIdx(next); setFlipped(false) }
+    setChunkStats(prev => ({ ...prev, [label]: prev[label] + 1 }))
+    const nextCard = cardIdx + 1
+    if (nextCard >= currentChunk.length) {
+      setPhase('chunkdone')
+    } else {
+      setCardIdx(nextCard)
+      setFlipped(false)
+    }
   }
+
+  const currentChunk = allChunks[chunkIdx] || []
+  const totalChunks = allChunks.length
+  const chunksRemaining = totalChunks - chunkIdx - 1
+  const totalDone = allChunks.slice(0, chunkIdx).reduce((s, c) => s + c.length, 0) + (phase === 'chunkdone' ? currentChunk.length : cardIdx)
 
   // ── Configure screen ──────────────────────────────────────────────────────
   if (phase === 'configure') return (
@@ -1606,6 +1829,38 @@ function StudyView({ cards, setCards }) {
         </>
       ) : (
         <div style={S.configPanel}>
+
+          {/* Session size presets */}
+          <div style={S.configRow}>
+            <span style={S.configLabel}>SESSION SIZE</span>
+            <div style={S.toggleGroup}>
+              {[['quick','Quick','10'],['standard','Standard','20'],['long','Long','40']].map(([key,label,n]) => (
+                <button key={key}
+                  style={{ ...S.toggleBtn, ...(chunkPreset === key && !showCustom ? S.toggleActive : {}) }}
+                  onClick={() => { setChunkPreset(key); setShowCustom(false) }}
+                >
+                  <span style={{ fontSize: 13 }}>{label}</span>
+                  <span style={{ fontSize: 10, opacity: 0.6 }}> {n}</span>
+                </button>
+              ))}
+              <button
+                style={{ ...S.toggleBtn, ...(showCustom ? S.toggleActive : {}) }}
+                onClick={() => setShowCustom(true)}
+              >
+                Custom
+              </button>
+            </div>
+            {showCustom && (
+              <input
+                style={{ ...S.loaderInput, marginTop: 8, textAlign: 'center', fontSize: 16 }}
+                type="number"
+                value={customChunk}
+                onChange={e => setCustomChunk(e.target.value)}
+                placeholder="Cards per session (e.g. 15)"
+                min={1} max={200}
+              />
+            )}
+          </div>
 
           {/* Due toggle */}
           <div style={S.configRow}>
@@ -1638,23 +1893,26 @@ function StudyView({ cards, setCards }) {
           </div>
 
           {/* Category filter */}
-          {allCategories.length > 0 && (
+          {allMetaCategories.length > 0 && (
             <div style={S.configRow}>
               <span style={S.configLabel}>CATEGORY</span>
               <div style={S.chipRow}>
                 <button style={{ ...S.chip, ...(categoryFilter === 'all' ? S.chipActive : {}) }} onClick={() => setCategoryFilter('all')}>
                   All
                 </button>
-                {allCategories.slice(0, 12).map(cat => (
-                  <button key={cat} style={{ ...S.chip, ...(categoryFilter === cat ? S.chipActive : {}) }} onClick={() => setCategoryFilter(cat)}>
-                    {cat.length > 20 ? cat.slice(0, 20) + '…' : cat}
-                  </button>
-                ))}
+                {allMetaCategories.map(meta => {
+                  const count = cards.filter(c => getMetaCategory(c.category?.split(' · ')[0] || c.category || '') === meta).length
+                  return (
+                    <button key={meta} style={{ ...S.chip, ...(categoryFilter === meta ? S.chipActive : {}) }} onClick={() => setCategoryFilter(meta)}>
+                      {meta} ({count})
+                    </button>
+                  )
+                })}
               </div>
             </div>
           )}
 
-          {/* Match count + start */}
+          {/* Match count + daily goal + start */}
           <div style={S.configFooter}>
             {dueOnly && dueCount === 0 && (
               <div style={S.nextDueBox}>
@@ -1662,18 +1920,33 @@ function StudyView({ cards, setCards }) {
                 <div style={S.nextDueVal}>{formatRelative(Math.min(...cards.map(c => c.dueAt)))}</div>
               </div>
             )}
-            <div style={S.matchCount}>
-              <span style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 28, color: matchingCards.length > 0 ? '#f5c518' : '#4060a0' }}>
-                {matchingCards.length}
-              </span>
-              <span style={{ fontSize: 12, color: '#6070a0', marginLeft: 6 }}>card{matchingCards.length !== 1 ? 's' : ''} match</span>
-            </div>
+            {matchingCards.length > 0 && (() => {
+              const size = getChunkSize()
+              const numChunks = Math.ceil(matchingCards.length / size)
+              return (
+                <div style={{ width: '100%', background: '#0a0f2e', borderRadius: 10, padding: '12px 14px', border: '1px solid #1a2460' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                    <span style={{ fontSize: 12, color: '#c0c8e8' }}>
+                      <b style={{ color: '#f5c518', fontFamily: "'Bebas Neue', sans-serif", fontSize: 20 }}>{matchingCards.length}</b>
+                      {' '}card{matchingCards.length !== 1 ? 's' : ''} →{' '}
+                      <b style={{ color: '#f5c518' }}>{numChunks}</b> session{numChunks !== 1 ? 's' : ''} of ~{size}
+                    </span>
+                  </div>
+                  <div style={S.progressOuter}>
+                    <div style={{ ...S.progressInner, width: `${Math.min(100, (1/numChunks)*100)}%`, background: '#2a3580' }} />
+                  </div>
+                  <div style={{ fontSize: 10, color: '#4060a0', marginTop: 4, letterSpacing: 1 }}>
+                    Complete all {numChunks} to finish today&apos;s due cards
+                  </div>
+                </div>
+              )
+            })()}
             <button
               style={{ ...S.startBtn, opacity: matchingCards.length === 0 ? 0.3 : 1 }}
               onClick={startSession}
               disabled={matchingCards.length === 0}
             >
-              Start Session →
+              {matchingCards.length === 0 ? 'No cards match' : `Start Session 1 →`}
             </button>
           </div>
         </div>
@@ -1681,30 +1954,77 @@ function StudyView({ cards, setCards }) {
     </div>
   )
 
-  // ── Done screen ───────────────────────────────────────────────────────────
-  if (phase === 'done') return (
+  // ── Chunk complete screen ─────────────────────────────────────────────────
+  if (phase === 'chunkdone') return (
     <div style={S.studyLanding}>
-      <div style={S.studyIcon}>🎉</div>
-      <div style={S.studyTitle}>SESSION COMPLETE</div>
+      <div style={S.studyIcon}>{chunksRemaining === 0 ? '🎉' : '✅'}</div>
+      <div style={S.studyTitle}>
+        {chunksRemaining === 0 ? 'ALL DONE!' : `SESSION ${chunkIdx + 1} COMPLETE`}
+      </div>
+
+      {/* Chunk stats */}
       <div style={S.statsGrid}>
-        {[['Again', sessionStats.again, '#e57373'],['Hard', sessionStats.hard, '#ffb74d'],['Good', sessionStats.good, '#81c784'],['Easy', sessionStats.easy, '#4dd0e1']].map(([lbl, n, c]) => (
+        {[['Again', chunkStats.again, '#e57373'],['Hard', chunkStats.hard, '#ffb74d'],['Good', chunkStats.good, '#81c784'],['Easy', chunkStats.easy, '#4dd0e1']].map(([lbl, n, c]) => (
           <div key={lbl} style={S.statCell}><div style={{ ...S.statN, color: c }}>{n}</div><div style={S.statLbl}>{lbl}</div></div>
         ))}
       </div>
-      <button style={S.startBtn} onClick={() => setPhase('configure')}>Back to Setup</button>
+
+      {/* Daily progress bar */}
+      <div style={{ width: '100%', maxWidth: 480, background: '#0a0f2e', borderRadius: 10, padding: '12px 14px', border: '1px solid #1a2460' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+          <span style={{ fontSize: 11, color: '#8890c0', letterSpacing: 1 }}>DAILY PROGRESS</span>
+          <span style={{ fontSize: 11, color: '#f5c518' }}>{chunkIdx + 1} / {totalChunks} sessions</span>
+        </div>
+        <div style={S.progressOuter}>
+          <div style={{ ...S.progressInner, width: `${((chunkIdx + 1) / totalChunks) * 100}%` }} />
+        </div>
+        <div style={{ fontSize: 10, color: '#4060a0', marginTop: 4 }}>
+          {totalDone} of {sessionCards.length} cards reviewed
+          {chunksRemaining > 0 && ` · ${chunksRemaining} session${chunksRemaining !== 1 ? 's' : ''} remaining`}
+        </div>
+      </div>
+
+      {chunksRemaining > 0 ? (
+        <div style={{ display: 'flex', gap: 10, width: '100%', maxWidth: 480 }}>
+          <button
+            style={{ ...S.startBtn, flex: 1, background: '#1e2456', color: '#8890d0', border: '1px solid #2e3476', fontSize: 13 }}
+            onClick={() => setPhase('configure')}
+          >
+            Stop for now
+          </button>
+          <button
+            style={{ ...S.startBtn, flex: 2 }}
+            onClick={() => {
+              setChunkIdx(prev => prev + 1)
+              setCardIdx(0)
+              setFlipped(false)
+              setChunkStats({ again: 0, hard: 0, good: 0, easy: 0 })
+              setPhase('session')
+            }}
+          >
+            Next Session {chunkIdx + 2} →
+          </button>
+        </div>
+      ) : (
+        <button style={S.startBtn} onClick={() => setPhase('configure')}>Back to Setup</button>
+      )}
     </div>
   )
 
   // ── Active session ────────────────────────────────────────────────────────
-  const card = sessionCards[idx]
+  const card = currentChunk[cardIdx]
+  if (!card) return null
+
   return (
     <div style={S.studyWrap}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', maxWidth: 480 }}>
         <button style={{ fontSize: 11, color: '#4060a0', letterSpacing: 1 }} onClick={() => setPhase('configure')}>← Exit</button>
-        <div style={S.studyCount}>{idx + 1} / {sessionCards.length}</div>
+        <div style={{ fontSize: 11, color: '#8890c0', letterSpacing: 1 }}>
+          Session {chunkIdx + 1}/{totalChunks} · Card {cardIdx + 1}/{currentChunk.length}
+        </div>
         <div style={{ width: 40 }} />
       </div>
-      <div style={S.progressOuter}><div style={{ ...S.progressInner, width: `${(idx / sessionCards.length) * 100}%` }} /></div>
+      <div style={S.progressOuter}><div style={{ ...S.progressInner, width: `${(cardIdx / currentChunk.length) * 100}%` }} /></div>
       <div style={S.cardMeta}>
         {card.category && <span style={S.cardCat}>{card.category}</span>}
         {card.value > 0 && <span style={S.cardValBadge}>${card.value.toLocaleString()}</span>}
@@ -1715,16 +2035,8 @@ function StudyView({ cards, setCards }) {
       </div>
       <div style={S.flashCard} onClick={() => setFlipped(!flipped)}>
         {!flipped
-          ? <div style={S.flashInner}>
-              <div style={S.flashSide}>CLUE</div>
-              <CardContent content={card.front} isHtml={card.hasMedia || cardIsHtml(card.front)} style={S.flashFrontText} />
-              <div style={S.flashHint}>tap to reveal</div>
-            </div>
-          : <div style={S.flashInner}>
-              <div style={{ ...S.flashSide, color: '#7cd992' }}>ANSWER</div>
-              <CardContent content={card.back} isHtml={card.hasMedia || cardIsHtml(card.back)} style={S.flashBackText} />
-              <div style={S.flashHint}>tap to flip back</div>
-            </div>}
+          ? <div style={S.flashInner}><div style={S.flashSide}>CLUE</div><CardContent content={card.front} isHtml={card.hasMedia || cardIsHtml(card.front)} style={S.flashFrontText} /><div style={S.flashHint}>tap to reveal</div></div>
+          : <div style={S.flashInner}><div style={{ ...S.flashSide, color: '#7cd992' }}>ANSWER</div><CardContent content={card.back} isHtml={card.hasMedia || cardIsHtml(card.back)} style={S.flashBackText} /><div style={S.flashHint}>tap to flip back</div></div>}
       </div>
       {flipped && (
         <div style={S.rateRow}>
@@ -1736,37 +2048,6 @@ function StudyView({ cards, setCards }) {
           ))}
         </div>
       )}
-    </div>
-  )
-}
-
-// ─── Media Storage Info ──────────────────────────────────────────────────────
-function MediaStorageInfo() {
-  const [stats, setStats] = useState(null)
-  const [clearing, setClearing] = useState(false)
-
-  useEffect(() => {
-    getMediaStats().then(setStats).catch(() => {})
-  }, [])
-
-  if (!stats || stats.count === 0) return null
-
-  async function handleClear() {
-    if (!confirm('Clear all stored media? Card images will no longer display.')) return
-    setClearing(true)
-    await clearAllMedia()
-    setStats({ count: 0, sizeKB: 0 })
-    setClearing(false)
-  }
-
-  return (
-    <div style={{ marginTop: 8, padding: '8px 12px', background: '#060b1a', borderRadius: 8, border: '1px solid #1a2040', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-      <span style={{ fontSize: 11, color: '#6070a0' }}>
-        📁 {stats.count} media files · {stats.sizeKB}KB stored
-      </span>
-      <button style={{ fontSize: 11, color: '#e57373', letterSpacing: 1 }} onClick={handleClear} disabled={clearing}>
-        {clearing ? '...' : 'Clear'}
-      </button>
     </div>
   )
 }
@@ -2099,7 +2380,7 @@ function GameHistoryRow({ game }) {
 }
 
 // ─── Summary / Stats View ─────────────────────────────────────────────────────
-function SummaryView({ coryatScore, singleBoard, doubleBoard, singleClueStates, doubleClueStates, gameHistory, episodeMeta, tournamentState, confidenceRatings }) {
+function SummaryView({ coryatScore, actualScore, fjAnswered, singleBoard, doubleBoard, singleClueStates, doubleClueStates, gameHistory, episodeMeta, tournamentState, confidenceRatings }) {
   const [historyView, setHistoryView] = useState(false)
   const [statsTab, setStatsTab] = useState('current') // current | weakness | speed | history
 
@@ -2271,6 +2552,8 @@ function SummaryView({ coryatScore, singleBoard, doubleBoard, singleClueStates, 
       {(tournamentState || episodeMeta?.contestants?.length > 0) && (
         <OpponentCoryatResult
           coryatScore={coryatScore}
+          actualScore={actualScore}
+          fjAnswered={fjAnswered}
           actualContestants={episodeMeta?.contestants?.length > 0
             ? episodeMeta.contestants.filter(c => c.name)
             : null}
@@ -2575,7 +2858,7 @@ const S = {
   toggleGroup: { display: 'flex', gap: 6 },
   toggleBtn: { flex: 1, fontSize: 12, fontWeight: 700, letterSpacing: 1, color: '#5060a0', background: 'rgba(255,255,255,0.04)', borderRadius: 6, padding: '8px 4px', fontFamily: "'Barlow Condensed', sans-serif", border: '1px solid #1a2460' },
   toggleActive: { color: '#f5c518', background: 'rgba(245,197,24,0.08)', borderColor: '#f5c518' },
-  chipRow: { display: 'flex', flexWrap: 'wrap', gap: 6 },
+  chipRow: { display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 120, overflowY: 'auto' },
   chip: { fontSize: 11, letterSpacing: 1, color: '#5060a0', background: 'rgba(255,255,255,0.04)', borderRadius: 20, padding: '5px 12px', fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 700, border: '1px solid #1a2460', whiteSpace: 'nowrap' },
   chipActive: { color: '#f5c518', background: 'rgba(245,197,24,0.08)', borderColor: '#f5c518' },
   configFooter: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, paddingTop: 4 },

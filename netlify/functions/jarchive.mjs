@@ -57,6 +57,8 @@ export const handler = async (event) => {
 
     const html = await res.text()
     const debugPageLength = html.length
+    // Show end of page to diagnose truncation
+    const htmlTail = html.slice(-300)
     const doc = parse(html)
 
     // ── Debug mode ────────────────────────────────────────────────────────────
@@ -83,6 +85,7 @@ export const handler = async (event) => {
           rawAroundClue: html.includes('clue_J_1_1')
             ? html.slice(html.indexOf('clue_J_1_1') - 100, html.indexOf('clue_J_1_1') + 800)
             : 'NOT FOUND',
+          htmlTail: html.slice(-300),
           hasDoubleJeopardyRound: !!doc.querySelector('#double_jeopardy_round'),
           doubleJeopardyCategories: (() => {
             const djEl = doc.querySelector('#double_jeopardy_round')

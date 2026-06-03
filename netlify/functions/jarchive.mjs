@@ -79,6 +79,12 @@ export const handler = async (event) => {
           rawAroundClue: html.includes('clue_J_1_1')
             ? html.slice(html.indexOf('clue_J_1_1') - 100, html.indexOf('clue_J_1_1') + 800)
             : 'NOT FOUND',
+          hasDoubleJeopardyRound: !!doc.querySelector('#double_jeopardy_round'),
+          doubleJeopardyCategories: (() => {
+            const djEl = doc.querySelector('#double_jeopardy_round')
+            if (!djEl) return 'DJ element not found'
+            return djEl.querySelectorAll('.category_name').map(el => el.text.trim())
+          })(),
           contestantHtml: (() => {
             // Find score-related HTML
             const scoreIdx = html.toLowerCase().indexOf('score')

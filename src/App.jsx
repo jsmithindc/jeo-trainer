@@ -11,6 +11,8 @@ import { getMediaStats, clearAllMedia } from './mediaStore.js'
 import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpisodeToCache, getEpisodeFromCache, pinEpisode, unpinEpisode, removeEpisodeFromCache, getCacheStats } from './storage.js'
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 
+const APP_VERSION = '1.0.0'
+
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
 
@@ -696,6 +698,7 @@ function Header({ coryatScore, actualScore, correctCount, incorrectCount, answer
         {episodeMeta
           ? <div style={S.logoSub}>#{episodeMeta.episodeNumber} · {episodeMeta.airDate}</div>
           : <div style={S.logoSub}>CORYAT & FLASHCARDS</div>}
+        <div style={{ fontSize: 8, color: '#2a3460', letterSpacing: 2, marginTop: 1 }}>v{APP_VERSION}</div>
       </div>
       <div style={S.scoreBox}>
         <div style={S.scoreLbl}>CORYAT SCORE</div>

@@ -1,43 +1,34 @@
 export async function fetchEpisode(episodeId = 'latest') {
-  // For 'latest', use the server function which handles season lookup
-  if (episodeId === 'latest') {
-    const res = await fetch('/.netlify/functions/jarchive?episode=latest')
-    const data = await res.json()
-    if (!res.ok) throw new Error(data.error || 'Failed to fetch episode')
-    return data
-  }
+  // Step 1: Try server-side fetch first (fast, works for most episodes)
+  const res = await fetch(`/.netlify/functions/jarchive?episode=${episodeId}`)
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Failed to fetch episode')
 
-  // For specific episodes: fetch j-archive directly from the browser via CORS proxy
-  // This bypasses the server IP truncation issue
-  const jarchiveUrl = `https://j-archive.com/showgame.php?game_id=${episodeId}`
-  const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(jarchiveUrl)}`
+  // Step 2: If DJ is missing, try client-side fetch via CORS proxy
+  // (recent episodes get truncated when fetched from server IP)
+  if (!data.doubleJeopardy && episodeId !== 'latest') {
+    console.log('DJ missing from server fetch, trying client-side fetch...')
+    try {
+      const jarchiveUrl = `https://j-archive.com/showgame.php?game_id=${episodeId}`
+      const proxyRes = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(jarchiveUrl)}`)
+      const proxyData = await proxyRes.json()
+      const html = proxyData.contents
 
-  try {
-    const proxyRes = await fetch(proxyUrl)
-    const proxyData = await proxyRes.json()
-    const html = proxyData.contents
-
-    if (!html || html.length < 50000) {
-      throw new Error('Incomplete page from proxy, falling back to server')
+      if (html && html.includes('double_jeopardy_round')) {
+        const parseRes = await fetch(`/.netlify/functions/jarchive?episode=${episodeId}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ html, episodeId })
+        })
+        const fullData = await parseRes.json()
+        if (fullData.doubleJeopardy) return fullData
+      }
+    } catch (err) {
+      console.warn('Client-side fetch failed:', err.message)
     }
-
-    // Send HTML to server function for parsing
-    const parseRes = await fetch('/.netlify/functions/jarchive?episode=' + episodeId + '&mode=parse', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ html, episodeId })
-    })
-    const data = await parseRes.json()
-    if (!parseRes.ok) throw new Error(data.error || 'Parse failed')
-    return data
-  } catch (err) {
-    // Fall back to server-side fetch
-    console.warn('Client-side fetch failed, falling back to server:', err.message)
-    const res = await fetch(`/.netlify/functions/jarchive?episode=${episodeId}`)
-    const data = await res.json()
-    if (!res.ok) throw new Error(data.error || 'Failed to fetch episode')
-    return data
   }
+
+  return data
 }
 
 export function episodeToBoard(episode, round = 'single') {

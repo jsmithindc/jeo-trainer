@@ -38,29 +38,30 @@ export const handler = async (event) => {
       }
     }
 
-    // ── Fetch episode page ────────────────────────────────────────────────────
+    // ── Fetch episode page (or use client-provided HTML) ────────────────────
     const url = `https://j-archive.com/showgame.php?game_id=${episodeId}`
-    const res = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Encoding': 'identity',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Cache-Control': 'no-cache',
-        'Pragma': 'no-cache',
-        'Sec-Fetch-Dest': 'document',
-        'Sec-Fetch-Mode': 'navigate',
-        'Sec-Fetch-Site': 'same-origin',
-        'Upgrade-Insecure-Requests': '1',
-        'Referer': 'https://j-archive.com/listseasons.php',
+    let html = clientHtml
+    if (!html) {
+      const res = await fetch(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Encoding': 'identity',
+          'Accept-Language': 'en-US,en;q=0.9',
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache',
+          'Sec-Fetch-Dest': 'document',
+          'Sec-Fetch-Mode': 'navigate',
+          'Sec-Fetch-Site': 'same-origin',
+          'Upgrade-Insecure-Requests': '1',
+          'Referer': 'https://j-archive.com/listseasons.php',
+        }
+      })
+      if (!res.ok) {
+        return { statusCode: 404, headers, body: JSON.stringify({ error: `Episode ${episodeId} not found (HTTP ${res.status})` }) }
       }
-    })
-
-    if (!res.ok) {
-      return { statusCode: 404, headers, body: JSON.stringify({ error: `Episode ${episodeId} not found (HTTP ${res.status})` }) }
+      html = await res.text()
     }
-
-    const html = await res.text()
     const debugPageLength = html.length
     // Show end of page to diagnose truncation
     const htmlTail = html.slice(-300)

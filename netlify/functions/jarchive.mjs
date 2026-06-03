@@ -147,7 +147,23 @@ export const handler = async (event) => {
 
     // ── Parse a round ─────────────────────────────────────────────────────────
     function parseRound(roundId) {
-      const roundEl = doc.querySelector(`#${roundId}`)
+      let roundEl = doc.querySelector(`#${roundId}`)
+
+      // Fallback: extract section from raw HTML and re-parse if querySelector fails
+      if (!roundEl) {
+        const startMarker = 'id="' + roundId + '"'
+        const startIdx = html.indexOf(startMarker)
+        if (startIdx >= 0) {
+          const nextRoundId = roundId === 'jeopardy_round' ? 'double_jeopardy_round' : 'final_jeopardy_round'
+          const endMarker = 'id="' + nextRoundId + '"'
+          const endIdx = html.indexOf(endMarker, startIdx)
+          const section = endIdx > startIdx
+            ? html.slice(startIdx - 5, endIdx)
+            : html.slice(startIdx - 5, startIdx + 60000)
+          roundEl = parse('<div ' + section + '</div>').querySelector('#' + roundId)
+        }
+      }
+
       if (!roundEl) return null
 
       const categoryNames = roundEl.querySelectorAll('.category_name').map(el => el.text.trim())

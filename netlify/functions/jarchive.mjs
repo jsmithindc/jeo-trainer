@@ -40,6 +40,10 @@ export const handler = async (event) => {
 
     // ── Fetch episode page (or use client-provided HTML) ────────────────────
     const url = `https://j-archive.com/showgame.php?game_id=${episodeId}`
+    let clientHtml = null
+    if (event.httpMethod === 'POST' && event.body) {
+      try { clientHtml = JSON.parse(event.body).html || null } catch {}
+    }
     let html = clientHtml
     if (!html) {
       const res = await fetch(url, {

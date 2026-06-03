@@ -19,7 +19,6 @@ export const handler = async (event) => {
           headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
         })
         const seasonsHtml = await seasonsRes.text()
-        // Find highest season number
         const seasonMatches = [...seasonsHtml.matchAll(/showseason\.php\?season=(\d+)/g)]
         const maxSeason = seasonMatches.reduce((max, m) => Math.max(max, parseInt(m[1])), 0)
         if (maxSeason > 0) {
@@ -29,46 +28,47 @@ export const handler = async (event) => {
           const epHtml = await epRes.text()
           const gameIds = [...epHtml.matchAll(/game_id=(\d+)/g)].map(m => parseInt(m[1]))
           const maxId = gameIds.length > 0 ? Math.max(...gameIds) : 0
-          episodeId = maxId > 0 ? String(maxId) : '9200'
+          if (maxId > 0) {
+            // Probe forward from the season's max to find the true latest
+            // (season page may be truncated by server, missing newest episodes)
+            let probeId = maxId
+            for (let i = 1; i <= 20; i++) {
+              try {
+                const probeRes = await fetch(`https://j-archive.com/showgame.php?game_id=${maxId + i}`, {
+                  method: 'HEAD',
+                  headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
+                })
+                if (probeRes.ok) probeId = maxId + i
+                else break
+              } catch { break }
+            }
+            episodeId = String(probeId)
+          } else {
+            episodeId = '9466'
+          }
         } else {
-          episodeId = '9200'
+          episodeId = '9466'
         }
       } catch {
-        episodeId = '9200' // fallback to a known recent episode
+        episodeId = '9466'
       }
     }
 
-    // ── Fetch episode page (or use client-provided HTML) ────────────────────
+    // ── Fetch episode page ────────────────────────────────────────────────────
     const url = `https://j-archive.com/showgame.php?game_id=${episodeId}`
-    let clientHtml = null
-    if (event.httpMethod === 'POST' && event.body) {
-      try { clientHtml = JSON.parse(event.body).html || null } catch {}
-    }
-    let html = clientHtml
-    if (!html) {
-      const res = await fetch(url, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Encoding': 'identity',
-          'Accept-Language': 'en-US,en;q=0.9',
-          'Cache-Control': 'no-cache',
-          'Pragma': 'no-cache',
-          'Sec-Fetch-Dest': 'document',
-          'Sec-Fetch-Mode': 'navigate',
-          'Sec-Fetch-Site': 'same-origin',
-          'Upgrade-Insecure-Requests': '1',
-          'Referer': 'https://j-archive.com/listseasons.php',
-        }
-      })
-      if (!res.ok) {
-        return { statusCode: 404, headers, body: JSON.stringify({ error: `Episode ${episodeId} not found (HTTP ${res.status})` }) }
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Referer': 'https://j-archive.com/',
       }
-      html = await res.text()
+    })
+
+    if (!res.ok) {
+      return { statusCode: 404, headers, body: JSON.stringify({ error: `Episode ${episodeId} not found (HTTP ${res.status})` }) }
     }
-    const debugPageLength = html.length
-    // Show end of page to diagnose truncation
-    const htmlTail = html.slice(-300)
+
+    const html = await res.text()
     const doc = parse(html)
 
     // ── Debug mode ────────────────────────────────────────────────────────────
@@ -95,12 +95,12 @@ export const handler = async (event) => {
           rawAroundClue: html.includes('clue_J_1_1')
             ? html.slice(html.indexOf('clue_J_1_1') - 100, html.indexOf('clue_J_1_1') + 800)
             : 'NOT FOUND',
-          htmlTail: html.slice(-300),
           hasDoubleJeopardyRound: !!doc.querySelector('#double_jeopardy_round'),
           doubleJeopardyCategories: (() => {
             const djEl = doc.querySelector('#double_jeopardy_round')
             if (!djEl) return 'DJ element not found'
-            return djEl.querySelectorAll('.category_name').map(el => el.text.trim())
+            const cats = djEl.querySelectorAll('.category_name').map(el => el.text.trim())
+            return cats
           })(),
           contestantHtml: (() => {
             // Find score-related HTML
@@ -147,23 +147,7 @@ export const handler = async (event) => {
 
     // ── Parse a round ─────────────────────────────────────────────────────────
     function parseRound(roundId) {
-      let roundEl = doc.querySelector(`#${roundId}`)
-
-      // Fallback: extract section from raw HTML and re-parse if querySelector fails
-      if (!roundEl) {
-        const startMarker = 'id="' + roundId + '"'
-        const startIdx = html.indexOf(startMarker)
-        if (startIdx >= 0) {
-          const nextRoundId = roundId === 'jeopardy_round' ? 'double_jeopardy_round' : 'final_jeopardy_round'
-          const endMarker = 'id="' + nextRoundId + '"'
-          const endIdx = html.indexOf(endMarker, startIdx)
-          const section = endIdx > startIdx
-            ? html.slice(startIdx - 5, endIdx)
-            : html.slice(startIdx - 5, startIdx + 60000)
-          roundEl = parse('<div ' + section + '</div>').querySelector('#' + roundId)
-        }
-      }
-
+      const roundEl = doc.querySelector(`#${roundId}`)
       if (!roundEl) return null
 
       const categoryNames = roundEl.querySelectorAll('.category_name').map(el => el.text.trim())
@@ -291,7 +275,12 @@ export const handler = async (event) => {
       return {
         statusCode: 422,
         headers,
-        body: JSON.stringify({ error: `Could not parse episode ${episodeId}. Add ?debug=1 to diagnose.`, titleFound: titleText })
+        body: JSON.stringify({
+          error: `Episode ${episodeId} not yet available or could not be parsed.`,
+          titleFound: titleText,
+          hint: titleText ? 'Page found but clues could not be extracted — episode may not be archived yet.' : 'Episode not found — try a different episode ID.',
+          episodeId,
+        })
       }
     }
 

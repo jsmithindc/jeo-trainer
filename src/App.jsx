@@ -11,7 +11,7 @@ import { getMediaStats, clearAllMedia } from './mediaStore.js'
 import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpisodeToCache, getEpisodeFromCache, pinEpisode, unpinEpisode, removeEpisodeFromCache, getCacheStats } from './storage.js'
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 
-const APP_VERSION = '1.0.0'
+const APP_VERSION = '1.1.1'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -129,7 +129,15 @@ export default function App() {
       })
       .catch(() => {}) // non-critical
     // Load latest episode, fall back to known recent ID
-    loadEpisode('latest', true).catch(() => loadEpisode('9200', true))
+    loadEpisode('latest', true).catch(() => {
+      // latest failed - try recent known IDs stepping back
+      const tryIds = ['9466', '9465', '9464', '9460', '9450']
+      const tryNext = (ids) => {
+        if (!ids.length) return
+        loadEpisode(ids[0], true).catch(() => tryNext(ids.slice(1)))
+      }
+      tryNext(tryIds)
+    })
   }, [authChecked])
 
   // ── Sync from Supabase when user logs in ──────────────────────────────────
@@ -1014,7 +1022,7 @@ function FinalJeopardyModal({ fj, onAnswer, onClose }) {
         <button style={S.closeX} onClick={onClose}>✕</button>
         <div style={{ fontSize: 10, letterSpacing: 4, color: '#4dd0e1', marginBottom: 4 }}>FINAL JEOPARDY</div>
         <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 22, color: '#4dd0e1', letterSpacing: 2, marginBottom: 16 }}>{fj.category}</div>
-        <div style={S.modalText}>{fj.clue}</div>
+        <ClueText text={fj.clue} style={S.modalText} />
         <div style={{ fontSize: 11, color: '#6070a0', marginBottom: 12, letterSpacing: 1 }}>Not counted in Coryat score</div>
         {!showAnswer
           ? <button style={{ ...S.revealBtn, background: '#4dd0e1' }} onClick={() => setShowAnswer(true)}>Reveal Answer</button>
@@ -1353,8 +1361,8 @@ function CategorySearch({ onSelect, onClose }) {
           )}
           {results.map((ep, i) => (
             <button key={`${ep.gameId}-${i}`} style={S.episodeRow} onClick={() => onSelect(ep.gameId)}>
-              <span style={S.epShowNum}>#{ep.showNumber || ep.gameId}</span>
               <span style={S.epDate}>{ep.airDate}</span>
+              <span style={{ fontSize: 10, color: '#4060a0' }}>#{ep.gameId}</span>
               <span style={S.epArrow}>▶</span>
             </button>
           ))}
@@ -1421,13 +1429,78 @@ function EpisodeBrowser({ onSelect, onClose }) {
           {!loading && !error && episodes.length === 0 && <div style={S.browserLoading}>No episodes found</div>}
           {!loading && episodes.map((ep, i) => (
             <button key={ep.gameId} style={S.episodeRow} onClick={() => onSelect(ep.gameId, episodes, i)}>
-              <span style={S.epShowNum}>#{ep.showNumber}</span>
               <span style={S.epDate}>{ep.airDate}</span>
+              <span style={{ fontSize: 10, color: '#4060a0' }}>#{ep.gameId}</span>
               <span style={S.epArrow}>▶</span>
             </button>
           ))}
         </div>
       </div>
+    </div>
+  )
+}
+
+// ─── Clue Text renderer ──────────────────────────────────────────────────────
+// Replaces j-archive media links with inline images
+function ClueText({ text, style }) {
+  if (!text) return null
+
+  // Check for j-archive media links: <a href="...j-archive.com/media/...">here</a>
+  const mediaRegex = /https:\/\/(?:www\.)?j-archive\.com\/media\/[^\s"'>]+\.(jpg|jpeg|png|gif|mp4|mp3)/gi
+  const hasMedia = mediaRegex.test(text)
+  // Also check for plain anchor tags wrapping media URLs
+  const hasAnchor = text.includes('j-archive.com/media/')
+
+  if (!hasAnchor) {
+    return <div style={style}>{text}</div>
+  }
+
+  // Extract all media URLs from anchor tags
+  const parts = []
+  let remaining = text
+  const anchorRegex = /<a[^>]+href="(https?:\/\/(?:www\.)?j-archive\.com\/media\/[^"]+)"[^>]*>[^<]*<\/a>/gi
+  let match
+  let lastIndex = 0
+  const plainText = text.replace(/<[^>]+>/g, '') // strip all HTML for plain display
+
+  // Parse anchor tags and replace with images
+  const anchorPattern = /<a[^>]+href="(https?:\/\/(?:www\.)?j-archive\.com\/media\/([^"]+))"[^>]*>([^<]*)<\/a>/gi
+  const segments = []
+  let lastEnd = 0
+  let m
+
+  // Use a simpler approach - regex on the raw text
+  const urlPattern = /https?:\/\/(?:www\.)?j-archive\.com\/media\/\S+\.(?:jpg|jpeg|png|gif)/gi
+  const urls = []
+  let urlMatch
+  while ((urlMatch = urlPattern.exec(text)) !== null) {
+    urls.push(urlMatch[0])
+  }
+
+  // Strip HTML tags to get clean clue text
+  const cleanText = text
+    .replace(/<a[^>]+href="(https?:\/\/j-archive[^"]+)"[^>]*>[^<]*<\/a>/gi, '') // remove media links
+    .replace(/<a[^>]+href="(https?:\/\/www\.j-archive[^"]+)"[^>]*>[^<]*<\/a>/gi, '')
+    .replace(/<[^>]+>/g, '') // strip remaining HTML
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ')
+    .trim()
+
+  return (
+    <div style={style}>
+      {urls.length > 0 && (
+        <div style={{ marginBottom: 10, display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}>
+          {urls.map((url, i) => (
+            <img
+              key={i}
+              src={url}
+              alt="Clue image"
+              style={{ maxWidth: '100%', maxHeight: 220, borderRadius: 8, objectFit: 'contain' }}
+              onError={e => { e.target.style.display = 'none' }}
+            />
+          ))}
+        </div>
+      )}
+      <span>{cleanText}</span>
     </div>
   )
 }
@@ -1570,7 +1643,7 @@ function TimedClueModal({ clue, category, onMark, onClose }) {
         {clue.isDailyDouble && <div style={S.ddBadge}>⭐ DAILY DOUBLE</div>}
 
         {/* Clue text */}
-        <div style={S.modalText}>{clue.answer}</div>
+        <ClueText text={clue.answer} style={S.modalText} />
 
         {/* Phase-specific controls */}
         {phase === 'reading' && (
@@ -1714,7 +1787,7 @@ function ClueModal({ clue, category, showAnswer, onReveal, onMark, onClose, isRe
             Previously: {prevLabels[previousResult]} — change answer?
           </div>
         )}
-        <div style={S.modalText}>{clue.answer}</div>
+        <ClueText text={clue.answer} style={S.modalText} />
         {!showAnswer
           ? <button style={S.revealBtn} onClick={onReveal}>Reveal Answer</button>
           : <>
@@ -2028,18 +2101,53 @@ function StudyView({ cards, setCards }) {
         <div style={{ width: 40 }} />
       </div>
       <div style={S.progressOuter}><div style={{ ...S.progressInner, width: `${(cardIdx / currentChunk.length) * 100}%` }} /></div>
-      <div style={S.cardMeta}>
-        {card.category && <span style={S.cardCat}>{card.category}</span>}
-        {card.value > 0 && <span style={S.cardValBadge}>${card.value.toLocaleString()}</span>}
-        <span style={{ ...S.cardSource, color: card.source === 'missed' ? '#e57373' : card.source === 'anki' ? '#4dd0e1' : '#81c784' }}>
-          {card.source === 'missed' ? 'MISSED' : card.source === 'anki' ? 'ANKI' : 'MANUAL'}
-        </span>
-        {card.dueAt > now && <span style={{ ...S.cardSource, color: '#4060a0' }}>EARLY</span>}
-      </div>
       <div style={S.flashCard} onClick={() => setFlipped(!flipped)}>
+        {/* Category header — always visible on both faces */}
+        {(card.category || card.value > 0) && (
+          <div style={{
+            width: '100%',
+            background: 'linear-gradient(135deg, #0a1040, #060b1a)',
+            borderBottom: '1px solid #1a2460',
+            padding: '10px 16px',
+            borderRadius: '12px 12px 0 0',
+            textAlign: 'center',
+          }}>
+            {card.category && (
+              <div style={{
+                fontFamily: "'Bebas Neue', sans-serif",
+                fontSize: 15,
+                letterSpacing: 2,
+                color: '#f5c518',
+                lineHeight: 1.2,
+                marginBottom: card.value > 0 ? 3 : 0,
+              }}>
+                {card.category}
+              </div>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'center', gap: 8, alignItems: 'center' }}>
+              {card.value > 0 && (
+                <span style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 13, color: '#8890c0' }}>
+                  ${card.value.toLocaleString()}
+                </span>
+              )}
+              <span style={{ fontSize: 9, letterSpacing: 2, color: card.source === 'missed' ? '#e57373' : card.source === 'anki' ? '#4dd0e1' : '#81c784' }}>
+                {card.source === 'missed' ? 'MISSED' : card.source === 'anki' ? 'ANKI' : 'MANUAL'}
+              </span>
+              {card.dueAt > now && <span style={{ fontSize: 9, color: '#4060a0', letterSpacing: 1 }}>EARLY</span>}
+            </div>
+          </div>
+        )}
         {!flipped
-          ? <div style={S.flashInner}><div style={S.flashSide}>CLUE</div><CardContent content={card.front} isHtml={card.hasMedia || cardIsHtml(card.front)} style={S.flashFrontText} /><div style={S.flashHint}>tap to reveal</div></div>
-          : <div style={S.flashInner}><div style={{ ...S.flashSide, color: '#7cd992' }}>ANSWER</div><CardContent content={card.back} isHtml={card.hasMedia || cardIsHtml(card.back)} style={S.flashBackText} /><div style={S.flashHint}>tap to flip back</div></div>}
+          ? <div style={S.flashInner}>
+              <div style={S.flashSide}>CLUE</div>
+              <CardContent content={card.front} isHtml={card.hasMedia || cardIsHtml(card.front)} style={S.flashFrontText} />
+              <div style={S.flashHint}>tap to reveal</div>
+            </div>
+          : <div style={S.flashInner}>
+              <div style={{ ...S.flashSide, color: '#7cd992' }}>ANSWER</div>
+              <CardContent content={card.back} isHtml={card.hasMedia || cardIsHtml(card.back)} style={S.flashBackText} />
+              <div style={S.flashHint}>tap to flip back</div>
+            </div>}
       </div>
       {flipped && (
         <div style={S.rateRow}>
@@ -2144,6 +2252,8 @@ function DeckView({ cards, setCards, user }) {
   async function handleApkgImport(e) {
     const file = e.target.files[0]; if (!file) return
     setImporting(true); setImportError(null); setImportResult(null)
+    // Yield to browser to render the loading state before heavy WASM work begins
+    await new Promise(resolve => setTimeout(resolve, 80))
     try {
       const result = await parseApkg(file, (progress) => {
         // Could update progress UI here if needed
@@ -2196,7 +2306,14 @@ function DeckView({ cards, setCards, user }) {
           </div>
           <div style={S.importHowTo}><b>Anki:</b> File → Export → Include media ✓ → format: Anki Deck Package (.apkg)</div>
           <input ref={fileRef} type="file" accept=".apkg" onChange={handleApkgImport} style={{ display: 'none' }} />
-          {importing ? <div style={S.importStatus}>⏳ Parsing deck and storing media...</div> : <button style={S.startBtn} onClick={() => fileRef.current.click()}>Choose .apkg File</button>}
+          {importing ? (
+            <div style={{ textAlign: 'center' }}>
+              <div style={S.importStatus}>⏳ Parsing deck...</div>
+              <div style={{ fontSize: 11, color: '#4060a0', marginTop: 6, lineHeight: 1.6 }}>
+                This may take 10–30 seconds for large decks.<br/>The screen may be briefly unresponsive — that's normal.
+              </div>
+            </div>
+          ) : <button style={S.startBtn} onClick={() => fileRef.current.click()}>Choose .apkg File</button>}
           {importResult && (
             <div style={S.importSuccess}>
               ✅ Imported {importResult.added} cards!
@@ -2398,6 +2515,14 @@ function SummaryView({ coryatScore, actualScore, fjAnswered, singleBoard, double
   const last10Avg = last10.length > 0 ? Math.round(last10.reduce((s, g) => s + g.coryatScore, 0) / last10.length) : null
   const best = gameHistory.length > 0 ? Math.max(...gameHistory.map(g => g.coryatScore)) : null
 
+  // Actual show score averages (includes DD/FJ wagers)
+  const gamesWithActual = gameHistory.filter(g => g.actualScore !== undefined && g.actualScore !== null)
+  const allTimeActualAvg = gamesWithActual.length > 0 ? Math.round(gamesWithActual.reduce((s, g) => s + g.actualScore, 0) / gamesWithActual.length) : null
+  const last10Actual = gamesWithActual.slice(0, 10)
+  const last10ActualAvg = last10Actual.length > 0 ? Math.round(last10Actual.reduce((s, g) => s + g.actualScore, 0) / last10Actual.length) : null
+  const bestActual = gamesWithActual.length > 0 ? Math.max(...gamesWithActual.map(g => g.actualScore)) : null
+  const wageringImpact = (allTimeAvg !== null && allTimeActualAvg !== null) ? allTimeActualAvg - allTimeAvg : null
+
   function calcCategoryBreakdown(board, states) {
     if (!board) return []
     return board.categories.map((cat, ci) => {
@@ -2486,7 +2611,9 @@ function SummaryView({ coryatScore, actualScore, fjAnswered, singleBoard, double
       {gameHistory.length > 0 && (
         <div style={S.catBreakdown}>
           <div style={S.sectionTitle}>ALL-TIME STATS ({gameHistory.length} game{gameHistory.length !== 1 ? 's' : ''})</div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+          {/* Coryat averages */}
+          <div style={{ fontSize: 9, color: '#4060a0', letterSpacing: 2, marginBottom: 6 }}>CORYAT SCORE</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 12 }}>
             {[['AVG', allTimeAvg], ['LAST 10', last10Avg], ['BEST', best]].map(([lbl, val]) => (
               <div key={lbl} style={{ ...S.statCell, padding: '10px 4px' }}>
                 <div style={{ ...S.statN, fontSize: 20, color: '#f5c518' }}>{val !== null ? (val >= 0 ? '+' : '') + val.toLocaleString() : '—'}</div>
@@ -2494,6 +2621,34 @@ function SummaryView({ coryatScore, actualScore, fjAnswered, singleBoard, double
               </div>
             ))}
           </div>
+
+          {/* Actual show score averages */}
+          {gamesWithActual.length > 0 && (
+            <>
+              <div style={{ fontSize: 9, color: '#4060a0', letterSpacing: 2, marginBottom: 6 }}>ACTUAL SHOW SCORE (WITH WAGERS)</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 12 }}>
+                {[['AVG', allTimeActualAvg], ['LAST 10', last10ActualAvg], ['BEST', bestActual]].map(([lbl, val]) => (
+                  <div key={lbl} style={{ ...S.statCell, padding: '10px 4px' }}>
+                    <div style={{ ...S.statN, fontSize: 20, color: '#4dd0e1' }}>{val !== null ? (val >= 0 ? '+' : '') + val.toLocaleString() : '—'}</div>
+                    <div style={S.statLbl}>{lbl}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Wagering impact */}
+              {wageringImpact !== null && (
+                <div style={{ background: '#060b1a', borderRadius: 8, padding: '10px 14px', border: '1px solid #1a2040', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div>
+                    <div style={{ fontSize: 11, color: '#8890c0' }}>Wagering impact (avg)</div>
+                    <div style={{ fontSize: 10, color: '#4060a0', letterSpacing: 1 }}>Actual score vs Coryat</div>
+                  </div>
+                  <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 24, color: wageringImpact >= 0 ? '#4caf7d' : '#e57373' }}>
+                    {wageringImpact >= 0 ? '+' : ''}{wageringImpact.toLocaleString()}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
         </div>
       )}
 
@@ -2809,8 +2964,8 @@ const S = {
   cardCat: { fontSize: 10, letterSpacing: 2, color: '#f5c518', background: 'rgba(245,197,24,0.08)', borderRadius: 4, padding: '2px 8px' },
   cardValBadge: { fontSize: 10, color: '#8890c0', background: 'rgba(255,255,255,0.05)', borderRadius: 4, padding: '2px 8px' },
   cardSource: { fontSize: 10, letterSpacing: 2, borderRadius: 4, padding: '2px 8px', background: 'rgba(255,255,255,0.05)' },
-  flashCard: { width: '100%', maxWidth: 480, minHeight: 240, background: 'linear-gradient(150deg,#0f1e6e,#060b1a)', border: '2px solid #2a3580', borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', boxShadow: '0 8px 32px rgba(0,0,0,0.4)' },
-  flashInner: { padding: 24, textAlign: 'center', width: '100%' },
+  flashCard: { width: '100%', maxWidth: 480, minHeight: 240, background: 'linear-gradient(150deg,#0f1e6e,#060b1a)', border: '2px solid #2a3580', borderRadius: 14, display: 'flex', flexDirection: 'column', alignItems: 'stretch', cursor: 'pointer', boxShadow: '0 8px 32px rgba(0,0,0,0.4)', overflow: 'hidden' },
+  flashInner: { padding: 24, textAlign: 'center', width: '100%', flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' },
   flashSide: { fontSize: 10, letterSpacing: 4, color: '#f5c518', marginBottom: 12 },
   flashFrontText: { fontSize: 17, color: '#e8e8f0', lineHeight: 1.55 },
   flashBackText: { fontSize: 20, color: '#7cd992', fontStyle: 'italic', lineHeight: 1.55 },

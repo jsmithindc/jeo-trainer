@@ -61,18 +61,43 @@ export const handler = async (event) => {
     const epHtml = await epRes.text()
 
     // Episodes are linked as showgame.php?game_id=XXXX
+    // j-archive season page format changed — link text is now "aired 2026-06-03"
+    // We derive show number from game title if available, otherwise use gameId
     const epMatches = [...epHtml.matchAll(/href="showgame\.php\?game_id=(\d+)"[^>]*>([^<]+)</g)]
 
     const episodes = epMatches.map(m => {
       const gameId = m[1]
       const text = m[2].trim()
-      // Format: "#9200, Monday, April 14, 2025"
-      const showMatch = text.match(/#(\d+)/)
-      const showNumber = showMatch ? showMatch[1] : ''
-      const dateMatch = text.match(/,\s*(.+)$/)
-      const airDate = dateMatch ? dateMatch[1].trim() : text
+
+      // Try to extract show number from text (old format: "#9576, Monday, June 1, 2026")
+      const showMatch = text.match(/#(\d{4,})/)
+      let showNumber = showMatch ? showMatch[1] : ''
+
+      // New format: "aired 2026-06-03" — use gameId as display number fallback
+      // Also extract date from either format
+      let airDate = ''
+      if (text.includes('aired')) {
+        // New format: "aired&#160;2026-06-03" or "aired 2026-06-03"
+        const dateMatch = text.match(/(\d{4}-\d{2}-\d{2})/)
+        if (dateMatch) {
+          airDate = dateMatch[1]
+          // Format nicely: 2026-06-03 → June 3, 2026
+          try {
+            const d = new Date(dateMatch[1] + 'T12:00:00')
+            airDate = d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+          } catch {}
+        }
+        // Use gameId as show number placeholder if we don't have a real show number
+        if (!showNumber) showNumber = gameId
+      } else {
+        // Old format with show number in text
+        const dateMatch = text.match(/,\s*(.+)$/)
+        airDate = dateMatch ? dateMatch[1].trim() : text
+        if (!showNumber) showNumber = gameId
+      }
+
       return { gameId, showNumber, airDate, season: targetSeason }
-    }).filter(ep => ep.showNumber)
+    }).filter(ep => ep.gameId && ep.airDate)
 
     // Filter by search
     let filtered = episodes

@@ -2166,6 +2166,37 @@ function StudyView({ cards, setCards }) {
   )
 }
 
+// ─── Media Storage Info ──────────────────────────────────────────────────────
+function MediaStorageInfo() {
+  const [stats, setStats] = React.useState(null)
+  const [clearing, setClearing] = React.useState(false)
+
+  React.useEffect(() => {
+    getMediaStats().then(setStats).catch(() => {})
+  }, [])
+
+  if (!stats || stats.count === 0) return null
+
+  async function handleClear() {
+    if (!confirm('Clear all stored media? Card images will no longer display.')) return
+    setClearing(true)
+    await clearAllMedia()
+    setStats({ count: 0, sizeKB: 0 })
+    setClearing(false)
+  }
+
+  return (
+    React.createElement('div', {style: { marginTop: 8, padding: '8px 12px', background: '#060b1a', borderRadius: 8, border: '1px solid #1a2040', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }},
+      React.createElement('span', {style: { fontSize: 11, color: '#6070a0' }},
+        '📁 ' + stats.count + ' media files · ' + stats.sizeKB + 'KB stored'
+      ),
+      React.createElement('button', {style: { fontSize: 11, color: '#e57373', letterSpacing: 1 }, onClick: handleClear, disabled: clearing},
+        clearing ? '...' : 'Clear'
+      )
+    )
+  )
+}
+
 // ─── Deck View ────────────────────────────────────────────────────────────────
 function DeckView({ cards, setCards, user }) {
   const [subview, setSubview] = useState('list')

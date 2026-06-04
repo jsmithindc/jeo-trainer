@@ -29,20 +29,7 @@ export const handler = async (event) => {
           const gameIds = [...epHtml.matchAll(/game_id=(\d+)/g)].map(m => parseInt(m[1]))
           const maxId = gameIds.length > 0 ? Math.max(...gameIds) : 0
           if (maxId > 0) {
-            // Probe forward from the season's max to find the true latest
-            // (season page may be truncated by server, missing newest episodes)
-            let probeId = maxId
-            for (let i = 1; i <= 20; i++) {
-              try {
-                const probeRes = await fetch(`https://j-archive.com/showgame.php?game_id=${maxId + i}`, {
-                  method: 'HEAD',
-                  headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
-                })
-                if (probeRes.ok) probeId = maxId + i
-                else break
-              } catch { break }
-            }
-            episodeId = String(probeId)
+            episodeId = String(maxId)
           } else {
             episodeId = '9466'
           }

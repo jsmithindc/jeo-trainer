@@ -706,7 +706,7 @@ function Header({ coryatScore, actualScore, correctCount, incorrectCount, answer
         {episodeMeta
           ? <div style={S.logoSub}>#{episodeMeta.episodeNumber} · {episodeMeta.airDate}</div>
           : <div style={S.logoSub}>CORYAT & FLASHCARDS</div>}
-        <div style={{ fontSize: 8, color: '#2a3460', letterSpacing: 2, marginTop: 1 }}>v{APP_VERSION}</div>
+        <div style={{ fontSize: 11, color: '#5060a0', letterSpacing: 1, marginTop: 2 }}>v{APP_VERSION}</div>
       </div>
       <div style={S.scoreBox}>
         <div style={S.scoreLbl}>CORYAT</div>

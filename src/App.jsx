@@ -2168,10 +2168,10 @@ function StudyView({ cards, setCards }) {
 
 // ─── Media Storage Info ──────────────────────────────────────────────────────
 function MediaStorageInfo() {
-  const [stats, setStats] = React.useState(null)
-  const [clearing, setClearing] = React.useState(false)
+  const [stats, setStats] = useState(null)
+  const [clearing, setClearing] = useState(false)
 
-  React.useEffect(() => {
+  useEffect(() => {
     getMediaStats().then(setStats).catch(() => {})
   }, [])
 
@@ -2186,14 +2186,14 @@ function MediaStorageInfo() {
   }
 
   return (
-    React.createElement('div', {style: { marginTop: 8, padding: '8px 12px', background: '#060b1a', borderRadius: 8, border: '1px solid #1a2040', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }},
-      React.createElement('span', {style: { fontSize: 11, color: '#6070a0' }},
-        '📁 ' + stats.count + ' media files · ' + stats.sizeKB + 'KB stored'
-      ),
-      React.createElement('button', {style: { fontSize: 11, color: '#e57373', letterSpacing: 1 }, onClick: handleClear, disabled: clearing},
-        clearing ? '...' : 'Clear'
-      )
-    )
+    <div style={{ marginTop: 8, padding: '8px 12px', background: '#060b1a', borderRadius: 8, border: '1px solid #1a2040', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <span style={{ fontSize: 11, color: '#6070a0' }}>
+        📁 {stats.count} media files · {stats.sizeKB}KB stored
+      </span>
+      <button style={{ fontSize: 11, color: '#e57373', letterSpacing: 1 }} onClick={handleClear} disabled={clearing}>
+        {clearing ? '...' : 'Clear'}
+      </button>
+    </div>
   )
 }
 

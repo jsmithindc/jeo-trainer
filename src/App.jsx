@@ -7,11 +7,11 @@ import { fetchEpisode, episodeToBoard, searchEpisodesByCategory } from './jarchi
 import { supabase, signIn, signUp, resetPassword, signOut, loadRemoteData, saveRemoteData, mergeData, saveGameStateRemote, loadGameStateRemote, uploadMedia } from './supabase.js'
 import { buildCategoryHeatMap, buildValueBreakdown, predictCoryat, exportToApkg, getMetaCategory, META_CATEGORY_NAMES } from './analytics.js'
 import { CardContent, cardIsHtml } from './CardContent.jsx'
-import { getMediaStats, clearAllMedia } from './mediaStore.js'
+import { getMediaStats, clearAllMedia, getMedia } from './mediaStore.js'
 import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpisodeToCache, getEpisodeFromCache, pinEpisode, unpinEpisode, removeEpisodeFromCache, getCacheStats } from './storage.js'
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 
-const APP_VERSION = '1.1.1'
+const APP_VERSION = '1.1.2'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -709,11 +709,14 @@ function Header({ coryatScore, actualScore, correctCount, incorrectCount, answer
         <div style={{ fontSize: 8, color: '#2a3460', letterSpacing: 2, marginTop: 1 }}>v{APP_VERSION}</div>
       </div>
       <div style={S.scoreBox}>
-        <div style={S.scoreLbl}>CORYAT SCORE</div>
+        <div style={S.scoreLbl}>CORYAT</div>
         <div style={{ ...S.scoreVal, color }}>{coryatScore >= 0 ? '+' : ''}{coryatScore.toLocaleString()}</div>
-        {actualScore !== coryatScore && (
-          <div style={{ fontSize: 9, color: '#6070a0', letterSpacing: 1 }}>
-            show: {actualScore >= 0 ? '+' : ''}{actualScore.toLocaleString()}
+        {answeredCount > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 1 }}>
+            <div style={{ fontSize: 9, color: '#4060a0', letterSpacing: 1 }}>SHOW</div>
+            <div style={{ fontSize: 12, fontFamily: "'Bebas Neue', sans-serif", color: actualScore !== coryatScore ? '#4dd0e1' : '#4060a0' }}>
+              {actualScore >= 0 ? '+' : ''}{actualScore.toLocaleString()}
+            </div>
           </div>
         )}
       </div>
@@ -2249,15 +2252,23 @@ function DeckView({ cards, setCards, user }) {
     return (card.lapses || 0) >= 4
   }
 
+  const [importProgress, setImportProgress] = useState('')
+
   async function handleApkgImport(e) {
     const file = e.target.files[0]; if (!file) return
-    setImporting(true); setImportError(null); setImportResult(null)
-    // Yield to browser to render the loading state before heavy WASM work begins
-    await new Promise(resolve => setTimeout(resolve, 80))
+    setImporting(true); setImportError(null); setImportResult(null); setImportProgress('Starting...')
+
     try {
+      // Parse in chunks using scheduler to avoid blocking UI
+      // Falls back to parseApkg which uses requestIdleCallback internally
+      setImportProgress('Unzipping deck...')
       const result = await parseApkg(file, (progress) => {
-        // Could update progress UI here if needed
+        if (progress.phase === 'media') setImportProgress(`Storing media ${progress.stored}/${progress.total}...`)
+        else if (progress.phase === 'upload') setImportProgress(`Uploading media ${progress.stored}/${progress.total}...`)
+        else if (progress.phase === 'cards') setImportProgress(`Parsing ${progress.processed}/${progress.total} cards...`)
+        else if (progress.phase === 'sql') setImportProgress('Loading database...')
       }, user)
+
       const imported = result.cards
       let added = 0
       setCards(prev => {
@@ -2265,9 +2276,14 @@ function DeckView({ cards, setCards, user }) {
         const toAdd = imported.filter(c => { if (existing.has(c.front)) return false; added++; return true })
         return [...prev, ...toAdd]
       })
-      setTimeout(() => setImportResult({ added: imported.length, mediaCount: result.mediaCount }), 100)
-    } catch (err) { setImportError(err.message || String(err)) }
-    finally { setImporting(false); e.target.value = '' }
+      setImportResult({ added: imported.length, mediaCount: result.mediaCount })
+    } catch (err) {
+      setImportError(err.message || String(err))
+    } finally {
+      setImporting(false)
+      setImportProgress('')
+      e.target.value = ''
+    }
   }
 
   const leeches = cards.filter(c => (c.lapses || 0) >= 4)
@@ -2308,9 +2324,9 @@ function DeckView({ cards, setCards, user }) {
           <input ref={fileRef} type="file" accept=".apkg" onChange={handleApkgImport} style={{ display: 'none' }} />
           {importing ? (
             <div style={{ textAlign: 'center' }}>
-              <div style={S.importStatus}>⏳ Parsing deck...</div>
+              <div style={S.importStatus}>⏳ {importProgress || 'Importing...'}</div>
               <div style={{ fontSize: 11, color: '#4060a0', marginTop: 6, lineHeight: 1.6 }}>
-                This may take 10–30 seconds for large decks.<br/>The screen may be briefly unresponsive — that's normal.
+                Large decks may take 15–30 seconds. The app stays responsive.
               </div>
             </div>
           ) : <button style={S.startBtn} onClick={() => fileRef.current.click()}>Choose .apkg File</button>}

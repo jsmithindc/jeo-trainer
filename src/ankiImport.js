@@ -69,8 +69,11 @@ export async function parseApkg(file, onProgress = null, user = null) {
   }
 
   // 4. Load sql.js
+  if (onProgress) onProgress({ phase: 'sql', message: 'Loading database...' })
+  await new Promise(r => setTimeout(r, 50)) // yield to browser
   const initSqlJs = (await import('sql.js')).default
   const SQL = await initSqlJs({ locateFile: () => '/sql-wasm.wasm' })
+  await new Promise(r => setTimeout(r, 50)) // yield again after heavy WASM init
 
   // 5. Find database — check all possible format names
   const dbFile = zip.file('collection.anki21') ||

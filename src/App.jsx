@@ -11,7 +11,7 @@ import { getMediaStats, clearAllMedia, getMedia } from './mediaStore.js'
 import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpisodeToCache, getEpisodeFromCache, pinEpisode, unpinEpisode, removeEpisodeFromCache, getCacheStats } from './storage.js'
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 
-const APP_VERSION = '1.2.0'
+const APP_VERSION = '1.3.0'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -77,6 +77,10 @@ export default function App() {
   const [actualScore, setActualScore] = useState(0) // real show score including wagers
   const [wagerAmount, setWagerAmount] = useState(null) // pending wager
   const [lastClueResult, setLastClueResult] = useState(null) // 'correct' | 'incorrect' | 'pass'
+  const [boardControl, setBoardControl] = useState('player') // 'player' | 'opponent'
+  const [opponentPickTimeout, setOpponentPickTimeout] = useState(null)
+  const boardControlRef = useRef('player')
+  const opponentCategoryRef = useRef(null) // category opponent is currently working through
   const [showDJPrompt, setShowDJPrompt] = useState(false)
   const [resumePrompt, setResumePrompt] = useState(null) // saved game state to restore
   const [showCache, setShowCache] = useState(false)
@@ -254,10 +258,80 @@ export default function App() {
   // Keep ref in sync so callbacks always see current tournamentMode
   useEffect(() => { tournamentModeRef.current = tournamentMode }, [tournamentMode])
 
+  // Keep boardControl ref in sync
+  useEffect(() => { boardControlRef.current = boardControl }, [boardControl])
+
+  // Opponent clue selection logic
+  function selectOpponentClue(board, clueStates) {
+    if (!board?.categories) return null
+    const unanswered = []
+    board.categories.forEach((cat, ci) => {
+      cat.clues.forEach((clue, ri) => {
+        if ((clueStates[`${ci}-${ri}`] || 'unanswered') === 'unanswered') {
+          unanswered.push({ ci, ri, value: clue.value, categoryName: cat.name })
+        }
+      })
+    })
+    if (unanswered.length === 0) return null
+
+    // 70% chance: continue in current category (or pick lowest available in a category)
+    // 30% chance: switch to a new category
+    const currentCat = opponentCategoryRef.current
+    const inCurrentCat = currentCat !== null
+      ? unanswered.filter(c => c.ci === currentCat)
+      : []
+
+    let pick = null
+    if (inCurrentCat.length > 0 && Math.random() < 0.7) {
+      // Continue in current category, pick lowest value
+      pick = inCurrentCat.sort((a, b) => a.value - b.value)[0]
+    } else {
+      // Pick a new category — prefer ones with multiple unanswered clues
+      const categories = [...new Set(unanswered.map(c => c.ci))]
+      // Weight categories by number of remaining clues
+      const weights = categories.map(ci => unanswered.filter(c => c.ci === ci).length)
+      const totalWeight = weights.reduce((a, b) => a + b, 0)
+      let rand = Math.random() * totalWeight
+      let chosenCat = categories[0]
+      for (let i = 0; i < categories.length; i++) {
+        rand -= weights[i]
+        if (rand <= 0) { chosenCat = categories[i]; break }
+      }
+      opponentCategoryRef.current = chosenCat
+      const catClues = unanswered.filter(c => c.ci === chosenCat).sort((a, b) => a.value - b.value)
+      pick = catClues[0]
+    }
+
+    if (pick) opponentCategoryRef.current = pick.ci
+    return pick
+  }
+
+  function triggerOpponentPick() {
+    if (!tournamentModeRef.current || !boardControlRef.current === 'player') return
+    // Clear any existing timeout
+    if (opponentPickTimeout) clearTimeout(opponentPickTimeout)
+    const timeout = setTimeout(() => {
+      if (!tournamentModeRef.current) return
+      const pick = selectOpponentClue(board, clueStates)
+      if (pick) {
+        openClue(pick.ci, pick.ri)
+      }
+    }, 1500 + Math.random() * 1000) // 1.5-2.5s delay
+    setOpponentPickTimeout(timeout)
+  }
+
+  // Clean up timeout on unmount
+  useEffect(() => () => { if (opponentPickTimeout) clearTimeout(opponentPickTimeout) }, [opponentPickTimeout])
+
   function openClue(ci, ri) {
     const clue = board.categories[ci].clues[ri]
     const category = board.categories[ci].name
     const currentState = clueStates[`${ci}-${ri}`]
+
+    // In tournament mode, block player from picking when opponent has control
+    if (tournamentModeRef.current && boardControlRef.current === 'opponent' && currentState === CLUE_STATES.UNANSWERED) {
+      return // opponent is picking, ignore player taps
+    }
 
     // Allow re-answering already-answered clues (shows answer immediately)
     if (currentState !== CLUE_STATES.UNANSWERED) {
@@ -299,6 +373,20 @@ export default function App() {
     setLastClueResult(result)
     setActiveClue(null)
 
+    // Board control transfer in tournament mode
+    if (tournamentModeRef.current) {
+      if (result === 'correct') {
+        setBoardControl('player')
+        boardControlRef.current = 'player'
+      } else {
+        // Wrong or pass — opponent gets control
+        setBoardControl('opponent')
+        boardControlRef.current = 'opponent'
+        // Schedule opponent pick after short delay
+        setTimeout(() => triggerOpponentPick(), 100)
+      }
+    }
+
     // Check if Single Jeopardy just completed — prompt for Double Jeopardy
     if (round === 'single' && episodeData?.doubleJeopardy) {
       const updatedStates = { ...clueStates, [`${ci}-${ri}`]: result }
@@ -326,6 +414,7 @@ export default function App() {
   const answeredCount = Object.values(clueStates).filter(s => s !== CLUE_STATES.UNANSWERED).length
   const correctCount = Object.values(clueStates).filter(s => s === CLUE_STATES.CORRECT).length
   const incorrectCount = Object.values(clueStates).filter(s => s === CLUE_STATES.INCORRECT).length
+  const passCount = Object.values(clueStates).filter(s => s === CLUE_STATES.PASS).length
   const dueCount = cards.filter(c => c.dueAt <= Date.now()).length
 
   // ── Save game ─────────────────────────────────────────────────────────────
@@ -452,6 +541,7 @@ export default function App() {
         actualScore={actualScore}
         correctCount={correctCount}
         incorrectCount={incorrectCount}
+        passCount={passCount}
         answeredCount={answeredCount}
         totalClues={totalClues}
         episodeMeta={episodeMeta}
@@ -492,6 +582,7 @@ export default function App() {
             onToggleTimedMode={() => setTimedMode(m => !m)}
             tournamentMode={tournamentMode}
             tournamentState={tournamentState}
+            boardControl={boardControl}
             coryatScore={coryatScore}
             onShowCache={() => setShowCache(true)}
             onShowCategorySearch={() => setShowCategorySearch(true)}
@@ -502,6 +593,9 @@ export default function App() {
                 setTournamentMode(false)
                 tournamentModeRef.current = false
                 setTournamentState(null)
+                setBoardControl('player')
+                boardControlRef.current = 'player'
+                if (opponentPickTimeout) clearTimeout(opponentPickTimeout)
               } else {
                 setShowTournamentSetup(true)
               }
@@ -539,12 +633,24 @@ export default function App() {
           previousResult={activeClue.previousResult}
         />
       )}
-      {activeClue && timedMode && (
+      {activeClue && timedMode && !activeClue.isReanswer && (
         <TimedClueModal
           clue={activeClue.clue}
           category={activeClue.category}
           onMark={markClue}
           onClose={() => setActiveClue(null)}
+        />
+      )}
+      {activeClue && timedMode && activeClue.isReanswer && (
+        <ClueModal
+          clue={activeClue.clue}
+          category={activeClue.category}
+          showAnswer={true}
+          onReveal={() => {}}
+          onMark={markClue}
+          onClose={() => setActiveClue(null)}
+          isReanswer={true}
+          previousResult={activeClue.previousResult}
         />
       )}
 
@@ -615,7 +721,16 @@ export default function App() {
             setTournamentState({ position, opponents })
             setTournamentMode(true)
             tournamentModeRef.current = true
+            // Player starts with control if in 1st position, otherwise opponent goes first
+            const startsWithControl = position === 1
+            setBoardControl(startsWithControl ? 'player' : 'opponent')
+            boardControlRef.current = startsWithControl ? 'player' : 'opponent'
+            opponentCategoryRef.current = null
             setShowTournamentSetup(false)
+            // If opponent starts, trigger their first pick after board loads
+            if (!startsWithControl) {
+              setTimeout(() => triggerOpponentPick(), 2000)
+            }
           }}
           onClose={() => setShowTournamentSetup(false)}
         />
@@ -696,7 +811,7 @@ export default function App() {
 }
 
 // ─── Header ───────────────────────────────────────────────────────────────────
-function Header({ coryatScore, actualScore, correctCount, incorrectCount, answeredCount, totalClues, episodeMeta, user, syncing, syncError, onAuthClick }) {
+function Header({ coryatScore, actualScore, correctCount, incorrectCount, passCount, answeredCount, totalClues, episodeMeta, user, syncing, syncError, onAuthClick }) {
   const color = coryatScore >= 0 ? '#f5c518' : '#e74c3c'
   const showActual = actualScore !== 0 || coryatScore !== actualScore
   return (
@@ -721,7 +836,7 @@ function Header({ coryatScore, actualScore, correctCount, incorrectCount, answer
         )}
       </div>
       <div style={S.headerStats}>
-        <div style={S.pill}>{correctCount}✓ {incorrectCount}✗</div>
+        <div style={S.pill}>{correctCount}✓ {incorrectCount}✗ {passCount}—</div>
         <div style={S.pill}>{answeredCount}/{totalClues}</div>
         <button style={{ ...S.authBtn, color: syncError ? '#e57373' : user ? '#7cd992' : '#8890c0' }} onClick={onAuthClick} title={syncError ? `Sync error: ${syncError}` : user ? 'Synced' : 'Sign in to sync'}>
           {syncing ? '⏳' : syncError ? '⚠️' : user ? '☁️' : '🔓'}
@@ -887,7 +1002,7 @@ function AuthModal({ user, syncError, onClose, onSignOut }) {
 }
 
 // ─── Board View ───────────────────────────────────────────────────────────────
-function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round, hasDouble, onSwitchRound, onBrowse, singleCoryat, doubleCoryat, fjAnswered, onShowFJ, boardLoading, boardError, onLoadEpisode, canGoPrev, canGoNext, onPrev, onNext, timedMode, onToggleTimedMode, tournamentMode, tournamentState, coryatScore, onToggleTournament, onShowCache, onShowCategorySearch, gameStarted, onShowStartScreen }) {
+function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round, hasDouble, onSwitchRound, onBrowse, singleCoryat, doubleCoryat, fjAnswered, onShowFJ, boardLoading, boardError, onLoadEpisode, canGoPrev, canGoNext, onPrev, onNext, timedMode, onToggleTimedMode, tournamentMode, tournamentState, boardControl, coryatScore, onToggleTournament, onShowCache, onShowCategorySearch, gameStarted, onShowStartScreen }) {
   const tileBg = { unanswered: '#0f1e6e', correct: '#1a5c2e', incorrect: '#5c1a1a', pass: '#2a2a4a' }
 
   return (
@@ -922,7 +1037,20 @@ function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round,
         <OpponentScoreBar tournamentState={tournamentState} coryatScore={coryatScore} />
       )}
 
-      {/* Start game bar — always visible when episode loaded but not started */}
+      {/* Board control indicator */}
+      {tournamentMode && gameStarted && (
+        <div style={{
+          textAlign: 'center', padding: '6px 14px', borderRadius: 8, marginBottom: 6,
+          background: boardControl === 'player' ? 'rgba(76,175,77,0.1)' : 'rgba(229,115,115,0.1)',
+          border: `1px solid ${boardControl === 'player' ? 'rgba(76,175,77,0.3)' : 'rgba(229,115,115,0.3)'}`,
+          fontSize: 11, letterSpacing: 2,
+          color: boardControl === 'player' ? '#4caf7d' : '#e57373',
+        }}>
+          {boardControl === 'player' ? '✓ YOU HAVE BOARD CONTROL' : '⏳ OPPONENT IS SELECTING...'}
+        </div>
+      )}
+
+      {/* Start game bar — always visible when episode loaded but not started */}}
       {episodeMeta && !gameStarted && (
         <div style={{
           background: 'linear-gradient(135deg, #0f1e6e, #060b1a)',
@@ -1423,7 +1551,7 @@ function EpisodeBrowser({ onSelect, onClose }) {
           <input style={{ ...S.loaderInput, flex: 1 }} value={search} onChange={e => handleSearch(e.target.value)} placeholder="Search by show # or date..." />
           <select style={S.seasonSelect} value={selectedSeason} onChange={e => setSelectedSeason(e.target.value)}>
             <option value="">Latest season</option>
-            {seasons.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+            {seasons.filter((s, i, arr) => arr.findIndex(x => x.id === s.id) === i).map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
           </select>
         </div>
         <div style={S.browserList}>
@@ -1491,20 +1619,27 @@ function ClueText({ text, style }) {
   return (
     <div style={style}>
       {urls.length > 0 && (
-        <div style={{ marginBottom: 10, display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}>
+        <div style={{ marginBottom: 10, display: 'flex', flexWrap: 'wrap', gap: 6, justifyContent: 'center' }}>
           {urls.map((url, i) => (
-            <img
-              key={i}
-              src={url}
-              alt="Clue image"
-              style={{ maxWidth: '100%', maxHeight: 220, borderRadius: 8, objectFit: 'contain' }}
-              onError={e => { e.target.style.display = 'none' }}
-            />
+            <ImageWithFallback key={i} url={url} />
           ))}
         </div>
       )}
       <span>{cleanText}</span>
     </div>
+  )
+}
+
+function ImageWithFallback({ url }) {
+  const [failed, setFailed] = useState(false)
+  if (failed) return null
+  return (
+    <img
+      src={url}
+      alt="Clue image"
+      style={{ maxWidth: '100%', maxHeight: 220, borderRadius: 8, objectFit: 'contain' }}
+      onError={() => setFailed(true)}
+    />
   )
 }
 
@@ -1822,6 +1957,9 @@ function StudyView({ cards, setCards }) {
   const [chunkPreset, setChunkPreset] = useState(DEFAULT_CHUNK)
   const [customChunk, setCustomChunk] = useState('')
   const [showCustom, setShowCustom] = useState(false)
+  const [editingCard, setEditingCard] = useState(null) // card being edited in-session
+  const [editFront, setEditFront] = useState('')
+  const [editBack, setEditBack] = useState('')
 
   // Filter state
   const [dueOnly, setDueOnly] = useState(true)
@@ -2153,14 +2291,78 @@ function StudyView({ cards, setCards }) {
             </div>}
       </div>
       {flipped && (
-        <div style={S.rateRow}>
-          {[{q:0,label:'Again',color:'#e57373',bg:'#3a1010'},{q:1,label:'Hard',color:'#ffb74d',bg:'#3a2510'},{q:2,label:'Good',color:'#81c784',bg:'#103a18'},{q:3,label:'Easy',color:'#4dd0e1',bg:'#0e2e36'}].map(({ q, label, color, bg }) => (
-            <button key={q} style={{ ...S.rateBtn, background: bg, borderColor: color }} onClick={() => rate(q, label.toLowerCase())}>
-              <span style={{ color, fontWeight: 700, fontSize: 14 }}>{label}</span>
-              <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: 10, marginTop: 2 }}>{nextDueLabel(q, card)}</span>
+        <>
+          <div style={S.rateRow}>
+            {[{q:0,label:'Again',color:'#e57373',bg:'#3a1010'},{q:1,label:'Hard',color:'#ffb74d',bg:'#3a2510'},{q:2,label:'Good',color:'#81c784',bg:'#103a18'},{q:3,label:'Easy',color:'#4dd0e1',bg:'#0e2e36'}].map(({ q, label, color, bg }) => (
+              <button key={q} style={{ ...S.rateBtn, background: bg, borderColor: color }} onClick={() => rate(q, label.toLowerCase())}>
+                <span style={{ color, fontWeight: 700, fontSize: 14 }}>{label}</span>
+                <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: 10, marginTop: 2 }}>{nextDueLabel(q, card)}</span>
+              </button>
+            ))}
+          </div>
+          <div style={{ display: 'flex', gap: 16, marginTop: 4, alignSelf: 'center' }}>
+            <button
+              style={{ fontSize: 11, color: '#4060a0', letterSpacing: 1 }}
+              onClick={() => { setEditFront(card.front); setEditBack(card.back); setEditingCard(card) }}
+            >
+              ✏️ Edit card
             </button>
-          ))}
-        </div>
+            <button
+              style={{ fontSize: 11, color: '#4060a0', letterSpacing: 1 }}
+              onClick={() => {
+                setCards(prev => prev.filter(c => c.id !== card.id))
+                const nextCard = cardIdx + 1
+                if (nextCard >= currentChunk.length) {
+                  setPhase('chunkdone')
+                } else {
+                  setCardIdx(nextCard)
+                  setFlipped(false)
+                }
+              }}
+            >
+              🗑 Delete card
+            </button>
+          </div>
+
+          {/* Inline edit modal */}
+          {editingCard?.id === card.id && (
+            <div style={{ width: '100%', maxWidth: 480, background: '#0a0f2e', borderRadius: 10, border: '1px solid #f5c518', padding: 16, marginTop: 8 }}>
+              <div style={{ fontSize: 10, color: '#f5c518', letterSpacing: 2, marginBottom: 10 }}>EDIT CARD</div>
+              <div style={{ fontSize: 10, color: '#6070a0', letterSpacing: 2, marginBottom: 4 }}>CLUE</div>
+              <textarea
+                style={{ ...S.textarea, marginBottom: 10, width: '100%' }}
+                value={editFront}
+                onChange={e => setEditFront(e.target.value)}
+                rows={3}
+              />
+              <div style={{ fontSize: 10, color: '#6070a0', letterSpacing: 2, marginBottom: 4 }}>ANSWER</div>
+              <textarea
+                style={{ ...S.textarea, marginBottom: 12, width: '100%' }}
+                value={editBack}
+                onChange={e => setEditBack(e.target.value)}
+                rows={2}
+              />
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  style={{ ...S.markBtn, background: '#1e2456', color: '#8890d0', border: '1px solid #2e3476', flex: 1 }}
+                  onClick={() => setEditingCard(null)}
+                >
+                  Cancel
+                </button>
+                <button
+                  style={{ ...S.revealBtn, flex: 2 }}
+                  onClick={() => {
+                    setCards(prev => prev.map(c => c.id === card.id ? { ...c, front: editFront.trim(), back: editBack.trim() } : c))
+                    setEditingCard(null)
+                  }}
+                  disabled={!editFront.trim() || !editBack.trim()}
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   )
@@ -2570,6 +2772,25 @@ function SummaryView({ coryatScore, actualScore, fjAnswered, singleBoard, double
   const bestActual = gamesWithActual.length > 0 ? Math.max(...gamesWithActual.map(g => g.actualScore)) : null
   const wageringImpact = (allTimeAvg !== null && allTimeActualAvg !== null) ? allTimeActualAvg - allTimeAvg : null
 
+  // All-time correct/wrong/pass totals across all games
+  const allTimeCorrect = gameHistory.reduce((s, g) => s + (g.totalCorrect || 0), 0)
+  const allTimeIncorrect = gameHistory.reduce((s, g) => s + (g.totalIncorrect || 0), 0)
+  const allTimePass = gameHistory.reduce((s, g) => s + (g.totalPass || 0), 0)
+  const allTimeAnswered = allTimeCorrect + allTimeIncorrect + allTimePass
+  const pctCorrect = allTimeAnswered > 0 ? Math.round(allTimeCorrect / allTimeAnswered * 100) : null
+  const pctIncorrect = allTimeAnswered > 0 ? Math.round(allTimeIncorrect / allTimeAnswered * 100) : null
+  const pctPass = allTimeAnswered > 0 ? Math.round(allTimePass / allTimeAnswered * 100) : null
+
+  // Average SJ and DJ Coryat separately
+  const gamesWithDJ = gameHistory.filter(g => g.doubleCoryat !== undefined && g.doubleCoryat !== null)
+  const avgSJ = gameHistory.length > 0 ? Math.round(gameHistory.reduce((s, g) => s + (g.singleCoryat || 0), 0) / gameHistory.length) : null
+  const avgDJ = gamesWithDJ.length > 0 ? Math.round(gamesWithDJ.reduce((s, g) => s + (g.doubleCoryat || 0), 0) / gamesWithDJ.length) : null
+
+  // FJ correct percentage
+  const gamesWithFJ = gameHistory.filter(g => g.finalJeopardy?.result)
+  const fjCorrect = gamesWithFJ.filter(g => g.finalJeopardy.result === 'correct').length
+  const pctFJ = gamesWithFJ.length > 0 ? Math.round(fjCorrect / gamesWithFJ.length * 100) : null
+
   function calcCategoryBreakdown(board, states) {
     if (!board) return []
     return board.categories.map((cat, ci) => {
@@ -2614,6 +2835,53 @@ function SummaryView({ coryatScore, actualScore, fjAnswered, singleBoard, double
               <div style={{ fontSize: 8, color: '#6070a0', letterSpacing: 1.5 }}>{l}</div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* All-time performance stats — always visible in current tab */}
+      {statsTab === 'current' && gameHistory.length > 0 && allTimeAnswered > 0 && (
+        <div style={{ background: '#0a0f2e', borderRadius: 12, padding: '14px 16px', border: '1px solid #1a2460' }}>
+          <div style={{ fontSize: 10, letterSpacing: 3, color: '#6070a0', marginBottom: 10 }}>ALL-TIME PERFORMANCE</div>
+
+          {/* Correct / Wrong / Pass */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 12 }}>
+            {[
+              ['✓ CORRECT', allTimeCorrect, pctCorrect, '#4caf7d'],
+              ['✗ WRONG', allTimeIncorrect, pctIncorrect, '#e57373'],
+              ['— PASS', allTimePass, pctPass, '#7986cb'],
+            ].map(([lbl, count, pct, color]) => (
+              <div key={lbl} style={{ background: '#060b1a', borderRadius: 8, padding: '10px 6px', textAlign: 'center', border: '1px solid #1a2040' }}>
+                <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 22, color }}>{count.toLocaleString()}</div>
+                <div style={{ fontSize: 11, color, marginBottom: 2 }}>{pct !== null ? `${pct}%` : '—'}</div>
+                <div style={{ fontSize: 8, color: '#4060a0', letterSpacing: 1.5 }}>{lbl}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* SJ / DJ averages */}
+          {(avgSJ !== null || avgDJ !== null) && (
+            <div style={{ display: 'grid', gridTemplateColumns: avgDJ !== null ? '1fr 1fr' : '1fr', gap: 8, marginBottom: pctFJ !== null ? 12 : 0 }}>
+              {[['AVG SJ CORYAT', avgSJ, '#f5c518'], ['AVG DJ CORYAT', avgDJ, '#f5c518']].filter(([,v]) => v !== null).map(([lbl, val, color]) => (
+                <div key={lbl} style={{ background: '#060b1a', borderRadius: 8, padding: '10px 6px', textAlign: 'center', border: '1px solid #1a2040' }}>
+                  <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color }}>{val >= 0 ? '+' : ''}{val.toLocaleString()}</div>
+                  <div style={{ fontSize: 8, color: '#4060a0', letterSpacing: 1.5 }}>{lbl}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* FJ percentage */}
+          {pctFJ !== null && (
+            <div style={{ background: '#060b1a', borderRadius: 8, padding: '10px 14px', border: '1px solid #1a2040', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <div style={{ fontSize: 12, color: '#c0c8e8' }}>Final Jeopardy correct</div>
+                <div style={{ fontSize: 10, color: '#4060a0', letterSpacing: 1 }}>{fjCorrect} of {gamesWithFJ.length} games</div>
+              </div>
+              <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 28, color: pctFJ >= 50 ? '#4caf7d' : '#e57373' }}>
+                {pctFJ}%
+              </div>
+            </div>
+          )}
         </div>
       )}
 

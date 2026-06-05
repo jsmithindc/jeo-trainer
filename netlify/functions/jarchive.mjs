@@ -29,7 +29,20 @@ export const handler = async (event) => {
           const gameIds = [...epHtml.matchAll(/game_id=(\d+)/g)].map(m => parseInt(m[1]))
           const maxId = gameIds.length > 0 ? Math.max(...gameIds) : 0
           if (maxId > 0) {
-            episodeId = String(maxId)
+            // Probe forward from the season's max to find the true latest
+            // (season page may be truncated by server, missing newest episodes)
+            let probeId = maxId
+            for (let i = 1; i <= 20; i++) {
+              try {
+                const probeRes = await fetch(`https://j-archive.com/showgame.php?game_id=${maxId + i}`, {
+                  method: 'HEAD',
+                  headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
+                })
+                if (probeRes.ok) probeId = maxId + i
+                else break
+              } catch { break }
+            }
+            episodeId = String(probeId)
           } else {
             episodeId = '9466'
           }
@@ -134,23 +147,7 @@ export const handler = async (event) => {
 
     // ── Parse a round ─────────────────────────────────────────────────────────
     function parseRound(roundId) {
-      let roundEl = doc.querySelector(`#${roundId}`)
-
-      // Fallback: extract section from raw HTML and re-parse if querySelector fails
-      if (!roundEl) {
-        const startMarker = 'id="' + roundId + '"'
-        const startIdx = html.indexOf(startMarker)
-        if (startIdx >= 0) {
-          const nextRoundId = roundId === 'jeopardy_round' ? 'double_jeopardy_round' : 'final_jeopardy_round'
-          const endMarker = 'id="' + nextRoundId + '"'
-          const endIdx = html.indexOf(endMarker, startIdx)
-          const section = endIdx > startIdx
-            ? html.slice(startIdx - 5, endIdx)
-            : html.slice(startIdx - 5, startIdx + 60000)
-          roundEl = parse('<div ' + section + '</div>').querySelector('#' + roundId)
-        }
-      }
-
+      const roundEl = doc.querySelector(`#${roundId}`)
       if (!roundEl) return null
 
       const categoryNames = roundEl.querySelectorAll('.category_name').map(el => el.text.trim())

@@ -11,7 +11,7 @@ import { getMediaStats, clearAllMedia, getMedia } from './mediaStore.js'
 import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpisodeToCache, getEpisodeFromCache, pinEpisode, unpinEpisode, removeEpisodeFromCache, getCacheStats } from './storage.js'
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 
-const APP_VERSION = '1.3.0'
+const APP_VERSION = '1.4.0'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -80,7 +80,10 @@ export default function App() {
   const [boardControl, setBoardControl] = useState('player') // 'player' | 'opponent'
   const [opponentPickTimeout, setOpponentPickTimeout] = useState(null)
   const boardControlRef = useRef('player')
-  const opponentCategoryRef = useRef(null) // category opponent is currently working through
+  const opponentCategoryRef = useRef(null)
+  const boardRef = useRef(null)
+  const clueStatesRef = useRef({})
+  const triggerOpponentPickRef = useRef(null)
   const [showDJPrompt, setShowDJPrompt] = useState(false)
   const [resumePrompt, setResumePrompt] = useState(null) // saved game state to restore
   const [showCache, setShowCache] = useState(false)
@@ -258,8 +261,9 @@ export default function App() {
   // Keep ref in sync so callbacks always see current tournamentMode
   useEffect(() => { tournamentModeRef.current = tournamentMode }, [tournamentMode])
 
-  // Keep boardControl ref in sync
   useEffect(() => { boardControlRef.current = boardControl }, [boardControl])
+  useEffect(() => { boardRef.current = board }, [board])
+  useEffect(() => { clueStatesRef.current = clueStates }, [clueStates])
 
   // Opponent clue selection logic
   function selectOpponentClue(board, clueStates) {
@@ -307,16 +311,16 @@ export default function App() {
   }
 
   function triggerOpponentPick() {
-    if (!tournamentModeRef.current || !boardControlRef.current === 'player') return
-    // Clear any existing timeout
-    if (opponentPickTimeout) clearTimeout(opponentPickTimeout)
+    if (!tournamentModeRef.current) return
+    if (boardControlRef.current !== 'opponent') return
+    if (triggerOpponentPickRef.current) clearTimeout(triggerOpponentPickRef.current)
     const timeout = setTimeout(() => {
       if (!tournamentModeRef.current) return
-      const pick = selectOpponentClue(board, clueStates)
-      if (pick) {
-        openClue(pick.ci, pick.ri)
-      }
-    }, 1500 + Math.random() * 1000) // 1.5-2.5s delay
+      if (boardControlRef.current !== 'opponent') return
+      const pick = selectOpponentClue(boardRef.current, clueStatesRef.current)
+      if (pick) openClue(pick.ci, pick.ri)
+    }, 1500 + Math.random() * 1000)
+    triggerOpponentPickRef.current = timeout
     setOpponentPickTimeout(timeout)
   }
 
@@ -403,6 +407,26 @@ export default function App() {
   const coryatScore = singleCoryat + doubleCoryat
 
   const totalClues = board?.categories?.length * 5 || 0
+
+  // Check if current episode has been played before
+  const previousGame = episodeMeta
+    ? gameHistory.find(g => g.episodeId === episodeMeta.episodeNumber || g.airDate === episodeMeta.airDate)
+    : null
+
+  // All-time correct/wrong/pass totals
+  const allTimeCorrect = gameHistory.reduce((s, g) => s + (g.totalCorrect || 0), 0)
+  const allTimeIncorrect = gameHistory.reduce((s, g) => s + (g.totalIncorrect || 0), 0)
+  const allTimePass = gameHistory.reduce((s, g) => s + (g.totalPass || 0), 0)
+  const allTimeAnswered = allTimeCorrect + allTimeIncorrect + allTimePass
+  const pctCorrect = allTimeAnswered > 0 ? Math.round(allTimeCorrect / allTimeAnswered * 100) : null
+  const pctIncorrect = allTimeAnswered > 0 ? Math.round(allTimeIncorrect / allTimeAnswered * 100) : null
+  const pctPass = allTimeAnswered > 0 ? Math.round(allTimePass / allTimeAnswered * 100) : null
+  const gamesWithDJ = gameHistory.filter(g => g.doubleCoryat !== undefined && g.doubleCoryat !== null)
+  const avgSJ = gameHistory.length > 0 ? Math.round(gameHistory.reduce((s, g) => s + (g.singleCoryat || 0), 0) / gameHistory.length) : null
+  const avgDJ = gamesWithDJ.length > 0 ? Math.round(gamesWithDJ.reduce((s, g) => s + (g.doubleCoryat || 0), 0) / gamesWithDJ.length) : null
+  const gamesWithFJ = gameHistory.filter(g => g.finalJeopardy?.result)
+  const fjCorrect = gamesWithFJ.filter(g => g.finalJeopardy.result === 'correct').length
+  const pctFJ = gamesWithFJ.length > 0 ? Math.round(fjCorrect / gamesWithFJ.length * 100) : null
 
   // Calculate remaining board value for wager trainer
   const remainingBoardValue = board?.categories?.reduce((sum, cat, ci) => {
@@ -587,6 +611,7 @@ export default function App() {
             onShowCache={() => setShowCache(true)}
             onShowCategorySearch={() => setShowCategorySearch(true)}
             gameStarted={gameStarted}
+            previousGame={previousGame}
             onShowStartScreen={() => setShowStartScreen(true)}
             onToggleTournament={() => {
               if (tournamentModeRef.current) {
@@ -617,6 +642,18 @@ export default function App() {
             episodeMeta={episodeMeta}
             tournamentState={tournamentState}
             confidenceRatings={confidenceRatings}
+            allTimeCorrect={allTimeCorrect}
+            allTimeIncorrect={allTimeIncorrect}
+            allTimePass={allTimePass}
+            allTimeAnswered={allTimeAnswered}
+            pctCorrect={pctCorrect}
+            pctIncorrect={pctIncorrect}
+            pctPass={pctPass}
+            avgSJ={avgSJ}
+            avgDJ={avgDJ}
+            gamesWithFJ={gamesWithFJ}
+            fjCorrect={fjCorrect}
+            pctFJ={pctFJ}
           />
         )}
       </main>
@@ -1037,6 +1074,21 @@ function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round,
         <OpponentScoreBar tournamentState={tournamentState} coryatScore={coryatScore} />
       )}
 
+      {/* Previously played banner */}
+      {previousGame && !gameStarted && (
+        <div style={{ background: 'rgba(245,197,24,0.06)', border: '1px solid rgba(245,197,24,0.2)', borderRadius: 8, padding: '8px 14px', marginBottom: 6, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <div style={{ fontSize: 11, color: '#f5c518', letterSpacing: 1 }}>⚠️ ALREADY PLAYED</div>
+            <div style={{ fontSize: 10, color: '#6070a0', letterSpacing: 1 }}>
+              Coryat: {previousGame.coryatScore >= 0 ? '+' : ''}{previousGame.coryatScore?.toLocaleString()} · {new Date(previousGame.playedAt).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}
+            </div>
+          </div>
+          <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 22, color: '#f5c518' }}>
+            {previousGame.coryatScore >= 0 ? '+' : ''}{previousGame.coryatScore?.toLocaleString()}
+          </div>
+        </div>
+      )}
+
       {/* Board control indicator */}
       {tournamentMode && gameStarted && (
         <div style={{
@@ -1050,7 +1102,14 @@ function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round,
         </div>
       )}
 
-      {/* Start game bar — always visible when episode loaded but not started */}}
+      {/* Board control indicator */}
+      {tournamentMode && gameStarted && (
+        <div style={{ textAlign: 'center', padding: '6px 14px', borderRadius: 8, marginBottom: 6, background: boardControl === 'player' ? 'rgba(76,175,77,0.1)' : 'rgba(229,115,115,0.1)', border: `1px solid ${boardControl === 'player' ? 'rgba(76,175,77,0.3)' : 'rgba(229,115,115,0.3)'}`, fontSize: 11, letterSpacing: 2, color: boardControl === 'player' ? '#4caf7d' : '#e57373' }}>
+          {boardControl === 'player' ? '✓ YOU HAVE BOARD CONTROL' : '⏳ OPPONENT IS SELECTING...'}
+        </div>
+      )}
+
+      {/* Start game bar — always visible when episode loaded but not started */}}}
       {episodeMeta && !gameStarted && (
         <div style={{
           background: 'linear-gradient(135deg, #0f1e6e, #060b1a)',
@@ -1965,6 +2024,7 @@ function StudyView({ cards, setCards }) {
   const [dueOnly, setDueOnly] = useState(true)
   const [sourceFilter, setSourceFilter] = useState('all')
   const [categoryFilter, setCategoryFilter] = useState('all')
+  const [strugglingOnly, setStrugglingOnly] = useState(false)
 
   const now = Date.now()
 
@@ -1976,6 +2036,8 @@ function StudyView({ cards, setCards }) {
   function getFilteredCards() {
     let filtered = [...cards]
     if (dueOnly) filtered = filtered.filter(c => c.dueAt <= now)
+    if (strugglingOnly === true) filtered = filtered.filter(c => c.repetitions === 0 || (c.lapses || 0) > 0)
+    if (strugglingOnly === 'hard') filtered = filtered.filter(c => c.easeFactor < 2.0 && c.repetitions > 0)
     if (sourceFilter !== 'all') filtered = filtered.filter(c => c.source === sourceFilter)
     if (categoryFilter !== 'all') filtered = filtered.filter(c => getMetaCategory(c.category?.split(' · ')[0] || c.category || '') === categoryFilter)
     return filtered
@@ -2083,12 +2145,16 @@ function StudyView({ cards, setCards }) {
           <div style={S.configRow}>
             <span style={S.configLabel}>CARDS TO INCLUDE</span>
             <div style={S.toggleGroup}>
-              <button style={{ ...S.toggleBtn, ...(dueOnly ? S.toggleActive : {}) }} onClick={() => setDueOnly(true)}>
-                Due Only ({dueCount})
-              </button>
-              <button style={{ ...S.toggleBtn, ...(!dueOnly ? S.toggleActive : {}) }} onClick={() => setDueOnly(false)}>
-                All Cards ({cards.length})
-              </button>
+              <button style={{ ...S.toggleBtn, ...(dueOnly ? S.toggleActive : {}) }} onClick={() => setDueOnly(true)}>Due Only ({dueCount})</button>
+              <button style={{ ...S.toggleBtn, ...(!dueOnly ? S.toggleActive : {}) }} onClick={() => setDueOnly(false)}>All Cards ({cards.length})</button>
+            </div>
+          </div>
+          <div style={S.configRow}>
+            <span style={S.configLabel}>DIFFICULTY</span>
+            <div style={S.toggleGroup}>
+              <button style={{ ...S.toggleBtn, ...(!strugglingOnly ? S.toggleActive : {}) }} onClick={() => setStrugglingOnly(false)}>All</button>
+              <button style={{ ...S.toggleBtn, ...(strugglingOnly === 'hard' ? S.toggleActive : {}) }} onClick={() => setStrugglingOnly('hard')}>🟡 Hard ({cards.filter(c => c.easeFactor < 2.0 && c.repetitions > 0).length})</button>
+              <button style={{ ...S.toggleBtn, ...(strugglingOnly === true ? S.toggleActive : {}) }} onClick={() => setStrugglingOnly(true)}>🔴 Struggling ({cards.filter(c => c.repetitions === 0 || (c.lapses || 0) > 0).length})</button>
             </div>
           </div>
 
@@ -2352,7 +2418,13 @@ function StudyView({ cards, setCards }) {
                 <button
                   style={{ ...S.revealBtn, flex: 2 }}
                   onClick={() => {
-                    setCards(prev => prev.map(c => c.id === card.id ? { ...c, front: editFront.trim(), back: editBack.trim() } : c))
+                    const updatedCard = { ...card, front: editFront.trim(), back: editBack.trim() }
+                    setCards(prev => prev.map(c => c.id === card.id ? updatedCard : c))
+                    setAllChunks(prev => prev.map((chunk, ci) =>
+                      ci === chunkIdx
+                        ? chunk.map((c, ri) => ri === cardIdx ? updatedCard : c)
+                        : chunk
+                    ))
                     setEditingCard(null)
                   }}
                   disabled={!editFront.trim() || !editBack.trim()}
@@ -2409,6 +2481,7 @@ function DeckView({ cards, setCards, user }) {
   const [selectedIds, setSelectedIds] = useState(new Set())
   const [bulkMode, setBulkMode] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
   const [newFront, setNewFront] = useState('')
   const [newBack, setNewBack] = useState('')
   const [newCat, setNewCat] = useState('')
@@ -2522,9 +2595,13 @@ function DeckView({ cards, setCards, user }) {
   const leeches = cards.filter(c => (c.lapses || 0) >= 4)
   const counts = { all: cards.length, due: cards.filter(c => c.dueAt <= now).length, leeches: leeches.length, missed: cards.filter(c => c.source === 'missed').length, manual: cards.filter(c => c.source === 'manual').length, anki: cards.filter(c => c.source === 'anki').length }
   const filtered = cards.filter(c => {
-    if (filter === 'due') return c.dueAt <= now
-    if (filter === 'leeches') return (c.lapses || 0) >= 4
-    if (filter === 'missed' || filter === 'manual' || filter === 'anki') return c.source === filter
+    if (filter === 'due') { if (!(c.dueAt <= now)) return false }
+    else if (filter === 'leeches') { if (!((c.lapses || 0) >= 4)) return false }
+    else if (filter === 'missed' || filter === 'manual' || filter === 'anki') { if (c.source !== filter) return false }
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase()
+      if (!(c.front || '').toLowerCase().includes(q) && !(c.back || '').toLowerCase().includes(q) && !(c.category || '').toLowerCase().includes(q)) return false
+    }
     return true
   })
 
@@ -2533,6 +2610,12 @@ function DeckView({ cards, setCards, user }) {
       <div style={S.deckActions}>
         <button style={{ ...S.actionBtn, ...(subview === 'add' ? S.actionBtnActive : {}) }} onClick={() => setSubview(subview === 'add' ? 'list' : 'add')}>{subview === 'add' ? '✕ Cancel' : '+ Add Card'}</button>
         <button style={{ ...S.actionBtn, ...(subview === 'import' ? S.actionBtnActive : {}) }} onClick={() => setSubview(subview === 'import' ? 'list' : 'import')}>{subview === 'import' ? '✕ Cancel' : '⬆ Import .apkg'}</button>
+        <div style={{ position: 'relative', width: '100%' }}>
+          <input style={{ ...S.input, width: '100%', paddingLeft: 32, fontSize: 13 }} type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Search cards..." />
+          <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', fontSize: 14, color: '#4060a0', pointerEvents: 'none' }}>🔍</span>
+          {searchQuery && <button style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', fontSize: 14, color: '#4060a0' }} onClick={() => setSearchQuery('')}>✕</button>}
+        </div>
+        {searchQuery && <div style={{ fontSize: 11, color: '#6070a0', letterSpacing: 1 }}>{filtered.length} result{filtered.length !== 1 ? 's' : ''}</div>}
       </div>
 
       {subview === 'add' && (
@@ -2749,7 +2832,7 @@ function GameHistoryRow({ game }) {
 }
 
 // ─── Summary / Stats View ─────────────────────────────────────────────────────
-function SummaryView({ coryatScore, actualScore, fjAnswered, singleBoard, doubleBoard, singleClueStates, doubleClueStates, gameHistory, episodeMeta, tournamentState, confidenceRatings }) {
+function SummaryView({ coryatScore, actualScore, fjAnswered, singleBoard, doubleBoard, singleClueStates, doubleClueStates, gameHistory, episodeMeta, tournamentState, confidenceRatings, allTimeCorrect, allTimeIncorrect, allTimePass, allTimeAnswered, pctCorrect, pctIncorrect, pctPass, avgSJ, avgDJ, gamesWithFJ, fjCorrect, pctFJ }) {
   const [historyView, setHistoryView] = useState(false)
   const [statsTab, setStatsTab] = useState('current') // current | weakness | speed | history
 
@@ -2771,25 +2854,6 @@ function SummaryView({ coryatScore, actualScore, fjAnswered, singleBoard, double
   const last10ActualAvg = last10Actual.length > 0 ? Math.round(last10Actual.reduce((s, g) => s + g.actualScore, 0) / last10Actual.length) : null
   const bestActual = gamesWithActual.length > 0 ? Math.max(...gamesWithActual.map(g => g.actualScore)) : null
   const wageringImpact = (allTimeAvg !== null && allTimeActualAvg !== null) ? allTimeActualAvg - allTimeAvg : null
-
-  // All-time correct/wrong/pass totals across all games
-  const allTimeCorrect = gameHistory.reduce((s, g) => s + (g.totalCorrect || 0), 0)
-  const allTimeIncorrect = gameHistory.reduce((s, g) => s + (g.totalIncorrect || 0), 0)
-  const allTimePass = gameHistory.reduce((s, g) => s + (g.totalPass || 0), 0)
-  const allTimeAnswered = allTimeCorrect + allTimeIncorrect + allTimePass
-  const pctCorrect = allTimeAnswered > 0 ? Math.round(allTimeCorrect / allTimeAnswered * 100) : null
-  const pctIncorrect = allTimeAnswered > 0 ? Math.round(allTimeIncorrect / allTimeAnswered * 100) : null
-  const pctPass = allTimeAnswered > 0 ? Math.round(allTimePass / allTimeAnswered * 100) : null
-
-  // Average SJ and DJ Coryat separately
-  const gamesWithDJ = gameHistory.filter(g => g.doubleCoryat !== undefined && g.doubleCoryat !== null)
-  const avgSJ = gameHistory.length > 0 ? Math.round(gameHistory.reduce((s, g) => s + (g.singleCoryat || 0), 0) / gameHistory.length) : null
-  const avgDJ = gamesWithDJ.length > 0 ? Math.round(gamesWithDJ.reduce((s, g) => s + (g.doubleCoryat || 0), 0) / gamesWithDJ.length) : null
-
-  // FJ correct percentage
-  const gamesWithFJ = gameHistory.filter(g => g.finalJeopardy?.result)
-  const fjCorrect = gamesWithFJ.filter(g => g.finalJeopardy.result === 'correct').length
-  const pctFJ = gamesWithFJ.length > 0 ? Math.round(fjCorrect / gamesWithFJ.length * 100) : null
 
   function calcCategoryBreakdown(board, states) {
     if (!board) return []
@@ -2880,6 +2944,41 @@ function SummaryView({ coryatScore, actualScore, fjAnswered, singleBoard, double
               <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 28, color: pctFJ >= 50 ? '#4caf7d' : '#e57373' }}>
                 {pctFJ}%
               </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* All-time performance stats */}
+      {statsTab === 'current' && gameHistory.length > 0 && allTimeAnswered > 0 && (
+        <div style={{ background: '#0a0f2e', borderRadius: 12, padding: '14px 16px', border: '1px solid #1a2460' }}>
+          <div style={{ fontSize: 10, letterSpacing: 3, color: '#6070a0', marginBottom: 10 }}>ALL-TIME PERFORMANCE</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 12 }}>
+            {[['✓ CORRECT', allTimeCorrect, pctCorrect, '#4caf7d'], ['✗ WRONG', allTimeIncorrect, pctIncorrect, '#e57373'], ['— PASS', allTimePass, pctPass, '#7986cb']].map(([lbl, count, pct, color]) => (
+              <div key={lbl} style={{ background: '#060b1a', borderRadius: 8, padding: '10px 6px', textAlign: 'center', border: '1px solid #1a2040' }}>
+                <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 22, color }}>{count.toLocaleString()}</div>
+                <div style={{ fontSize: 11, color, marginBottom: 2 }}>{pct !== null ? `${pct}%` : '—'}</div>
+                <div style={{ fontSize: 8, color: '#4060a0', letterSpacing: 1.5 }}>{lbl}</div>
+              </div>
+            ))}
+          </div>
+          {(avgSJ !== null || avgDJ !== null) && (
+            <div style={{ display: 'grid', gridTemplateColumns: avgDJ !== null ? '1fr 1fr' : '1fr', gap: 8, marginBottom: pctFJ !== null ? 12 : 0 }}>
+              {[['AVG SJ CORYAT', avgSJ], ['AVG DJ CORYAT', avgDJ]].filter(([,v]) => v !== null).map(([lbl, val]) => (
+                <div key={lbl} style={{ background: '#060b1a', borderRadius: 8, padding: '10px 6px', textAlign: 'center', border: '1px solid #1a2040' }}>
+                  <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: '#f5c518' }}>{val >= 0 ? '+' : ''}{val.toLocaleString()}</div>
+                  <div style={{ fontSize: 8, color: '#4060a0', letterSpacing: 1.5 }}>{lbl}</div>
+                </div>
+              ))}
+            </div>
+          )}
+          {pctFJ !== null && (
+            <div style={{ background: '#060b1a', borderRadius: 8, padding: '10px 14px', border: '1px solid #1a2040', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <div style={{ fontSize: 12, color: '#c0c8e8' }}>Final Jeopardy correct</div>
+                <div style={{ fontSize: 10, color: '#4060a0', letterSpacing: 1 }}>{fjCorrect} of {gamesWithFJ.length} games</div>
+              </div>
+              <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 28, color: pctFJ >= 50 ? '#4caf7d' : '#e57373' }}>{pctFJ}%</div>
             </div>
           )}
         </div>

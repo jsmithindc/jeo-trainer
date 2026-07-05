@@ -11,7 +11,7 @@ import { getMediaStats, clearAllMedia, getMedia } from './mediaStore.js'
 import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpisodeToCache, getEpisodeFromCache, pinEpisode, unpinEpisode, removeEpisodeFromCache, getCacheStats } from './storage.js'
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 
-const APP_VERSION = '1.4.1'
+const APP_VERSION = '1.5.0'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -84,6 +84,7 @@ export default function App() {
   const boardRef = useRef(null)
   const clueStatesRef = useRef({})
   const triggerOpponentPickRef = useRef(null)
+  const openClueRef = useRef(null)
   const [showDJPrompt, setShowDJPrompt] = useState(false)
   const [resumePrompt, setResumePrompt] = useState(null) // saved game state to restore
   const [showCache, setShowCache] = useState(false)
@@ -135,16 +136,32 @@ export default function App() {
         }
       })
       .catch(() => {}) // non-critical
-    // Load latest episode, fall back to known recent ID
-    loadEpisode('latest', true).catch(() => {
-      // latest failed - try recent known IDs stepping back
-      const tryIds = ['9466', '9465', '9464', '9460', '9450']
-      const tryNext = (ids) => {
-        if (!ids.length) return
-        loadEpisode(ids[0], true).catch(() => tryNext(ids.slice(1)))
-      }
-      tryNext(tryIds)
-    })
+    // Load next unplayed episode after the last completed one
+    // gameHistory is sorted newest first; find the most recently played gameId
+    const lastGameId = gameHistory.length > 0
+      ? (gameHistory[0].gameId || null)
+      : null
+
+    if (lastGameId) {
+      // Try loading the next episode after the last played one
+      const nextId = String(parseInt(lastGameId) + 1)
+      loadEpisode(nextId, true).catch(() => {
+        // Next episode doesn't exist yet, load latest
+        loadEpisode('latest', true).catch(() => {
+          loadEpisode(lastGameId, true).catch(() => {})
+        })
+      })
+    } else {
+      // No history — load latest
+      loadEpisode('latest', true).catch(() => {
+        const tryIds = ['9466', '9465', '9464', '9460', '9450']
+        const tryNext = (ids) => {
+          if (!ids.length) return
+          loadEpisode(ids[0], true).catch(() => tryNext(ids.slice(1)))
+        }
+        tryNext(tryIds)
+      })
+    }
   }, [authChecked])
 
   // ── Sync from Supabase when user logs in ──────────────────────────────────
@@ -264,6 +281,7 @@ export default function App() {
   useEffect(() => { boardControlRef.current = boardControl }, [boardControl])
   useEffect(() => { boardRef.current = board }, [board])
   useEffect(() => { clueStatesRef.current = clueStates }, [clueStates])
+  useEffect(() => { openClueRef.current = openClue }, [openClue])
 
   // Opponent clue selection logic
   function selectOpponentClue(board, clueStates) {
@@ -318,7 +336,7 @@ export default function App() {
       if (!tournamentModeRef.current) return
       if (boardControlRef.current !== 'opponent') return
       const pick = selectOpponentClue(boardRef.current, clueStatesRef.current)
-      if (pick) openClue(pick.ci, pick.ri)
+      if (pick && openClueRef.current) openClueRef.current(pick.ci, pick.ri)
     }, 1500 + Math.random() * 1000)
     triggerOpponentPickRef.current = timeout
     setOpponentPickTimeout(timeout)
@@ -377,6 +395,9 @@ export default function App() {
     setLastClueResult(result)
     setActiveClue(null)
 
+    // Auto-save game state after each clue
+    setTimeout(() => autoSaveCurrentGame(), 0)
+
     // Board control transfer in tournament mode
     if (tournamentModeRef.current) {
       if (result === 'correct') {
@@ -410,7 +431,10 @@ export default function App() {
 
   // Check if current episode has been played before
   const previousGame = episodeMeta
-    ? gameHistory.find(g => g.episodeId === episodeMeta.episodeNumber || g.airDate === episodeMeta.airDate)
+    ? gameHistory.find(g =>
+        (episodeMeta.episodeId && g.gameId && g.gameId === episodeMeta.episodeId) ||
+        (g.episodeId === episodeMeta.episodeNumber)
+      )
     : null
 
   // All-time correct/wrong/pass totals
@@ -498,6 +522,7 @@ export default function App() {
     const game = {
       id: `game-${Date.now()}`,
       episodeId: episodeMeta.episodeNumber,
+      gameId: episodeMeta.episodeId, // numeric j-archive game_id e.g. "9465"
       airDate: episodeMeta.airDate,
       playedAt: new Date().toISOString(),
       singleCoryat,
@@ -744,6 +769,12 @@ export default function App() {
             setGameStarted(true)
             setResumePrompt(null)
             clearGameState()
+          }}
+          onRestart={() => {
+            const epId = resumePrompt.episodeMeta?.episodeId
+            clearGameState()
+            setResumePrompt(null)
+            if (epId) loadEpisode(epId, false)
           }}
           onDiscard={() => {
             clearGameState()
@@ -1102,13 +1133,6 @@ function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round,
         </div>
       )}
 
-      {/* Board control indicator */}
-      {tournamentMode && gameStarted && (
-        <div style={{ textAlign: 'center', padding: '6px 14px', borderRadius: 8, marginBottom: 6, background: boardControl === 'player' ? 'rgba(76,175,77,0.1)' : 'rgba(229,115,115,0.1)', border: `1px solid ${boardControl === 'player' ? 'rgba(76,175,77,0.3)' : 'rgba(229,115,115,0.3)'}`, fontSize: 11, letterSpacing: 2, color: boardControl === 'player' ? '#4caf7d' : '#e57373' }}>
-          {boardControl === 'player' ? '✓ YOU HAVE BOARD CONTROL' : '⏳ OPPONENT IS SELECTING...'}
-        </div>
-      )}
-
       {/* Start game bar — always visible when episode loaded but not started */}
       {episodeMeta && !gameStarted && (
         <div style={{
@@ -1229,7 +1253,7 @@ function FinalJeopardyModal({ fj, onAnswer, onClose }) {
 }
 
 // ─── Resume Prompt ───────────────────────────────────────────────────────────
-function ResumePrompt({ resumeData, onResume, onDiscard }) {
+function ResumePrompt({ resumeData, onResume, onRestart, onDiscard }) {
   const meta = resumeData?.episodeMeta
   const savedAt = resumeData?.savedAt
     ? new Date(resumeData.savedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
@@ -1254,18 +1278,26 @@ function ResumePrompt({ resumeData, onResume, onDiscard }) {
             </div>
           )}
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
           <button
-            style={{ ...S.markBtn, background: '#1e2456', color: '#8890d0', border: '1px solid #2e3476', flex: 1 }}
-            onClick={onDiscard}
-          >
-            Discard
-          </button>
-          <button
-            style={{ ...S.revealBtn, flex: 2 }}
+            style={{ ...S.revealBtn, flex: 1 }}
             onClick={onResume}
           >
             Resume →
+          </button>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            style={{ ...S.markBtn, background: '#1e2456', color: '#8890d0', border: '1px solid #2e3476', flex: 1 }}
+            onClick={onRestart}
+          >
+            Restart
+          </button>
+          <button
+            style={{ ...S.markBtn, background: '#1e1e1e', color: '#6070a0', border: '1px solid #2a2a2a', flex: 1 }}
+            onClick={onDiscard}
+          >
+            Discard
           </button>
         </div>
       </div>
@@ -2608,12 +2640,14 @@ function DeckView({ cards, setCards, user }) {
   return (
     <div style={S.deckWrap}>
       <div style={S.deckActions}>
-        <button style={{ ...S.actionBtn, ...(subview === 'add' ? S.actionBtnActive : {}) }} onClick={() => setSubview(subview === 'add' ? 'list' : 'add')}>{subview === 'add' ? '✕ Cancel' : '+ Add Card'}</button>
-        <button style={{ ...S.actionBtn, ...(subview === 'import' ? S.actionBtnActive : {}) }} onClick={() => setSubview(subview === 'import' ? 'list' : 'import')}>{subview === 'import' ? '✕ Cancel' : '⬆ Import .apkg'}</button>
+        <div style={{ display: 'flex', gap: 8, width: '100%' }}>
+          <button style={{ ...S.actionBtn, ...(subview === 'add' ? S.actionBtnActive : {}), flex: 1 }} onClick={() => setSubview(subview === 'add' ? 'list' : 'add')}>{subview === 'add' ? '✕ Cancel' : '+ Add Card'}</button>
+          <button style={{ ...S.actionBtn, ...(subview === 'import' ? S.actionBtnActive : {}), flex: 1 }} onClick={() => setSubview(subview === 'import' ? 'list' : 'import')}>{subview === 'import' ? '✕ Cancel' : '⬆ Import .apkg'}</button>
+        </div>
         <div style={{ position: 'relative', width: '100%' }}>
-          <input style={{ ...S.input, width: '100%', paddingLeft: 32, fontSize: 13 }} type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Search cards..." />
-          <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', fontSize: 14, color: '#4060a0', pointerEvents: 'none' }}>🔍</span>
-          {searchQuery && <button style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', fontSize: 14, color: '#4060a0' }} onClick={() => setSearchQuery('')}>✕</button>}
+          <input style={{ ...S.input, width: '100%', boxSizing: 'border-box', paddingLeft: 32, paddingRight: searchQuery ? 28 : 12, fontSize: 13 }} type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Search cards..." />
+          <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', fontSize: 13, color: '#4060a0', pointerEvents: 'none', lineHeight: 1 }}>🔍</span>
+          {searchQuery && <button style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', fontSize: 13, color: '#4060a0', lineHeight: 1 }} onClick={() => setSearchQuery('')}>✕</button>}
         </div>
         {searchQuery && <div style={{ fontSize: 11, color: '#6070a0', letterSpacing: 1 }}>{filtered.length} result{filtered.length !== 1 ? 's' : ''}</div>}
       </div>
@@ -3388,7 +3422,7 @@ const S = {
   rateBtn: { flex: 1, borderRadius: 8, padding: '10px 4px', display: 'flex', flexDirection: 'column', alignItems: 'center', border: '1px solid', fontFamily: "'Barlow Condensed', sans-serif" },
 
   deckWrap: { display: 'flex', flexDirection: 'column', gap: 12 },
-  deckActions: { display: 'flex', gap: 8 },
+  deckActions: { display: 'flex', flexDirection: 'column', gap: 8 },
   actionBtn: { flex: 1, fontSize: 12, letterSpacing: 1.5, color: '#f5c518', background: 'rgba(245,197,24,0.06)', borderRadius: 8, padding: '9px 0', fontWeight: 700, fontFamily: "'Barlow Condensed', sans-serif", border: '1px solid rgba(245,197,24,0.2)' },
   actionBtnActive: { background: 'rgba(245,197,24,0.15)', borderColor: 'rgba(245,197,24,0.5)' },
   addForm: { background: '#0a0f2e', borderRadius: 12, padding: 16, border: '1px solid #1a2460', display: 'flex', flexDirection: 'column', gap: 6 },

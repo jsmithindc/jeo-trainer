@@ -11,7 +11,7 @@ import { getMediaStats, clearAllMedia, getMedia } from './mediaStore.js'
 import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpisodeToCache, getEpisodeFromCache, pinEpisode, unpinEpisode, removeEpisodeFromCache, getCacheStats } from './storage.js'
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 
-const APP_VERSION = '1.4.0'
+const APP_VERSION = '1.4.1'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -1039,7 +1039,7 @@ function AuthModal({ user, syncError, onClose, onSignOut }) {
 }
 
 // ─── Board View ───────────────────────────────────────────────────────────────
-function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round, hasDouble, onSwitchRound, onBrowse, singleCoryat, doubleCoryat, fjAnswered, onShowFJ, boardLoading, boardError, onLoadEpisode, canGoPrev, canGoNext, onPrev, onNext, timedMode, onToggleTimedMode, tournamentMode, tournamentState, boardControl, coryatScore, onToggleTournament, onShowCache, onShowCategorySearch, gameStarted, onShowStartScreen }) {
+function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round, hasDouble, onSwitchRound, onBrowse, singleCoryat, doubleCoryat, fjAnswered, onShowFJ, boardLoading, boardError, onLoadEpisode, canGoPrev, canGoNext, onPrev, onNext, timedMode, onToggleTimedMode, tournamentMode, tournamentState, boardControl, coryatScore, onToggleTournament, onShowCache, onShowCategorySearch, gameStarted, previousGame, onShowStartScreen }) {
   const tileBg = { unanswered: '#0f1e6e', correct: '#1a5c2e', incorrect: '#5c1a1a', pass: '#2a2a4a' }
 
   return (

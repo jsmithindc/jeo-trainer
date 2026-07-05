@@ -11,7 +11,7 @@ import { getMediaStats, clearAllMedia, getMedia } from './mediaStore.js'
 import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpisodeToCache, getEpisodeFromCache, pinEpisode, unpinEpisode, removeEpisodeFromCache, getCacheStats } from './storage.js'
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 
-const APP_VERSION = '1.5.4'
+const APP_VERSION = '1.5.5'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -293,6 +293,16 @@ export default function App() {
     // Auto-save current game if one is in progress
     if (gameStarted && episodeMeta) autoSaveCurrentGame()
 
+    // Turn off tournament mode when loading a new episode
+    if (tournamentModeRef.current) {
+      setTournamentMode(false)
+      tournamentModeRef.current = false
+      setTournamentState(null)
+      setBoardControl('player')
+      boardControlRef.current = 'player'
+      if (triggerOpponentPickRef.current) clearTimeout(triggerOpponentPickRef.current)
+    }
+
     setBoardLoading(true)
     setBoardError(null)
     setGameStarted(false)
@@ -351,8 +361,9 @@ export default function App() {
   // Auto-save whenever clue states change during an active game
   useEffect(() => {
     if (!gameStarted || !episodeMeta) return
-    autoSaveCurrentGame()
-  }, [singleClueStates, doubleClueStates, fjAnswered])
+    const t = setTimeout(() => autoSaveCurrentGame(), 100)
+    return () => clearTimeout(t)
+  }, [singleClueStates, doubleClueStates, fjAnswered, gameStarted])
   useEffect(() => { openClueRef.current = openClue }, [openClue])
 
   // Opponent clue selection logic

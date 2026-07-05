@@ -11,7 +11,7 @@ import { getMediaStats, clearAllMedia, getMedia } from './mediaStore.js'
 import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpisodeToCache, getEpisodeFromCache, pinEpisode, unpinEpisode, removeEpisodeFromCache, getCacheStats } from './storage.js'
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 
-const APP_VERSION = '1.5.1'
+const APP_VERSION = '1.5.2'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -87,6 +87,7 @@ export default function App() {
   const openClueRef = useRef(null)
   const [showDJPrompt, setShowDJPrompt] = useState(false)
   const [resumePrompt, setResumePrompt] = useState(null) // saved game state to restore
+  const [pendingOpponentPick, setPendingOpponentPick] = useState(null)
   const [showCache, setShowCache] = useState(false)
   const [showCategorySearch, setShowCategorySearch] = useState(false)
 
@@ -137,16 +138,27 @@ export default function App() {
       })
       .catch(() => {}) // non-critical
     // Load next unplayed episode after the last completed one
-    // gameHistory is sorted newest first; find the most recently played gameId
-    const lastGameId = gameHistory.length > 0
-      ? (gameHistory[0].gameId || null)
-      : null
+    // gameHistory[0] is most recent; gameId is numeric j-archive ID (added v1.5.0)
+    // Fall back to episodeId (show number) for older history entries
+    const lastEntry = gameHistory.length > 0 ? gameHistory[0] : null
+    const lastGameId = lastEntry?.gameId || null
+
+    const loadLatestFallback = () => {
+      loadEpisode('latest', true).catch(() => {
+        const tryIds = ['9467', '9466', '9465', '9464', '9460']
+        const tryNext = (ids) => {
+          if (!ids.length) return
+          loadEpisode(ids[0], true).catch(() => tryNext(ids.slice(1)))
+        }
+        tryNext(tryIds)
+      })
+    }
 
     if (lastGameId) {
       const nextId = String(parseInt(lastGameId) + 1)
       loadEpisode(nextId, true)
         .then(() => {
-          // Update index to match the loaded episode
+          // Find index in episode list for proper prev/next
           fetch('/.netlify/functions/episodes')
             .then(r => r.json())
             .then(data => {
@@ -157,20 +169,10 @@ export default function App() {
               }
             }).catch(() => {})
         })
-        .catch(() => {
-          loadEpisode('latest', true).catch(() => {
-            loadEpisode(lastGameId, true).catch(() => {})
-          })
-        })
+        .catch(() => loadLatestFallback())
     } else {
-      loadEpisode('latest', true).catch(() => {
-        const tryIds = ['9466', '9465', '9464', '9460', '9450']
-        const tryNext = (ids) => {
-          if (!ids.length) return
-          loadEpisode(ids[0], true).catch(() => tryNext(ids.slice(1)))
-        }
-        tryNext(tryIds)
-      })
+      // No gameId in history (old format or no history) — load latest
+      loadLatestFallback()
     }
   }, [authChecked])
 
@@ -346,10 +348,17 @@ export default function App() {
       if (!tournamentModeRef.current) return
       if (boardControlRef.current !== 'opponent') return
       const pick = selectOpponentClue(boardRef.current, clueStatesRef.current)
-      if (pick && openClueRef.current) openClueRef.current(pick.ci, pick.ri)
+      if (pick) setPendingOpponentPick({ ci: pick.ci, ri: pick.ri })
     }, 1500 + Math.random() * 1000)
     triggerOpponentPickRef.current = timeout
   }
+
+  // When opponent pick is ready, open via React render cycle (avoids stale closure)
+  useEffect(() => {
+    if (!pendingOpponentPick) return
+    setPendingOpponentPick(null)
+    openClue(pendingOpponentPick.ci, pendingOpponentPick.ri)
+  }, [pendingOpponentPick])
 
   // Clean up timeout on unmount
   useEffect(() => () => { if (triggerOpponentPickRef.current) clearTimeout(triggerOpponentPickRef.current) }, [])

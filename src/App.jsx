@@ -11,7 +11,7 @@ import { getMediaStats, clearAllMedia, getMedia } from './mediaStore.js'
 import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpisodeToCache, getEpisodeFromCache, pinEpisode, unpinEpisode, removeEpisodeFromCache, getCacheStats } from './storage.js'
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 
-const APP_VERSION = '1.5.0'
+const APP_VERSION = '1.5.1'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -143,16 +143,26 @@ export default function App() {
       : null
 
     if (lastGameId) {
-      // Try loading the next episode after the last played one
       const nextId = String(parseInt(lastGameId) + 1)
-      loadEpisode(nextId, true).catch(() => {
-        // Next episode doesn't exist yet, load latest
-        loadEpisode('latest', true).catch(() => {
-          loadEpisode(lastGameId, true).catch(() => {})
+      loadEpisode(nextId, true)
+        .then(() => {
+          // Update index to match the loaded episode
+          fetch('/.netlify/functions/episodes')
+            .then(r => r.json())
+            .then(data => {
+              if (data.episodes?.length) {
+                setEpisodeList(data.episodes)
+                const idx = data.episodes.findIndex(e => e.gameId === nextId)
+                setCurrentEpIndex(idx >= 0 ? idx : 0)
+              }
+            }).catch(() => {})
         })
-      })
+        .catch(() => {
+          loadEpisode('latest', true).catch(() => {
+            loadEpisode(lastGameId, true).catch(() => {})
+          })
+        })
     } else {
-      // No history — load latest
       loadEpisode('latest', true).catch(() => {
         const tryIds = ['9466', '9465', '9464', '9460', '9450']
         const tryNext = (ids) => {
@@ -339,16 +349,19 @@ export default function App() {
       if (pick && openClueRef.current) openClueRef.current(pick.ci, pick.ri)
     }, 1500 + Math.random() * 1000)
     triggerOpponentPickRef.current = timeout
-    setOpponentPickTimeout(timeout)
   }
 
   // Clean up timeout on unmount
-  useEffect(() => () => { if (opponentPickTimeout) clearTimeout(opponentPickTimeout) }, [opponentPickTimeout])
+  useEffect(() => () => { if (triggerOpponentPickRef.current) clearTimeout(triggerOpponentPickRef.current) }, [])
 
   function openClue(ci, ri) {
-    const clue = board.categories[ci].clues[ri]
-    const category = board.categories[ci].name
-    const currentState = clueStates[`${ci}-${ri}`]
+    // Use refs so this works correctly from timeout callbacks too
+    const currentBoard = boardRef.current || board
+    const currentClueStates = clueStatesRef.current || clueStates
+    if (!currentBoard?.categories?.[ci]?.clues?.[ri]) return
+    const clue = currentBoard.categories[ci].clues[ri]
+    const category = currentBoard.categories[ci].name
+    const currentState = currentClueStates[`${ci}-${ri}`]
 
     // In tournament mode, block player from picking when opponent has control
     if (tournamentModeRef.current && boardControlRef.current === 'opponent' && currentState === CLUE_STATES.UNANSWERED) {
@@ -1111,7 +1124,7 @@ function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round,
           <div>
             <div style={{ fontSize: 11, color: '#f5c518', letterSpacing: 1 }}>⚠️ ALREADY PLAYED</div>
             <div style={{ fontSize: 10, color: '#6070a0', letterSpacing: 1 }}>
-              Coryat: {previousGame.coryatScore >= 0 ? '+' : ''}{previousGame.coryatScore?.toLocaleString()} · {new Date(previousGame.playedAt).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}
+              Coryat: {previousGame.coryatScore >= 0 ? '+' : ''}{previousGame.coryatScore?.toLocaleString()}
             </div>
           </div>
           <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 22, color: '#f5c518' }}>

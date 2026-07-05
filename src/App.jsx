@@ -1109,7 +1109,7 @@ function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round,
         </div>
       )}
 
-      {/* Start game bar — always visible when episode loaded but not started */}}}
+      {/* Start game bar — always visible when episode loaded but not started */}
       {episodeMeta && !gameStarted && (
         <div style={{
           background: 'linear-gradient(135deg, #0f1e6e, #060b1a)',

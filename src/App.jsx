@@ -11,7 +11,7 @@ import { getMediaStats, clearAllMedia, getMedia } from './mediaStore.js'
 import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpisodeToCache, getEpisodeFromCache, pinEpisode, unpinEpisode, removeEpisodeFromCache, getCacheStats } from './storage.js'
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 
-const APP_VERSION = '1.5.2'
+const APP_VERSION = '1.5.3'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -141,11 +141,14 @@ export default function App() {
     // gameHistory[0] is most recent; gameId is numeric j-archive ID (added v1.5.0)
     // Fall back to episodeId (show number) for older history entries
     const lastEntry = gameHistory.length > 0 ? gameHistory[0] : null
+    // gameId is the numeric j-archive game_id (added v1.5.2+)
+    // episodeId is the show number (e.g. "9582") — use to look up gameId from episode list
     const lastGameId = lastEntry?.gameId || null
+    const lastEpisodeId = lastEntry?.episodeId || null // show number
 
     const loadLatestFallback = () => {
       loadEpisode('latest', true).catch(() => {
-        const tryIds = ['9467', '9466', '9465', '9464', '9460']
+        const tryIds = ['9470', '9469', '9468', '9467', '9466']
         const tryNext = (ids) => {
           if (!ids.length) return
           loadEpisode(ids[0], true).catch(() => tryNext(ids.slice(1)))
@@ -154,26 +157,47 @@ export default function App() {
       })
     }
 
-    if (lastGameId) {
-      const nextId = String(parseInt(lastGameId) + 1)
-      loadEpisode(nextId, true)
-        .then(() => {
-          // Find index in episode list for proper prev/next
-          fetch('/.netlify/functions/episodes')
-            .then(r => r.json())
-            .then(data => {
-              if (data.episodes?.length) {
-                setEpisodeList(data.episodes)
-                const idx = data.episodes.findIndex(e => e.gameId === nextId)
-                setCurrentEpIndex(idx >= 0 ? idx : 0)
-              }
-            }).catch(() => {})
-        })
-        .catch(() => loadLatestFallback())
-    } else {
-      // No gameId in history (old format or no history) — load latest
-      loadLatestFallback()
-    }
+    // Fetch episode list to find next unplayed episode
+    fetch('/.netlify/functions/episodes')
+      .then(r => r.json())
+      .then(data => {
+        if (!data.episodes?.length) { loadLatestFallback(); return }
+        setEpisodeList(data.episodes)
+
+        // Find the last played episode in the list
+        let lastIdx = -1
+        if (lastGameId) {
+          lastIdx = data.episodes.findIndex(e => e.gameId === lastGameId)
+        }
+        if (lastIdx === -1 && lastEpisodeId) {
+          // Fall back to matching by show number
+          lastIdx = data.episodes.findIndex(e => e.showNumber === lastEpisodeId)
+        }
+
+        if (lastIdx > 0) {
+          // Episodes are newest-first, so "next" is at index lastIdx - 1
+          const nextEp = data.episodes[lastIdx - 1]
+          loadEpisode(nextEp.gameId, true)
+            .then(() => setCurrentEpIndex(lastIdx - 1))
+            .catch(() => {
+              // Next episode not parsed yet, stay on latest
+              loadEpisode(data.episodes[0].gameId, true)
+                .then(() => setCurrentEpIndex(0))
+                .catch(loadLatestFallback)
+            })
+        } else if (lastIdx === 0) {
+          // Already on the most recent episode
+          loadEpisode(data.episodes[0].gameId, true)
+            .then(() => setCurrentEpIndex(0))
+            .catch(loadLatestFallback)
+        } else {
+          // Not found in list — load latest
+          loadEpisode(data.episodes[0].gameId, true)
+            .then(() => setCurrentEpIndex(0))
+            .catch(loadLatestFallback)
+        }
+      })
+      .catch(loadLatestFallback)
   }, [authChecked])
 
   // ── Sync from Supabase when user logs in ──────────────────────────────────
@@ -357,8 +381,23 @@ export default function App() {
   useEffect(() => {
     if (!pendingOpponentPick) return
     setPendingOpponentPick(null)
-    openClue(pendingOpponentPick.ci, pendingOpponentPick.ri)
+    const { ci, ri } = pendingOpponentPick
+    console.log('[Tournament] Opponent opening clue:', ci, ri)
+    openClue(ci, ri)
   }, [pendingOpponentPick])
+
+  // Safety valve: if opponent has control for >6s and no pick fired, return to player
+  useEffect(() => {
+    if (!tournamentMode || boardControl !== 'opponent') return
+    const safety = setTimeout(() => {
+      if (boardControlRef.current === 'opponent') {
+        console.warn('[Tournament] Safety valve triggered - returning control to player')
+        setBoardControl('player')
+        boardControlRef.current = 'player'
+      }
+    }, 6000)
+    return () => clearTimeout(safety)
+  }, [boardControl, tournamentMode])
 
   // Clean up timeout on unmount
   useEffect(() => () => { if (triggerOpponentPickRef.current) clearTimeout(triggerOpponentPickRef.current) }, [])
@@ -1220,6 +1259,7 @@ function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round,
             const key = `${ci}-${ri}`
             const state = clueStates[key]
             const clue = cat.clues[ri]
+            if (!clue) return <div key={key} style={{ ...S.tile, background: '#060b1a', cursor: 'default' }} />
             return (
               <div key={key} onClick={() => onOpen(ci, ri)} style={{ ...S.tile, background: tileBg[state], cursor: 'pointer', opacity: state !== 'unanswered' ? 0.65 : 1 }}>
                 {state !== 'unanswered'

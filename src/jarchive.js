@@ -60,6 +60,7 @@ export function episodeToBoard(episode, round = 'single') {
     },
     meta: {
       episodeNumber: episode.episodeNumber,
+      episodeId: episode.episodeId,
       airDate: episode.airDate,
       url: episode.url,
       hasDouble: !!episode.doubleJeopardy,

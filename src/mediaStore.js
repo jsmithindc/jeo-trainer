@@ -1,6 +1,6 @@
 // ─── IndexedDB media store ────────────────────────────────────────────────────
 const DB_NAME = 'jeo-trainer-media'
-const DB_VERSION = 2  // bumped to force onupgradeneeded to re-run
+const DB_VERSION = 3  // bumped to force onupgradeneeded to re-run
 const STORE = 'media'
 
 function openDB() {

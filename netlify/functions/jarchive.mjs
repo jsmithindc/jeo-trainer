@@ -172,16 +172,19 @@ export const handler = async (event) => {
       const prefix = roundId === 'jeopardy_round' ? 'J' : 'DJ'
       const baseValue = roundId === 'jeopardy_round' ? 200 : 400
 
+      // Use roundEl for clue queries (works whether parsed from doc or fallback section)
+      const queryEl = roundEl
+
       const categories = categoryNames.map((name, colIdx) => {
         const clues = []
         for (let row = 1; row <= 5; row++) {
           const clueId = `clue_${prefix}_${colIdx + 1}_${row}`
 
-          const clueTextEl = doc.querySelector(`#${clueId}`)
+          const clueTextEl = queryEl.querySelector(`#${clueId}`)
           const answerText = clueTextEl?.text?.trim() || '(unavailable)'
 
           // Correct response lives in a hidden div: #clue_J_1_1_r .correct_response
-          const responseEl = doc.querySelector(`#${clueId}_r`)
+          const responseEl = queryEl.querySelector(`#${clueId}_r`)
           let question = '(unavailable)'
           if (responseEl) {
             const crEl = responseEl.querySelector('.correct_response')

@@ -11,7 +11,7 @@ import { getMediaStats, clearAllMedia, getMedia } from './mediaStore.js'
 import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpisodeToCache, getEpisodeFromCache, pinEpisode, unpinEpisode, removeEpisodeFromCache, getCacheStats } from './storage.js'
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 
-const APP_VERSION = '1.5.3'
+const APP_VERSION = '1.5.4'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -83,6 +83,11 @@ export default function App() {
   const opponentCategoryRef = useRef(null)
   const boardRef = useRef(null)
   const clueStatesRef = useRef({})
+  const singleClueStatesRef = useRef({})
+  const doubleClueStatesRef = useRef({})
+  const episodeMetaRef = useRef(null)
+  const gameStartedRef = useRef(false)
+  const roundRef = useRef('single')
   const triggerOpponentPickRef = useRef(null)
   const openClueRef = useRef(null)
   const [showDJPrompt, setShowDJPrompt] = useState(false)
@@ -165,13 +170,22 @@ export default function App() {
         setEpisodeList(data.episodes)
 
         // Find the last played episode in the list
+        // Match by gameId first, then airDate (most reliable since showNumber may be stale)
         let lastIdx = -1
         if (lastGameId) {
           lastIdx = data.episodes.findIndex(e => e.gameId === lastGameId)
         }
-        if (lastIdx === -1 && lastEpisodeId) {
-          // Fall back to matching by show number
-          lastIdx = data.episodes.findIndex(e => e.showNumber === lastEpisodeId)
+        if (lastIdx === -1 && lastEntry?.airDate) {
+          // Match by air date - normalize both to just the date portion
+          const normalizeDate = (d) => {
+            if (!d) return ''
+            // Handle "Tuesday, June 10, 2026" → "June 10, 2026"
+            // Handle "June 10, 2026" → "June 10, 2026"
+            // Handle "2026-06-10" → try to match
+            return d.replace(/^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\s*/, '').trim()
+          }
+          const lastAir = normalizeDate(lastEntry.airDate)
+          lastIdx = data.episodes.findIndex(e => normalizeDate(e.airDate) === lastAir)
         }
 
         if (lastIdx > 0) {
@@ -253,12 +267,23 @@ export default function App() {
   // ── Episode loading ───────────────────────────────────────────────────────
   // Auto-save current game state before loading new episode
   function autoSaveCurrentGame() {
-    if (!episodeMeta || !gameStarted) return
+    // Use refs to get current values (avoids stale closure issues)
+    const meta = episodeMetaRef.current || episodeMeta
+    const started = gameStartedRef.current || gameStarted
+    if (!meta || !started) return
     const state = {
-      episodeData, episodeMeta, round, board,
-      singleClueStates, doubleClueStates,
-      fjAnswered, coryatScore: singleCoryat + doubleCoryat,
-      actualScore: finalActualScore !== null ? finalActualScore : actualScore, confidenceRatings, tournamentState,
+      episodeData,
+      episodeMeta: meta,
+      round: roundRef.current || round,
+      board: boardRef.current || board,
+      singleClueStates: singleClueStatesRef.current || singleClueStates,
+      doubleClueStates: doubleClueStatesRef.current || doubleClueStates,
+      fjAnswered,
+      coryatScore: singleCoryat + doubleCoryat,
+      actualScore: finalActualScore !== null ? finalActualScore : actualScore,
+      confidenceRatings,
+      tournamentState,
+      savedAt: new Date().toISOString(),
     }
     saveGameState(state)
     if (user) saveGameStateRemote(state).catch(console.error)
@@ -317,6 +342,17 @@ export default function App() {
   useEffect(() => { boardControlRef.current = boardControl }, [boardControl])
   useEffect(() => { boardRef.current = board }, [board])
   useEffect(() => { clueStatesRef.current = clueStates }, [clueStates])
+  useEffect(() => { singleClueStatesRef.current = singleClueStates }, [singleClueStates])
+  useEffect(() => { doubleClueStatesRef.current = doubleClueStates }, [doubleClueStates])
+  useEffect(() => { episodeMetaRef.current = episodeMeta }, [episodeMeta])
+  useEffect(() => { gameStartedRef.current = gameStarted }, [gameStarted])
+  useEffect(() => { roundRef.current = round }, [round])
+
+  // Auto-save whenever clue states change during an active game
+  useEffect(() => {
+    if (!gameStarted || !episodeMeta) return
+    autoSaveCurrentGame()
+  }, [singleClueStates, doubleClueStates, fjAnswered])
   useEffect(() => { openClueRef.current = openClue }, [openClue])
 
   // Opponent clue selection logic
@@ -383,7 +419,7 @@ export default function App() {
     setPendingOpponentPick(null)
     const { ci, ri } = pendingOpponentPick
     console.log('[Tournament] Opponent opening clue:', ci, ri)
-    openClue(ci, ri)
+    openClue(ci, ri, true) // true = isOpponentPick, bypasses guard
   }, [pendingOpponentPick])
 
   // Safety valve: if opponent has control for >6s and no pick fired, return to player
@@ -402,7 +438,7 @@ export default function App() {
   // Clean up timeout on unmount
   useEffect(() => () => { if (triggerOpponentPickRef.current) clearTimeout(triggerOpponentPickRef.current) }, [])
 
-  function openClue(ci, ri) {
+  function openClue(ci, ri, isOpponentPick = false) {
     // Use refs so this works correctly from timeout callbacks too
     const currentBoard = boardRef.current || board
     const currentClueStates = clueStatesRef.current || clueStates
@@ -411,9 +447,10 @@ export default function App() {
     const category = currentBoard.categories[ci].name
     const currentState = currentClueStates[`${ci}-${ri}`]
 
-    // In tournament mode, block player from picking when opponent has control
-    if (tournamentModeRef.current && boardControlRef.current === 'opponent' && currentState === CLUE_STATES.UNANSWERED) {
-      return // opponent is picking, ignore player taps
+    // In tournament mode, block PLAYER from picking when opponent has control
+    // but allow the opponent's own programmatic pick through
+    if (!isOpponentPick && tournamentModeRef.current && boardControlRef.current === 'opponent' && currentState === CLUE_STATES.UNANSWERED) {
+      return // player tap blocked while opponent is selecting
     }
 
     // Allow re-answering already-answered clues (shows answer immediately)
@@ -455,9 +492,6 @@ export default function App() {
 
     setLastClueResult(result)
     setActiveClue(null)
-
-    // Auto-save game state after each clue
-    setTimeout(() => autoSaveCurrentGame(), 0)
 
     // Board control transfer in tournament mode
     if (tournamentModeRef.current) {

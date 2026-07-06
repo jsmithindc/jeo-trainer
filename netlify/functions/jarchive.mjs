@@ -166,8 +166,30 @@ export const handler = async (event) => {
 
       if (!roundEl) return null
 
-      const categoryNames = roundEl.querySelectorAll('.category_name').map(el => el.text.trim())
+      let categoryNames = roundEl.querySelectorAll('.category_name').map(el => el.text.trim())
       if (categoryNames.length === 0) return null
+
+      // If fewer than 6 categories found, try fallback re-parse
+      if (categoryNames.length < 6) {
+        const startMarker2 = 'id="' + roundId + '"'
+        const startIdx2 = html.indexOf(startMarker2)
+        if (startIdx2 >= 0) {
+          const nextRoundId2 = roundId === 'jeopardy_round' ? 'double_jeopardy_round' : 'final_jeopardy_round'
+          const endMarker2 = 'id="' + nextRoundId2 + '"'
+          const endIdx2 = html.indexOf(endMarker2, startIdx2)
+          const section2 = endIdx2 > startIdx2
+            ? html.slice(startIdx2 - 5, endIdx2)
+            : html.slice(startIdx2 - 5, startIdx2 + 60000)
+          const fallbackEl = parse('<div ' + section2 + '</div>').querySelector('#' + roundId)
+          if (fallbackEl) {
+            const fallbackCats = fallbackEl.querySelectorAll('.category_name').map(el => el.text.trim())
+            if (fallbackCats.length > categoryNames.length) {
+              categoryNames = fallbackCats
+              roundEl = fallbackEl
+            }
+          }
+        }
+      }
 
       const prefix = roundId === 'jeopardy_round' ? 'J' : 'DJ'
       const baseValue = roundId === 'jeopardy_round' ? 200 : 400

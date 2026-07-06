@@ -7,7 +7,9 @@ export async function fetchEpisode(episodeId = 'latest') {
 
   const numericId = parseInt(data.episodeId || episodeId)
   const isRecent = !isNaN(numericId) && numericId >= RECENT_THRESHOLD
-  const needsClientFetch = !data.doubleJeopardy && isRecent
+  const missingDJ = !data.doubleJeopardy
+  const incompleteSJ = data.singleJeopardy && data.singleJeopardy.categories.length < 6
+  const needsClientFetch = isRecent && (missingDJ || incompleteSJ)
 
   if (needsClientFetch) {
     const targetId = data.episodeId || episodeId

@@ -11,7 +11,7 @@ import { getMediaStats, clearAllMedia, getMedia } from './mediaStore.js'
 import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpisodeToCache, getEpisodeFromCache, pinEpisode, unpinEpisode, removeEpisodeFromCache, getCacheStats } from './storage.js'
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 
-const APP_VERSION = '1.5.7'
+const APP_VERSION = '1.6.0'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }

@@ -11,7 +11,7 @@ import { getMediaStats, clearAllMedia, getMedia } from './mediaStore.js'
 import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpisodeToCache, getEpisodeFromCache, pinEpisode, unpinEpisode, removeEpisodeFromCache, getCacheStats } from './storage.js'
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 
-const APP_VERSION = '1.5.8'
+const APP_VERSION = '1.5.7'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -295,7 +295,26 @@ export default function App() {
 
   async function loadEpisode(gameId, silent = false) {
     // Auto-save current game if one is in progress
-    if (gameStarted && episodeMeta) autoSaveCurrentGame()
+    // Use direct state values here (not refs) since we're in the render cycle
+    if (gameStarted && episodeMeta) {
+      const state = {
+        episodeData,
+        episodeMeta,
+        round,
+        board,
+        singleClueStates,
+        doubleClueStates,
+        fjAnswered,
+        coryatScore: singleCoryat + doubleCoryat,
+        actualScore: actualScore,
+        confidenceRatings,
+        tournamentState,
+        savedAt: new Date().toISOString(),
+      }
+      saveGameState(state)
+      if (user) saveGameStateRemote(state).catch(console.error)
+      console.log('[Save] Saved on episode change')
+    }
 
     // Turn off tournament mode when loading a new episode
     if (tournamentModeRef.current) {
@@ -323,6 +342,14 @@ export default function App() {
       setEpisodeMeta(meta)
       setRound('single')
       setSingleClueStates(initClueStates(newBoard))
+
+      // Check if there's a saved partial game for this episode
+      const savedState = loadGameState()
+      if (savedState && savedState.episodeMeta &&
+          (savedState.episodeMeta.episodeId === episode.episodeId ||
+           savedState.episodeMeta.episodeNumber === episode.episodeNumber)) {
+        setResumePrompt(savedState)
+      }
       if (episode.doubleJeopardy) {
         const { board: djBoard } = episodeToBoard(episode, 'double')
         setDoubleClueStates(initClueStates(djBoard))

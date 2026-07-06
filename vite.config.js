@@ -26,6 +26,16 @@ export default defineConfig({
         maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
         skipWaiting: true,
         clientsClaim: true,
+        runtimeCaching: [
+          {
+            urlPattern: /^https:\/\/jeotrainer\.netlify\.app\/assets\/.*/,
+            handler: 'NetworkFirst',
+            options: {
+              cacheName: 'assets-cache',
+              expiration: { maxEntries: 50, maxAgeSeconds: 60 * 60 * 24 }
+            }
+          }
+        ]
       }
     })
   ],

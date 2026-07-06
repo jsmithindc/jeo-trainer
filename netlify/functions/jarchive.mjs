@@ -169,18 +169,18 @@ export const handler = async (event) => {
       let categoryNames = roundEl.querySelectorAll('.category_name').map(el => el.text.trim())
       if (categoryNames.length === 0) return null
 
-      // If fewer than 6 categories found, try fallback re-parse
+      // If fewer than 6 categories found, try fallback re-parse to get missing ones
       if (categoryNames.length < 6) {
-        const startMarker2 = 'id="' + roundId + '"'
-        const startIdx2 = html.indexOf(startMarker2)
-        if (startIdx2 >= 0) {
-          const nextRoundId2 = roundId === 'jeopardy_round' ? 'double_jeopardy_round' : 'final_jeopardy_round'
-          const endMarker2 = 'id="' + nextRoundId2 + '"'
-          const endIdx2 = html.indexOf(endMarker2, startIdx2)
-          const section2 = endIdx2 > startIdx2
-            ? html.slice(startIdx2 - 5, endIdx2)
-            : html.slice(startIdx2 - 5, startIdx2 + 60000)
-          const fallbackEl = parse('<div ' + section2 + '</div>').querySelector('#' + roundId)
+        const startMarker = 'id="' + roundId + '"'
+        const startIdx = html.indexOf(startMarker)
+        if (startIdx >= 0) {
+          const nextRoundId = roundId === 'jeopardy_round' ? 'double_jeopardy_round' : 'final_jeopardy_round'
+          const endMarker = 'id="' + nextRoundId + '"'
+          const endIdx = html.indexOf(endMarker, startIdx)
+          const section = endIdx > startIdx
+            ? html.slice(startIdx - 5, endIdx)
+            : html.slice(startIdx - 5, startIdx + 60000)
+          const fallbackEl = parse('<div ' + section + '</div>').querySelector('#' + roundId)
           if (fallbackEl) {
             const fallbackCats = fallbackEl.querySelectorAll('.category_name').map(el => el.text.trim())
             if (fallbackCats.length > categoryNames.length) {

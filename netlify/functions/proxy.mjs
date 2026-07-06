@@ -1,9 +1,8 @@
-// Simple proxy for j-archive pages
-// Allows browser to get full HTML including DJ round
+// CORS proxy for j-archive pages
+// Allows browser to get full HTML including all rounds
 const headers = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'Content-Type',
-  'Content-Type': 'application/json',
 }
 
 export default async (event) => {
@@ -12,8 +11,8 @@ export default async (event) => {
   }
 
   const gameId = event.queryStringParameters?.game_id
-  if (!gameId) {
-    return { statusCode: 400, headers, body: JSON.stringify({ error: 'game_id required' }) }
+  if (!gameId || !/^\d+$/.test(gameId)) {
+    return { statusCode: 400, headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ error: 'Invalid game_id' }) }
   }
 
   try {
@@ -28,16 +27,16 @@ export default async (event) => {
     })
 
     if (!res.ok) {
-      return { statusCode: res.status, headers, body: JSON.stringify({ error: `j-archive returned ${res.status}` }) }
+      return { statusCode: res.status, headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ error: `j-archive returned ${res.status}` }) }
     }
 
     const html = await res.text()
     return {
       statusCode: 200,
-      headers: { ...headers, 'Content-Type': 'text/plain' },
+      headers: { ...headers, 'Content-Type': 'text/plain; charset=utf-8' },
       body: html
     }
   } catch (err) {
-    return { statusCode: 500, headers, body: JSON.stringify({ error: err.message }) }
+    return { statusCode: 500, headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ error: err.message }) }
   }
 }

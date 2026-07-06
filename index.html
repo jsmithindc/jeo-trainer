@@ -14,5 +14,17 @@
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
+  <script>
+    // Force service worker to check for updates on every page load
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(regs => {
+        regs.forEach(reg => reg.update())
+      })
+      // If a new SW is waiting, claim it immediately
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        window.location.reload()
+      })
+    }
+  </script>
   </body>
 </html>

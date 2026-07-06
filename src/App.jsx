@@ -11,7 +11,7 @@ import { getMediaStats, clearAllMedia, getMedia } from './mediaStore.js'
 import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpisodeToCache, getEpisodeFromCache, pinEpisode, unpinEpisode, removeEpisodeFromCache, getCacheStats } from './storage.js'
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 
-const APP_VERSION = '1.5.7'
+const APP_VERSION = '1.5.8'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -284,7 +284,7 @@ export default function App() {
       doubleClueStates: doubleClueStatesRef.current || doubleClueStates,
       fjAnswered,
       coryatScore: singleCoryat + doubleCoryat,
-      actualScore: finalActualScore !== null ? finalActualScore : actualScore,
+      actualScore: actualScore,
       confidenceRatings,
       tournamentState,
       savedAt: new Date().toISOString(),
@@ -638,7 +638,7 @@ export default function App() {
       singleCoryat,
       doubleCoryat,
       coryatScore,
-      actualScore: finalActualScore !== null ? finalActualScore : actualScore,
+      actualScore: actualScore,
       totalCorrect,
       totalIncorrect,
       totalPass,

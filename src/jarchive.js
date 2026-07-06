@@ -3,13 +3,14 @@ const RECENT_THRESHOLD = 9400
 export async function fetchEpisode(episodeId = 'latest') {
   const res = await fetch(`/.netlify/functions/jarchive?episode=${episodeId}`)
   const data = await res.json()
-  if (!res.ok) throw new Error(data.error || 'Failed to fetch episode')
 
   const numericId = parseInt(data.episodeId || episodeId)
   const isRecent = !isNaN(numericId) && numericId >= RECENT_THRESHOLD
+  if (!res.ok && !(res.status === 422 && isRecent)) throw new Error(data.error || 'Failed to fetch episode')
+
   const missingDJ = !data.doubleJeopardy
-  const incompleteSJ = data.singleJeopardy && data.singleJeopardy.categories.length < 6
-  const needsClientFetch = isRecent && (missingDJ || incompleteSJ)
+  const incompleteSJ = !data.singleJeopardy || data.singleJeopardy.categories.length < 6
+  const needsClientFetch = isRecent && (missingDJ || incompleteSJ || !res.ok)
 
   if (needsClientFetch) {
     const targetId = data.episodeId || episodeId

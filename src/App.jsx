@@ -11,7 +11,7 @@ import { getMediaStats, clearAllMedia, getMedia } from './mediaStore.js'
 import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpisodeToCache, getEpisodeFromCache, pinEpisode, unpinEpisode, removeEpisodeFromCache, getCacheStats } from './storage.js'
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 
-const APP_VERSION = '1.5.5'
+const APP_VERSION = '1.5.6'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -270,7 +270,11 @@ export default function App() {
     // Use refs to get current values (avoids stale closure issues)
     const meta = episodeMetaRef.current || episodeMeta
     const started = gameStartedRef.current || gameStarted
-    if (!meta || !started) return
+    if (!meta || !started) {
+      console.log('[Save] Skipped - meta:', !!meta, 'started:', started)
+      return
+    }
+    console.log('[Save] Saving game state...')
     const state = {
       episodeData,
       episodeMeta: meta,

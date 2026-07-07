@@ -1,11 +1,10 @@
-// CORS proxy for j-archive pages
-// Allows browser to get full HTML including all rounds
+// CORS proxy for j-archive pages — uses v1 handler format to match jarchive.mjs
 const headers = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'Content-Type',
 }
 
-export default async (event) => {
+export const handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') {
     return { statusCode: 200, headers }
   }

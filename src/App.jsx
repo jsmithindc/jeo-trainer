@@ -11,7 +11,7 @@ import { getMediaStats, clearAllMedia, getMedia } from './mediaStore.js'
 import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpisodeToCache, getEpisodeFromCache, pinEpisode, unpinEpisode, removeEpisodeFromCache, getCacheStats } from './storage.js'
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 
-const APP_VERSION = '1.6.0'
+const APP_VERSION = '1.6.2'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -58,6 +58,8 @@ export default function App() {
   const [showFJ, setShowFJ] = useState(false)
   const [fjAnswered, setFjAnswered] = useState(null)
   const [timedMode, setTimedMode] = useState(false)
+  const [autoMode, setAutoMode] = useState(false)
+  const autoModeRef = useRef(false)
   const [tournamentMode, setTournamentMode] = useState(false)
   const tournamentModeRef = useRef(false)
   const [tournamentState, setTournamentState] = useState(null) // { position, opponents }
@@ -316,6 +318,12 @@ export default function App() {
       console.log('[Save] Saved on episode change')
     }
 
+    // Turn off auto mode when loading a new episode
+    if (autoModeRef.current) {
+      setAutoMode(false)
+      autoModeRef.current = false
+    }
+
     // Turn off tournament mode when loading a new episode
     if (tournamentModeRef.current) {
       setTournamentMode(false)
@@ -387,11 +395,14 @@ export default function App() {
   useEffect(() => { doubleClueStatesRef.current = doubleClueStates }, [doubleClueStates])
   useEffect(() => { episodeMetaRef.current = episodeMeta }, [episodeMeta])
   useEffect(() => { gameStartedRef.current = gameStarted }, [gameStarted])
+  useEffect(() => { autoModeRef.current = autoMode }, [autoMode])
   useEffect(() => { roundRef.current = round }, [round])
 
   // Auto-save whenever clue states change during an active game
   useEffect(() => {
     if (!gameStarted || !episodeMeta) return
+    // Don't save if FJ is already answered (game is complete, clearGameState handles it)
+    if (fjAnswered) return
     const t = setTimeout(() => autoSaveCurrentGame(), 100)
     return () => clearTimeout(t)
   }, [singleClueStates, doubleClueStates, fjAnswered, gameStarted])
@@ -534,6 +545,27 @@ export default function App() {
 
     setLastClueResult(result)
     setActiveClue(null)
+
+    // Auto mode: pick next clue automatically
+    if (autoModeRef.current) {
+      setTimeout(() => {
+        const currentBoard = boardRef.current
+        const currentStates = clueStatesRef.current
+        if (!currentBoard?.categories) return
+        // Find next unanswered clue in top-to-bottom, left-to-right order
+        for (let row = 0; row < 5; row++) {
+          for (let col = 0; col < currentBoard.categories.length; col++) {
+            const key = `${col}-${row}`
+            if ((currentStates[key] || 'unanswered') === 'unanswered') {
+              if (currentBoard.categories[col]?.clues?.[row]) {
+                setPendingOpponentPick({ ci: col, ri: row })
+                return
+              }
+            }
+          }
+        }
+      }, 300)
+    }
 
     // Board control transfer in tournament mode
     if (tournamentModeRef.current) {
@@ -682,6 +714,7 @@ export default function App() {
       } : null,
     }
     setGameHistory(prev => [game, ...prev.filter(g => g.episodeId !== game.episodeId)])
+    clearGameState() // game complete, clear saved state
   }
 
   function handleFJAnswer(result) {
@@ -766,6 +799,8 @@ export default function App() {
             onNext={() => navigateEpisode(-1)}
             timedMode={timedMode}
             onToggleTimedMode={() => setTimedMode(m => !m)}
+            autoMode={autoMode}
+            onToggleAutoMode={() => setAutoMode(m => !m)}
             tournamentMode={tournamentMode}
             tournamentState={tournamentState}
             boardControl={boardControl}
@@ -1207,7 +1242,7 @@ function AuthModal({ user, syncError, onClose, onSignOut }) {
 }
 
 // ─── Board View ───────────────────────────────────────────────────────────────
-function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round, hasDouble, onSwitchRound, onBrowse, singleCoryat, doubleCoryat, fjAnswered, onShowFJ, boardLoading, boardError, onLoadEpisode, canGoPrev, canGoNext, onPrev, onNext, timedMode, onToggleTimedMode, tournamentMode, tournamentState, boardControl, coryatScore, onToggleTournament, onShowCache, onShowCategorySearch, gameStarted, previousGame, onShowStartScreen }) {
+function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round, hasDouble, onSwitchRound, onBrowse, singleCoryat, doubleCoryat, fjAnswered, onShowFJ, boardLoading, boardError, onLoadEpisode, canGoPrev, canGoNext, onPrev, onNext, timedMode, onToggleTimedMode, autoMode, onToggleAutoMode, tournamentMode, tournamentState, boardControl, coryatScore, onToggleTournament, onShowCache, onShowCategorySearch, gameStarted, previousGame, onShowStartScreen }) {
   const tileBg = { unanswered: '#0f1e6e', correct: '#1a5c2e', incorrect: '#5c1a1a', pass: '#2a2a4a' }
 
   return (
@@ -1234,6 +1269,10 @@ function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round,
           <span style={{ fontSize: 10, letterSpacing: 1, color: timedMode ? '#f5c518' : '#4060a0' }}>⏱</span>
           <button onClick={onToggleTimedMode} style={{ width: 36, height: 20, borderRadius: 10, border: 'none', background: timedMode ? '#f5c518' : '#1a2460', position: 'relative', transition: 'background 0.2s', cursor: 'pointer' }}>
             <div style={{ width: 14, height: 14, borderRadius: '50%', background: '#fff', position: 'absolute', top: 3, left: timedMode ? 19 : 3, transition: 'left 0.2s' }} />
+          </button>
+          <span style={{ fontSize: 10, letterSpacing: 1, color: autoMode ? '#4dd0e1' : '#4060a0', marginLeft: 6 }}>AUTO</span>
+          <button onClick={onToggleAutoMode} style={{ width: 36, height: 20, borderRadius: 10, border: 'none', background: autoMode ? '#4dd0e1' : '#1a2460', position: 'relative', transition: 'background 0.2s', cursor: 'pointer' }}>
+            <div style={{ width: 14, height: 14, borderRadius: '50%', background: '#fff', position: 'absolute', top: 3, left: autoMode ? 19 : 3, transition: 'left 0.2s' }} />
           </button>
         </div>
       </div>

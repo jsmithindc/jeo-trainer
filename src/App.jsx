@@ -11,7 +11,7 @@ import { getMediaStats, clearAllMedia, getMedia } from './mediaStore.js'
 import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpisodeToCache, getEpisodeFromCache, pinEpisode, unpinEpisode, removeEpisodeFromCache, getCacheStats } from './storage.js'
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 
-const APP_VERSION = '1.6.5'
+const APP_VERSION = '1.6.6'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -911,6 +911,9 @@ export default function App() {
 
       {showBrowser && (
         <EpisodeBrowser
+          currentEpisodeId={episodeMeta?.episodeId}
+          playedGameIds={new Set(gameHistory.map(g => g.gameId).filter(Boolean))}
+          lastPlayedGameId={gameHistory.length > 0 ? gameHistory[0].gameId : null}
           onSelect={(gameId, episodes, index) => {
             setShowBrowser(false)
             setEpisodeList(episodes)
@@ -927,6 +930,11 @@ export default function App() {
           episodeMeta={episodeMeta}
           gameHistory={gameHistory}
           predictionBaseDate={predictionBaseDate}
+          onResetPredictionBase={() => {
+            const b = new Date().toISOString()
+            setPredictionBaseDate(b)
+            localStorage.setItem('jeo-prediction-base', b)
+          }}
           onStart={ratings => {
             setConfidenceRatings(ratings)
             setShowStartScreen(false)
@@ -1386,9 +1394,16 @@ function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round,
         {board.categories.length < 6 && Array.from({ length: 6 - board.categories.length }).map((_, i) => (
           <div key={`missing-${i}`} style={{ ...S.catHeader, color: '#2a3460', fontStyle: 'italic' }}>UNAVAILABLE</div>
         ))}
-        {board.categories[0].clues.map((_, ri) =>
-          board.categories.map((cat, ci) => {
+        {board.categories[0].clues.map((_, ri) => {
+          // Always render 6 columns, padding missing categories with empty tiles
+          const numCols = 6
+          return Array.from({ length: numCols }).map((__, ci) => {
+            const cat = board.categories[ci]
             const key = `${ci}-${ri}`
+            if (!cat) {
+              // Missing category — render empty dark tile
+              return <div key={key} style={{ ...S.tile, background: '#060b1a', cursor: 'default' }} />
+            }
             const state = clueStates[key]
             const clue = cat.clues[ri]
             if (!clue) return <div key={key} style={{ ...S.tile, background: '#060b1a', cursor: 'default' }} />
@@ -1400,7 +1415,7 @@ function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round,
               </div>
             )
           })
-        )}
+        })}
       </div>
 
       {episodeData?.finalJeopardy && (
@@ -1500,7 +1515,7 @@ function ResumePrompt({ resumeData, onResume, onRestart, onDiscard }) {
 }
 
 // ─── Start Screen ────────────────────────────────────────────────────────────
-function StartScreen({ board, episodeMeta, gameHistory, predictionBaseDate, onStart, onSkip }) {
+function StartScreen({ board, episodeMeta, gameHistory, predictionBaseDate, onResetPredictionBase, onStart, onSkip }) {
   const [ratings, setRatings] = useState({})
   const [showConfidence, setShowConfidence] = useState(false)
   const categories = board?.categories?.map(c => c.name) || []
@@ -1801,7 +1816,7 @@ function CategorySearch({ onSelect, onClose }) {
 }
 
 // ─── Episode Browser Modal ────────────────────────────────────────────────────
-function EpisodeBrowser({ onSelect, onClose }) {
+function EpisodeBrowser({ onSelect, onClose, currentEpisodeId, playedGameIds, lastPlayedGameId }) {
   const [episodes, setEpisodes] = useState([])
   const [seasons, setSeasons] = useState([])
   const [selectedSeason, setSelectedSeason] = useState('')
@@ -1856,7 +1871,14 @@ function EpisodeBrowser({ onSelect, onClose }) {
           {error && <div style={{ ...S.loadError, margin: 12 }}>{error}</div>}
           {!loading && !error && episodes.length === 0 && <div style={S.browserLoading}>No episodes found</div>}
           {!loading && episodes.map((ep, i) => (
-            <button key={ep.gameId} style={S.episodeRow} onClick={() => onSelect(ep.gameId, episodes, i)}>
+            <button key={ep.gameId} style={{
+              ...S.episodeRow,
+              background: ep.gameId === currentEpisodeId ? 'rgba(245,197,24,0.08)' : undefined,
+              borderLeft: ep.gameId === currentEpisodeId ? '2px solid #f5c518' : ep.gameId === lastPlayedGameId ? '2px solid #4caf7d' : '2px solid transparent',
+            }} onClick={() => onSelect(ep.gameId, episodes, i)}>
+              <span style={{ width: 16, textAlign: 'center', fontSize: 11, flexShrink: 0, color: ep.gameId === currentEpisodeId ? '#f5c518' : '#4caf7d' }}>
+                {ep.gameId === currentEpisodeId ? '▶' : ep.gameId === lastPlayedGameId ? '✓' : ''}
+              </span>
               <span style={S.epDate}>{ep.airDate}</span>
               <span style={{ fontSize: 10, color: '#4060a0' }}>#{ep.gameId}</span>
               <span style={S.epArrow}>▶</span>

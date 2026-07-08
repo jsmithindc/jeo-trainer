@@ -11,7 +11,7 @@ import { getMediaStats, clearAllMedia, getMedia } from './mediaStore.js'
 import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpisodeToCache, getEpisodeFromCache, pinEpisode, unpinEpisode, removeEpisodeFromCache, getCacheStats } from './storage.js'
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 
-const APP_VERSION = '1.6.3'
+const APP_VERSION = '1.6.5'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -96,6 +96,7 @@ export default function App() {
   const [showDJPrompt, setShowDJPrompt] = useState(false)
   const [resumePrompt, setResumePrompt] = useState(null) // saved game state to restore
   const [pendingOpponentPick, setPendingOpponentPick] = useState(null)
+  const [predictionBaseDate, setPredictionBaseDate] = useState(() => localStorage.getItem('jeo-prediction-base') || null)
   const [showCache, setShowCache] = useState(false)
   const [showCategorySearch, setShowCategorySearch] = useState(false)
 
@@ -834,6 +835,12 @@ export default function App() {
         {view === 'deck'    && <DeckView cards={cards} setCards={setCards} user={user} />}
         {view === 'summary' && (
           <SummaryView
+            predictionBaseDate={predictionBaseDate}
+            onResetPredictionBase={() => {
+              const base = new Date().toISOString()
+              setPredictionBaseDate(base)
+              localStorage.setItem('jeo-prediction-base', base)
+            }}
             coryatScore={coryatScore}
             actualScore={actualScore}
             fjAnswered={fjAnswered}
@@ -919,6 +926,7 @@ export default function App() {
           board={board}
           episodeMeta={episodeMeta}
           gameHistory={gameHistory}
+          predictionBaseDate={predictionBaseDate}
           onStart={ratings => {
             setConfidenceRatings(ratings)
             setShowStartScreen(false)
@@ -1375,6 +1383,9 @@ function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round,
         {board.categories.map((cat, ci) => (
           <div key={ci} style={S.catHeader}>{cat.name}</div>
         ))}
+        {board.categories.length < 6 && Array.from({ length: 6 - board.categories.length }).map((_, i) => (
+          <div key={`missing-${i}`} style={{ ...S.catHeader, color: '#2a3460', fontStyle: 'italic' }}>UNAVAILABLE</div>
+        ))}
         {board.categories[0].clues.map((_, ri) =>
           board.categories.map((cat, ci) => {
             const key = `${ci}-${ri}`
@@ -1489,7 +1500,7 @@ function ResumePrompt({ resumeData, onResume, onRestart, onDiscard }) {
 }
 
 // ─── Start Screen ────────────────────────────────────────────────────────────
-function StartScreen({ board, episodeMeta, gameHistory, onStart, onSkip }) {
+function StartScreen({ board, episodeMeta, gameHistory, predictionBaseDate, onStart, onSkip }) {
   const [ratings, setRatings] = useState({})
   const [showConfidence, setShowConfidence] = useState(false)
   const categories = board?.categories?.map(c => c.name) || []
@@ -1517,11 +1528,7 @@ function StartScreen({ board, episodeMeta, gameHistory, onStart, onSkip }) {
               <div style={{ fontSize: 9, letterSpacing: 3, color: '#6070a0' }}>PREDICTED CORYAT RANGE</div>
               <button
                 style={{ fontSize: 9, color: '#4060a0', letterSpacing: 1 }}
-                onClick={() => {
-                  const base = new Date().toISOString()
-                  setPredictionBaseDate(base)
-                  localStorage.setItem('jeo-prediction-base', base)
-                }}
+                onClick={onResetPredictionBase}
                 title="Reset prediction baseline to today"
               >
                 Reset baseline
@@ -2734,7 +2741,6 @@ function DeckView({ cards, setCards, user }) {
   const [selectedIds, setSelectedIds] = useState(new Set())
   const [bulkMode, setBulkMode] = useState(false)
   const [exporting, setExporting] = useState(false)
-  const [predictionBaseDate, setPredictionBaseDate] = useState(() => localStorage.getItem('jeo-prediction-base') || null)
   const [searchQuery, setSearchQuery] = useState('')
   const [newFront, setNewFront] = useState('')
   const [newBack, setNewBack] = useState('')
@@ -3088,7 +3094,7 @@ function GameHistoryRow({ game }) {
 }
 
 // ─── Summary / Stats View ─────────────────────────────────────────────────────
-function SummaryView({ coryatScore, actualScore, fjAnswered, singleBoard, doubleBoard, singleClueStates, doubleClueStates, gameHistory, episodeMeta, tournamentState, confidenceRatings, allTimeCorrect, allTimeIncorrect, allTimePass, allTimeAnswered, pctCorrect, pctIncorrect, pctPass, avgSJ, avgDJ, gamesWithFJ, fjCorrect, pctFJ }) {
+function SummaryView({ predictionBaseDate, onResetPredictionBase, coryatScore, actualScore, fjAnswered, singleBoard, doubleBoard, singleClueStates, doubleClueStates, gameHistory, episodeMeta, tournamentState, confidenceRatings, allTimeCorrect, allTimeIncorrect, allTimePass, allTimeAnswered, pctCorrect, pctIncorrect, pctPass, avgSJ, avgDJ, gamesWithFJ, fjCorrect, pctFJ }) {
   const [historyView, setHistoryView] = useState(false)
   const [statsTab, setStatsTab] = useState('current') // current | weakness | speed | history
 

@@ -146,6 +146,58 @@ export const handler = async (event) => {
     const airDate = dateMatch ? dateMatch[1].trim() : ''
 
     // ── Parse a round ─────────────────────────────────────────────────────────
+    // Fallback: extract clues directly from clue IDs when round wrapper is missing
+    function parseRoundFromClueIds(doc, html, prefix, baseValue) {
+      // Check if any clues exist for this prefix
+      if (!html.includes(`id="clue_${prefix}_1_1"`)) return null
+
+      // Find category names from clue headers
+      const categories = []
+      for (let col = 1; col <= 6; col++) {
+        const clueId = `clue_${prefix}_${col}_1`
+        const clueEl = doc.querySelector(`#${clueId}`)
+        if (!clueEl) break
+
+        // Try to find category name from the surrounding table
+        const catEl = doc.querySelector(`.category_name`)
+        const clues = []
+        for (let row = 1; row <= 5; row++) {
+          const cId = `clue_${prefix}_${col}_${row}`
+          const cEl = doc.querySelector(`#${cId}`)
+          if (!cEl) { clues.push(null); continue }
+
+          const responseEl = doc.querySelector(`#${cId}_r`)
+          const answerText = cEl.text?.trim() || '(unavailable)'
+          const question = responseEl?.querySelector('.correct_response')?.text?.trim() || ''
+          const headerEl = doc.querySelector(`#${cId}_stuck`)?.parentNode?.parentNode
+          const valueEl = headerEl?.querySelector('.clue_value, .clue_value_daily_double')
+          const valueText = valueEl?.text?.trim() || ''
+          const isDailyDouble = valueText.includes('DD')
+          const value = isDailyDouble
+            ? parseInt(valueText.replace(/[^0-9]/g, '')) || baseValue * row
+            : baseValue * row
+
+          clues.push({ value, answer: answerText, question, isDailyDouble })
+        }
+
+        if (clues.some(c => c !== null)) {
+          categories.push({ name: `CATEGORY ${col}`, clues: clues.filter(Boolean) })
+        }
+      }
+
+      if (categories.length === 0) return null
+
+      // Try to get real category names from the HTML
+      const catNameEls = doc.querySelectorAll('.category_name')
+      const catNames = catNameEls.map(el => el.text.trim()).filter(Boolean)
+      const offset = prefix === 'DJ' ? 6 : 0
+      categories.forEach((cat, i) => {
+        if (catNames[offset + i]) cat.name = catNames[offset + i]
+      })
+
+      return { categories }
+    }
+
     function parseRound(roundId) {
       let roundEl = doc.querySelector(`#${roundId}`)
 
@@ -237,8 +289,12 @@ export const handler = async (event) => {
       return { categories }
     }
 
-    const singleJeopardy = parseRound('jeopardy_round')
-    const doubleJeopardy = parseRound('double_jeopardy_round')
+    let singleJeopardy = parseRound('jeopardy_round')
+    let doubleJeopardy = parseRound('double_jeopardy_round')
+
+    // Last resort: extract clues directly from IDs if round wrapper missing
+    if (!singleJeopardy) singleJeopardy = parseRoundFromClueIds(doc, html, 'J', 200)
+    if (!doubleJeopardy) doubleJeopardy = parseRoundFromClueIds(doc, html, 'DJ', 400)
 
     // ── Final Jeopardy ────────────────────────────────────────────────────────
     let finalJeopardy = null

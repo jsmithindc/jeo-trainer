@@ -11,7 +11,7 @@ import { getMediaStats, clearAllMedia, getMedia } from './mediaStore.js'
 import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpisodeToCache, getEpisodeFromCache, pinEpisode, unpinEpisode, removeEpisodeFromCache, getCacheStats } from './storage.js'
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 
-const APP_VERSION = '1.6.2'
+const APP_VERSION = '1.6.3'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -90,6 +90,7 @@ export default function App() {
   const episodeMetaRef = useRef(null)
   const gameStartedRef = useRef(false)
   const roundRef = useRef('single')
+  const gameCompleteRef = useRef(false)
   const triggerOpponentPickRef = useRef(null)
   const openClueRef = useRef(null)
   const [showDJPrompt, setShowDJPrompt] = useState(false)
@@ -318,6 +319,9 @@ export default function App() {
       console.log('[Save] Saved on episode change')
     }
 
+    // Reset game complete flag
+    gameCompleteRef.current = false
+
     // Turn off auto mode when loading a new episode
     if (autoModeRef.current) {
       setAutoMode(false)
@@ -395,14 +399,15 @@ export default function App() {
   useEffect(() => { doubleClueStatesRef.current = doubleClueStates }, [doubleClueStates])
   useEffect(() => { episodeMetaRef.current = episodeMeta }, [episodeMeta])
   useEffect(() => { gameStartedRef.current = gameStarted }, [gameStarted])
+  useEffect(() => { gameCompleteRef.current = !!fjAnswered }, [fjAnswered])
   useEffect(() => { autoModeRef.current = autoMode }, [autoMode])
   useEffect(() => { roundRef.current = round }, [round])
 
   // Auto-save whenever clue states change during an active game
   useEffect(() => {
     if (!gameStarted || !episodeMeta) return
-    // Don't save if FJ is already answered (game is complete, clearGameState handles it)
-    if (fjAnswered) return
+    // Don't save if game is complete
+    if (gameCompleteRef.current || fjAnswered) return
     const t = setTimeout(() => autoSaveCurrentGame(), 100)
     return () => clearTimeout(t)
   }, [singleClueStates, doubleClueStates, fjAnswered, gameStarted])
@@ -522,11 +527,11 @@ export default function App() {
     setShowAnswer(false)
   }
 
-  function markClue(result) {
+  function markClue(result, skipDeck = false) {
     const { ci, ri, clue, category, isReanswer, previousResult } = activeClue
     setClueStates(prev => ({ ...prev, [`${ci}-${ri}`]: result }))
 
-    if (result === CLUE_STATES.INCORRECT || result === CLUE_STATES.PASS) {
+    if (!skipDeck && (result === CLUE_STATES.INCORRECT || result === CLUE_STATES.PASS)) {
       addMissedAsCard(clue, category)
     }
 
@@ -714,6 +719,7 @@ export default function App() {
       } : null,
     }
     setGameHistory(prev => [game, ...prev.filter(g => g.episodeId !== game.episodeId)])
+    gameCompleteRef.current = true // mark complete before async updates
     clearGameState() // game complete, clear saved state
   }
 
@@ -881,7 +887,7 @@ export default function App() {
           category={activeClue.category}
           showAnswer={true}
           onReveal={() => {}}
-          onMark={markClue}
+          onMark={(result, skipDeck) => markClue(result, skipDeck)}
           onClose={() => setActiveClue(null)}
           isReanswer={true}
           previousResult={activeClue.previousResult}
@@ -1487,7 +1493,10 @@ function StartScreen({ board, episodeMeta, gameHistory, onStart, onSkip }) {
   const [ratings, setRatings] = useState({})
   const [showConfidence, setShowConfidence] = useState(false)
   const categories = board?.categories?.map(c => c.name) || []
-  const prediction = predictCoryat(gameHistory, board)
+  const predictionHistory = predictionBaseDate
+    ? gameHistory.filter(g => g.playedAt >= predictionBaseDate)
+    : gameHistory
+  const prediction = predictCoryat(predictionHistory, board)
   const LABELS = ['😬', '😐', '🙂', '😎']
   const LABEL_TEXT = ['Weak', 'OK', 'Good', 'Strong']
 
@@ -1504,7 +1513,20 @@ function StartScreen({ board, episodeMeta, gameHistory, onStart, onSkip }) {
         {/* Predicted Coryat */}
         {prediction && (
           <div style={{ background: '#060b1a', borderRadius: 10, padding: '12px 16px', marginBottom: 16, border: '1px solid #1a2040' }}>
-            <div style={{ fontSize: 9, letterSpacing: 3, color: '#6070a0', marginBottom: 6 }}>PREDICTED CORYAT RANGE</div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <div style={{ fontSize: 9, letterSpacing: 3, color: '#6070a0' }}>PREDICTED CORYAT RANGE</div>
+              <button
+                style={{ fontSize: 9, color: '#4060a0', letterSpacing: 1 }}
+                onClick={() => {
+                  const base = new Date().toISOString()
+                  setPredictionBaseDate(base)
+                  localStorage.setItem('jeo-prediction-base', base)
+                }}
+                title="Reset prediction baseline to today"
+              >
+                Reset baseline
+              </button>
+            </div>
             <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'baseline', gap: 8 }}>
               <span style={{ fontSize: 14, color: '#4060a0' }}>{prediction.low >= 0 ? '+' : ''}{prediction.low.toLocaleString()}</span>
               <span style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 32, color: '#f5c518' }}>{prediction.mid >= 0 ? '+' : ''}{prediction.mid.toLocaleString()}</span>
@@ -2179,6 +2201,7 @@ function TimedClueModal({ clue, category, onMark, onClose }) {
 
 // ─── Clue Modal ───────────────────────────────────────────────────────────────
 function ClueModal({ clue, category, showAnswer, onReveal, onMark, onClose, isReanswer, previousResult }) {
+  const [skipDeck, setSkipDeck] = useState(false)
   const prevColors = { correct: '#4caf7d', incorrect: '#e57373', pass: '#7986cb' }
   const prevLabels = { correct: '✓ Correct', incorrect: '✗ Wrong', pass: '— Pass' }
   return (
@@ -2198,10 +2221,31 @@ function ClueModal({ clue, category, showAnswer, onReveal, onMark, onClose, isRe
           ? <button style={S.revealBtn} onClick={onReveal}>Reveal Answer</button>
           : <>
               <div style={S.modalQ}>{clue.question}</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'center', marginBottom: 8 }}>
+                <button
+                  onClick={() => setSkipDeck(s => !s)}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 6,
+                    fontSize: 11, color: skipDeck ? '#e57373' : '#4060a0',
+                    background: 'none', border: 'none', cursor: 'pointer', letterSpacing: 1,
+                  }}
+                >
+                  <div style={{
+                    width: 14, height: 14, borderRadius: 3,
+                    border: `1px solid ${skipDeck ? '#e57373' : '#2a3460'}`,
+                    background: skipDeck ? '#e57373' : 'transparent',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: 10, color: '#fff',
+                  }}>
+                    {skipDeck ? '✓' : ''}
+                  </div>
+                  Don't add to deck
+                </button>
+              </div>
               <div style={S.markRow}>
-                <button style={{ ...S.markBtn, background: '#1a5c2e', color: '#7cd992', border: '1px solid #2e8c50' }} onClick={() => onMark('correct')}>✓ Got It</button>
-                <button style={{ ...S.markBtn, background: '#5c1a1a', color: '#e07070', border: '1px solid #8c2e2e' }} onClick={() => onMark('incorrect')}>✗ Wrong</button>
-                <button style={{ ...S.markBtn, background: '#1e2456', color: '#8890d0', border: '1px solid #2e3476' }} onClick={() => onMark('pass')}>— Pass</button>
+                <button style={{ ...S.markBtn, background: '#1a5c2e', color: '#7cd992', border: '1px solid #2e8c50' }} onClick={() => onMark('correct', skipDeck)}>✓ Got It</button>
+                <button style={{ ...S.markBtn, background: '#5c1a1a', color: '#e07070', border: '1px solid #8c2e2e' }} onClick={() => onMark('incorrect', skipDeck)}>✗ Wrong</button>
+                <button style={{ ...S.markBtn, background: '#1e2456', color: '#8890d0', border: '1px solid #2e3476' }} onClick={() => onMark('pass', skipDeck)}>— Pass</button>
               </div>
             </>}
       </div>
@@ -2690,6 +2734,7 @@ function DeckView({ cards, setCards, user }) {
   const [selectedIds, setSelectedIds] = useState(new Set())
   const [bulkMode, setBulkMode] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [predictionBaseDate, setPredictionBaseDate] = useState(() => localStorage.getItem('jeo-prediction-base') || null)
   const [searchQuery, setSearchQuery] = useState('')
   const [newFront, setNewFront] = useState('')
   const [newBack, setNewBack] = useState('')
@@ -3155,41 +3200,6 @@ function SummaryView({ coryatScore, actualScore, fjAnswered, singleBoard, double
               <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 28, color: pctFJ >= 50 ? '#4caf7d' : '#e57373' }}>
                 {pctFJ}%
               </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* All-time performance stats */}
-      {statsTab === 'current' && gameHistory.length > 0 && allTimeAnswered > 0 && (
-        <div style={{ background: '#0a0f2e', borderRadius: 12, padding: '14px 16px', border: '1px solid #1a2460' }}>
-          <div style={{ fontSize: 10, letterSpacing: 3, color: '#6070a0', marginBottom: 10 }}>ALL-TIME PERFORMANCE</div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 12 }}>
-            {[['✓ CORRECT', allTimeCorrect, pctCorrect, '#4caf7d'], ['✗ WRONG', allTimeIncorrect, pctIncorrect, '#e57373'], ['— PASS', allTimePass, pctPass, '#7986cb']].map(([lbl, count, pct, color]) => (
-              <div key={lbl} style={{ background: '#060b1a', borderRadius: 8, padding: '10px 6px', textAlign: 'center', border: '1px solid #1a2040' }}>
-                <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 22, color }}>{count.toLocaleString()}</div>
-                <div style={{ fontSize: 11, color, marginBottom: 2 }}>{pct !== null ? `${pct}%` : '—'}</div>
-                <div style={{ fontSize: 8, color: '#4060a0', letterSpacing: 1.5 }}>{lbl}</div>
-              </div>
-            ))}
-          </div>
-          {(avgSJ !== null || avgDJ !== null) && (
-            <div style={{ display: 'grid', gridTemplateColumns: avgDJ !== null ? '1fr 1fr' : '1fr', gap: 8, marginBottom: pctFJ !== null ? 12 : 0 }}>
-              {[['AVG SJ CORYAT', avgSJ], ['AVG DJ CORYAT', avgDJ]].filter(([,v]) => v !== null).map(([lbl, val]) => (
-                <div key={lbl} style={{ background: '#060b1a', borderRadius: 8, padding: '10px 6px', textAlign: 'center', border: '1px solid #1a2040' }}>
-                  <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: '#f5c518' }}>{val >= 0 ? '+' : ''}{val.toLocaleString()}</div>
-                  <div style={{ fontSize: 8, color: '#4060a0', letterSpacing: 1.5 }}>{lbl}</div>
-                </div>
-              ))}
-            </div>
-          )}
-          {pctFJ !== null && (
-            <div style={{ background: '#060b1a', borderRadius: 8, padding: '10px 14px', border: '1px solid #1a2040', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <div style={{ fontSize: 12, color: '#c0c8e8' }}>Final Jeopardy correct</div>
-                <div style={{ fontSize: 10, color: '#4060a0', letterSpacing: 1 }}>{fjCorrect} of {gamesWithFJ.length} games</div>
-              </div>
-              <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 28, color: pctFJ >= 50 ? '#4caf7d' : '#e57373' }}>{pctFJ}%</div>
             </div>
           )}
         </div>

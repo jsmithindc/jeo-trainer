@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { getMetaCategory, META_CATEGORY_NAMES } from './analytics.js'
 
 // ─── Historical data ──────────────────────────────────────────────────────────
 // Approximate Coryat distributions for Jeopardy contestants
@@ -77,29 +78,33 @@ export function calcStreak(gameHistory) {
 export function WeaknessTracker({ gameHistory }) {
   const S = styles
 
-  // Aggregate all category scores across all games
-  const catMap = {}
+  // Aggregate scores by metacategory
+  const metaMap = {}
+  META_CATEGORY_NAMES.forEach(m => { metaMap[m] = { name: m, total: 0, count: 0, cats: {} } })
+
   gameHistory.forEach(game => {
-    const processBreakdown = (breakdown, round) => {
+    const processBreakdown = (breakdown) => {
       if (!breakdown) return
       breakdown.forEach(cat => {
-        const key = cat.name
-        if (!catMap[key]) catMap[key] = { name: key, scores: [], total: 0, games: 0 }
-        catMap[key].scores.push(cat.score)
-        catMap[key].total += cat.score
-        catMap[key].games++
+        const meta = getMetaCategory(cat.name) || 'Potpourri'
+        if (!metaMap[meta]) metaMap[meta] = { name: meta, total: 0, count: 0, cats: {} }
+        metaMap[meta].total += cat.score
+        metaMap[meta].count++
+        if (!metaMap[meta].cats[cat.name]) metaMap[meta].cats[cat.name] = { total: 0, count: 0 }
+        metaMap[meta].cats[cat.name].total += cat.score
+        metaMap[meta].cats[cat.name].count++
       })
     }
-    processBreakdown(game.singleBreakdown, 'single')
-    processBreakdown(game.doubleBreakdown, 'double')
+    processBreakdown(game.singleBreakdown)
+    processBreakdown(game.doubleBreakdown)
   })
 
-  const categories = Object.values(catMap)
-    .filter(c => c.games >= 1)
-    .map(c => ({ ...c, avg: Math.round(c.total / c.games) }))
-    .sort((a, b) => a.avg - b.avg) // worst first
+  const metas = Object.values(metaMap)
+    .filter(m => m.count > 0)
+    .map(m => ({ ...m, avg: Math.round(m.total / m.count) }))
+    .sort((a, b) => a.avg - b.avg)
 
-  if (categories.length === 0) {
+  if (metas.length === 0) {
     return (
       <div style={S.emptyState}>
         <div style={{ fontSize: 28, marginBottom: 8 }}>📊</div>
@@ -108,26 +113,38 @@ export function WeaknessTracker({ gameHistory }) {
     )
   }
 
-  const worst = categories.slice(0, 5)
-  const best = categories.slice(-5).reverse()
-  const maxAbs = Math.max(...categories.map(c => Math.abs(c.avg)), 1)
+  const maxAbs = Math.max(...metas.map(m => Math.abs(m.avg)), 1)
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div style={S.card}>
-        <div style={S.sectionTitle}>WEAKEST CATEGORIES</div>
-        {worst.map(cat => <CategoryBar key={cat.name} cat={cat} maxAbs={maxAbs} />)}
-      </div>
-      <div style={S.card}>
-        <div style={S.sectionTitle}>STRONGEST CATEGORIES</div>
-        {best.map(cat => <CategoryBar key={cat.name} cat={cat} maxAbs={maxAbs} />)}
-      </div>
-      {categories.length > 10 && (
-        <div style={S.card}>
-          <div style={S.sectionTitle}>ALL CATEGORIES ({categories.length})</div>
-          {categories.map(cat => <CategoryBar key={cat.name} cat={cat} maxAbs={maxAbs} />)}
-        </div>
-      )}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {metas.map(meta => {
+        const topCats = Object.entries(meta.cats)
+          .map(([name, d]) => ({ name, avg: Math.round(d.total / d.count) }))
+          .sort((a, b) => a.avg - b.avg)
+          .slice(0, 3)
+        return (
+          <div key={meta.name} style={S.card}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <span style={{ ...S.sectionTitle, marginBottom: 0 }}>{meta.name}</span>
+              <span style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 18, color: meta.avg < 0 ? '#e57373' : '#4caf7d' }}>
+                {meta.avg >= 0 ? '+' : ''}{meta.avg.toLocaleString()} avg
+              </span>
+            </div>
+            <div style={{ height: 4, background: '#1a2040', borderRadius: 99, overflow: 'hidden', marginBottom: 8 }}>
+              <div style={{ height: '100%', width: `${Math.abs(meta.avg) / maxAbs * 100}%`, background: meta.avg < 0 ? '#e57373' : '#4caf7d', borderRadius: 99 }} />
+            </div>
+            {topCats.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                {topCats.map(c => (
+                  <span key={c.name} style={{ fontSize: 9, letterSpacing: 1, color: '#4060a0', background: '#060b1a', borderRadius: 4, padding: '2px 6px', border: '1px solid #1a2040' }}>
+                    {c.name} ({c.avg >= 0 ? '+' : ''}{c.avg})
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        )
+      })}
     </div>
   )
 }

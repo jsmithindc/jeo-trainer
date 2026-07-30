@@ -10,8 +10,9 @@ import { CardContent, cardIsHtml } from './CardContent.jsx'
 import { getMediaStats, clearAllMedia, getMedia } from './mediaStore.js'
 import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpisodeToCache, getEpisodeFromCache, pinEpisode, unpinEpisode, removeEpisodeFromCache, getCacheStats } from './storage.js'
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
+import { DrillsView } from './drills.jsx'
 
-const APP_VERSION = '1.6.6'
+const APP_VERSION = '1.7.0'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -122,6 +123,7 @@ export default function App() {
     setCards(loadCards())
     setGameHistory(loadGameHistory())
     setStorageReady(true)
+    setHistoryReady(true)
   }, [])
 
   // ── Check for saved game state to resume ────────────────────────────────
@@ -134,6 +136,8 @@ export default function App() {
   }, [authChecked])
 
   // ── Auto-load latest episode + episode list on mount ────────────────────
+  const [historyReady, setHistoryReady] = useState(false)
+
   useEffect(() => {
     if (!authChecked) return
     // Load episode list so prev/next work immediately
@@ -216,7 +220,7 @@ export default function App() {
         }
       })
       .catch(loadLatestFallback)
-  }, [authChecked])
+  }, [authChecked, historyReady])
 
   // ── Sync from Supabase when user logs in ──────────────────────────────────
   useEffect(() => {
@@ -558,9 +562,9 @@ export default function App() {
         const currentBoard = boardRef.current
         const currentStates = clueStatesRef.current
         if (!currentBoard?.categories) return
-        // Find next unanswered clue in top-to-bottom, left-to-right order
-        for (let row = 0; row < 5; row++) {
-          for (let col = 0; col < currentBoard.categories.length; col++) {
+        // Find next unanswered clue: go down each category before moving to next
+        for (let col = 0; col < 6; col++) {
+          for (let row = 0; row < 5; row++) {
             const key = `${col}-${row}`
             if ((currentStates[key] || 'unanswered') === 'unanswered') {
               if (currentBoard.categories[col]?.clues?.[row]) {
@@ -833,6 +837,8 @@ export default function App() {
         )}
         {view === 'study'   && <StudyView cards={cards} setCards={setCards} />}
         {view === 'deck'    && <DeckView cards={cards} setCards={setCards} user={user} />}
+        {view === 'drills' && <DrillsView />}
+
         {view === 'summary' && (
           <SummaryView
             predictionBaseDate={predictionBaseDate}
@@ -1115,6 +1121,7 @@ function NavBar({ view, setView, dueCount, deckSize }) {
     { id: 'study',   label: `🔁 STUDY${dueCount > 0 ? ` (${dueCount})` : ''}` },
     { id: 'deck',    label: `🗂 DECK (${deckSize})` },
     { id: 'summary', label: '📊 STATS' },
+    { id: 'drills',  label: '⚡ DRILLS' },
   ]
   return (
     <nav style={S.nav}>
@@ -2284,7 +2291,7 @@ function ClueModal({ clue, category, showAnswer, onReveal, onMark, onClose, isRe
 
 // ─── Study View ───────────────────────────────────────────────────────────────
 function StudyView({ cards, setCards }) {
-  const CHUNK_PRESETS = { quick: 10, standard: 20, long: 40 }
+  const CHUNK_PRESETS = { quick: 10, standard: 20, long: 40, marathon: 100 }
   const DEFAULT_CHUNK = 'standard'
 
   const [phase, setPhase] = useState('configure') // configure | session | chunkdone
@@ -2395,7 +2402,7 @@ function StudyView({ cards, setCards }) {
           <div style={S.configRow}>
             <span style={S.configLabel}>SESSION SIZE</span>
             <div style={S.toggleGroup}>
-              {[['quick','Quick','10'],['standard','Standard','20'],['long','Long','40']].map(([key,label,n]) => (
+              {[['quick','Quick','10'],['standard','Standard','20'],['long','Long','40'],['marathon','Marathon','100']].map(([key,label,n]) => (
                 <button key={key}
                   style={{ ...S.toggleBtn, ...(chunkPreset === key && !showCustom ? S.toggleActive : {}) }}
                   onClick={() => { setChunkPreset(key); setShowCustom(false) }}

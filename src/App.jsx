@@ -12,7 +12,7 @@ import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpi
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 import { DrillsView } from './drills.jsx'
 
-const APP_VERSION = '1.7.3'
+const APP_VERSION = '1.7.4'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -780,7 +780,7 @@ export default function App() {
         syncError={syncError}
         onAuthClick={() => setShowAuth(true)}
       />
-      <NavBar view={view} setView={setView} dueCount={dueCount} deckSize={cards.length} />
+      <NavBar view={view} setView={setView} dueCount={dueCount} />
 
       <main style={S.main}>
         {view === 'board' && board && (
@@ -835,9 +835,7 @@ export default function App() {
             }}
           />
         )}
-        {view === 'study'   && <StudyView cards={cards} setCards={setCards} />}
-        {view === 'deck'    && <DeckView cards={cards} setCards={setCards} user={user} />}
-        {view === 'drills' && <DrillsView />}
+        {view === 'study' && <StudyTabView cards={cards} setCards={setCards} user={user} dueCount={dueCount} />}
 
         {view === 'summary' && (
           <SummaryView
@@ -1115,13 +1113,51 @@ function Header({ coryatScore, actualScore, correctCount, incorrectCount, passCo
 }
 
 // ─── Nav ──────────────────────────────────────────────────────────────────────
-function NavBar({ view, setView, dueCount, deckSize }) {
+// ─── Study Tab View ──────────────────────────────────────────────────────────
+function StudyTabView({ cards, setCards, user, dueCount }) {
+  const [subTab, setSubTab] = useState('flashcards')
+
+  const subTabs = [
+    { id: 'flashcards', label: `🔁 FLASHCARDS${dueCount > 0 ? ` (${dueCount})` : ''}` },
+    { id: 'deck', label: `🗂 DECK (${cards.length})` },
+    { id: 'drills', label: '⚡ DRILLS' },
+  ]
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 0, width: '100%' }}>
+      {/* Sub-tab bar */}
+      <div style={{ display: 'flex', gap: 2, background: '#05081a', borderBottom: '1px solid #1a2040', padding: '6px 8px', overflowX: 'auto' }}>
+        {subTabs.map(t => (
+          <button
+            key={t.id}
+            onClick={() => setSubTab(t.id)}
+            style={{
+              flex: 1, padding: '6px 4px', borderRadius: 8, border: 'none',
+              background: subTab === t.id ? '#1a2460' : 'transparent',
+              color: subTab === t.id ? '#f5c518' : '#4060a0',
+              fontFamily: "'Bebas Neue', sans-serif", fontSize: 13, letterSpacing: 1.5,
+              cursor: 'pointer', whiteSpace: 'nowrap', transition: 'all 0.15s',
+            }}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ padding: '12px 0 0 0' }}>
+        {subTab === 'flashcards' && <StudyView cards={cards} setCards={setCards} />}
+        {subTab === 'deck' && <DeckView cards={cards} setCards={setCards} user={user} />}
+        {subTab === 'drills' && <DrillsView />}
+      </div>
+    </div>
+  )
+}
+
+function NavBar({ view, setView, dueCount }) {
   const tabs = [
     { id: 'board',   label: '📋 BOARD' },
-    { id: 'study',   label: `🔁 STUDY${dueCount > 0 ? ` (${dueCount})` : ''}` },
-    { id: 'deck',    label: `🗂 DECK (${deckSize})` },
+    { id: 'study',   label: `📚 STUDY${dueCount > 0 ? ` (${dueCount})` : ''}` },
     { id: 'summary', label: '📊 STATS' },
-    { id: 'drills',  label: '⚡ DRILLS' },
   ]
   return (
     <nav style={S.nav}>

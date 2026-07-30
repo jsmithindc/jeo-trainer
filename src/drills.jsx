@@ -538,8 +538,8 @@ function LabeledMapReference({ onBack, paths, pathCentroids }) {
         <>
           {/* Zoom controls */}
           <div style={{ display: 'flex', gap: 8 }}>
-            <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18 }} onClick={() => setZoom(z => Math.min(z * 1.5, 8))}>+</button>
-            <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18 }} onClick={() => { setZoom(z => Math.max(z / 1.5, 1)); setPan({ x: 0, y: 0 }) }}>−</button>
+            <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18 }} onClick={() => { const nz = Math.min(zoom * 1.5, 8); const cx = (480 - pan.x) / zoom; const cy = (250 - pan.y) / zoom; setPan({ x: 480 - cx * nz, y: 250 - cy * nz }); setZoom(nz) }}>+</button>
+            <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18, opacity: zoom <= 1 ? 0.3 : 1 }} disabled={zoom <= 1} onClick={() => { const nz = Math.max(zoom / 1.5, 1); setZoom(nz); if (nz === 1) setPan({ x: 0, y: 0 }) }}>−</button>
             <button style={{ ...S.btnSecondary, flex: 1, padding: '6px 0', fontSize: 12 }} onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }) }}>Reset View</button>
             <button style={{ ...S.btnSecondary, flex: 1, padding: '6px 0', fontSize: 11, color: '#4dd0e1' }} onClick={() => setRevealed(new Set(COUNTRIES.map(c => c.id)))}>Show All</button>
             <button style={{ ...S.btnSecondary, flex: 1, padding: '6px 0', fontSize: 11 }} onClick={() => setRevealed(new Set())}>Hide All</button>
@@ -837,8 +837,8 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids }) {
 
       {/* Zoom controls */}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18 }} onClick={() => setZoom(z => Math.min(z * 1.5, 8))}>+</button>
-        <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18 }} onClick={() => { setZoom(z => Math.max(z / 1.5, 1)); setPan({ x: 0, y: 0 }) }}>−</button>
+        <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18 }} onClick={() => { const nz = Math.min(zoom * 1.5, 8); const cx = (480 - pan.x) / zoom; const cy = (250 - pan.y) / zoom; setPan({ x: 480 - cx * nz, y: 250 - cy * nz }); setZoom(nz) }}>+</button>
+        <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18, opacity: zoom <= 1 ? 0.3 : 1 }} disabled={zoom <= 1} onClick={() => { const nz = Math.max(zoom / 1.5, 1); setZoom(nz); if (nz === 1) setPan({ x: 0, y: 0 }) }}>−</button>
         <button style={{ ...S.btnSecondary, flex: 1, padding: '6px 0', fontSize: 12 }} onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }) }}>Reset View</button>
         <button style={{ ...S.btn, flex: 1, padding: '6px 0', fontSize: 12 }} onClick={autoSelectNext}>Auto Next →</button>
       </div>
@@ -976,8 +976,9 @@ export function DrillsView() {
       .catch(() => setWorldLoading(false))
   }, [])
 
-  if (drill === 'presidents') return <PresidentsDrill onBack={handleBack} />
-  if (drill && FLASH_DRILLS[drill]) return <FlashDrill drillKey={drill} onBack={handleBack} />
+  if (drill === 'knowledge') return <KnowledgeHub onBack={handleBack} onSelect={setDrill} stats={stats} />
+  if (drill === 'presidents') return <PresidentsDrill onBack={() => setDrill('knowledge')} />
+  if (drill && FLASH_DRILLS[drill]) return <FlashDrill drillKey={drill} onBack={() => setDrill('knowledge')} />
   if (drill === 'geography') return (
     <GeographyHub
       onBack={handleBack}
@@ -1001,17 +1002,8 @@ export function DrillsView() {
       </div>
 
       {[
-        { id: 'presidents', emoji: '🇺🇸', label: 'US PRESIDENTS', desc: 'All 47 presidents · number, name & years' },
         { id: 'geography', emoji: '🌍', label: 'GEOGRAPHY', desc: 'World & regional maps, states & capitals' },
-      { id: null, isHeader: true, label: '─ KNOWLEDGE ─' },
-      { id: 'vice_presidents', emoji: '🏛', label: 'US VICE PRESIDENTS', desc: '49 VPs · name, number & president served' },
-      { id: 'astronomy', emoji: '🪐', label: 'PLANETS & ASTRONOMY', desc: 'Solar system, moons & space facts' },
-      { id: 'shakespeare', emoji: '🎭', label: 'SHAKESPEARE', desc: 'Plays, characters & quotes' },
-      { id: 'authors', emoji: '📚', label: 'FAMOUS AUTHORS', desc: 'Authors and their major works' },
-      { id: 'painters', emoji: '🎨', label: 'FAMOUS PAINTERS', desc: 'Artists, paintings & movements' },
-      { id: 'composers', emoji: '🎼', label: 'CLASSICAL COMPOSERS', desc: 'Composers, works & eras' },
-      { id: 'ballets', emoji: '🩰', label: 'FAMOUS BALLETS', desc: 'Ballets, composers & characters' },
-      { id: 'greek_latin_roots', emoji: '📜', label: 'GREEK & LATIN ROOTS', desc: 'Roots, meanings & example words' },
+        { id: 'knowledge', emoji: '🧠', label: 'KNOWLEDGE', desc: 'Presidents, arts, science, language & more' },
       ].map((d, i) => {
         if (d.isHeader) return <div key={i} style={{ fontSize: 9, color: '#2a3460', letterSpacing: 3, textAlign: 'center', padding: '4px 0' }}>{d.label}</div>
         const history = stats[d.id] || []
@@ -1022,6 +1014,55 @@ export function DrillsView() {
               <div>
                 <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 18, color: '#f5c518', letterSpacing: 2 }}>{d.emoji} {d.label}</div>
                 <div style={{ fontSize: 11, color: '#4060a0', marginTop: 2 }}>{d.desc}</div>
+              </div>
+              {best !== null && (
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 18, color: best >= 80 ? '#4caf7d' : best >= 60 ? '#f5c518' : '#e57373' }}>{best}%</div>
+                  <div style={{ fontSize: 9, color: '#4060a0', letterSpacing: 1 }}>BEST</div>
+                </div>
+              )}
+            </div>
+            {history.slice(0,3).map((s, j) => (
+              <span key={j} style={{ fontSize: 9, color: s.pct >= 80 ? '#4caf7d' : s.pct >= 60 ? '#f5c518' : '#e57373', background: '#060b1a', borderRadius: 4, padding: '2px 6px', border: '1px solid #1a2040', marginRight: 4, display: 'inline-block', marginTop: 6 }}>
+                {s.pct}% · {s.date}
+              </span>
+            ))}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+// ─── Knowledge Hub ───────────────────────────────────────────────────────────
+function KnowledgeHub({ onBack, onSelect, stats }) {
+  const knowledgeDrills = [
+    { id: 'presidents', emoji: '🇺🇸', label: 'US PRESIDENTS', desc: 'All 47 presidents · number, name & years' },
+    { id: 'vice_presidents', emoji: '🏛', label: 'US VICE PRESIDENTS', desc: '49 VPs · name, number & president served' },
+    { id: 'astronomy', emoji: '🪐', label: 'PLANETS & ASTRONOMY', desc: 'Solar system, moons & space facts' },
+    { id: 'shakespeare', emoji: '🎭', label: 'SHAKESPEARE', desc: 'Plays, characters & quotes' },
+    { id: 'authors', emoji: '📚', label: 'FAMOUS AUTHORS', desc: 'Authors and their major works' },
+    { id: 'painters', emoji: '🎨', label: 'FAMOUS PAINTERS', desc: 'Artists, paintings & movements' },
+    { id: 'composers', emoji: '🎼', label: 'CLASSICAL COMPOSERS', desc: 'Composers, works & eras' },
+    { id: 'ballets', emoji: '🩰', label: 'FAMOUS BALLETS', desc: 'Ballets, composers & characters' },
+    { id: 'greek_latin_roots', emoji: '📜', label: 'GREEK & LATIN ROOTS', desc: 'Roots, meanings & example words' },
+  ]
+
+  return (
+    <div style={{ ...S.wrap, paddingTop: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+        <button style={{ fontSize: 12, color: '#4060a0', background: 'none', border: 'none', cursor: 'pointer' }} onClick={onBack}>← Back</button>
+        <div style={S.title}>🧠 KNOWLEDGE</div>
+      </div>
+      {knowledgeDrills.map(d => {
+        const history = stats[d.id] || []
+        const best = history.length > 0 ? Math.max(...history.map(s => s.pct)) : null
+        return (
+          <button key={d.id} style={{ ...S.card, textAlign: 'left', cursor: 'pointer', border: '1px solid #1a2460', width: '100%', padding: '10px 14px' }} onClick={() => onSelect(d.id)}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 16, color: '#f5c518', letterSpacing: 2 }}>{d.emoji} {d.label}</div>
+                <div style={{ fontSize: 10, color: '#4060a0', marginTop: 1 }}>{d.desc}</div>
               </div>
               {best !== null && (
                 <div style={{ textAlign: 'right' }}>
@@ -1327,7 +1368,7 @@ function SubnationalMapDrill({ config, onBack }) {
         <>
           <div style={{ display: 'flex', gap: 6 }}>
             <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18 }} onClick={() => setZoom(z => Math.min(z*1.5,8))}>+</button>
-            <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18 }} onClick={() => { setZoom(z => Math.max(z/1.5,1)); setPan({x:0,y:0}) }}>−</button>
+            <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18, opacity: zoom <= 1 ? 0.3 : 1 }} disabled={zoom <= 1} onClick={() => { const nz = Math.max(zoom/1.5, 1); setZoom(nz); if (nz === 1) setPan({x:0,y:0}) }}>−</button>
             <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:11 }} onClick={() => { setZoom(1); setPan({x:0,y:0}) }}>Reset</button>
             <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:11, color:'#4dd0e1' }} onClick={() => setRevealed(new Set(config.data.map(d=>d.name)))}>Show All</button>
             <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:11 }} onClick={() => setRevealed(new Set())}>Hide All</button>
@@ -1405,8 +1446,8 @@ function SubnationalMapDrill({ config, onBack }) {
       </div>
 
       <div style={{ display:'flex', gap:6 }}>
-        <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18 }} onClick={() => setZoom(z=>Math.min(z*1.5,8))}>+</button>
-        <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18 }} onClick={() => { setZoom(z=>Math.max(z/1.5,1)); setPan({x:0,y:0}) }}>−</button>
+        <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18 }} onClick={() => { const nz=Math.min(zoom*1.5,8); const cx=(480-pan.x)/zoom; const cy=(250-pan.y)/zoom; setPan({x:480-cx*nz,y:250-cy*nz}); setZoom(nz) }}>+</button>
+        <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18, opacity:zoom<=1?0.3:1 }} disabled={zoom<=1} onClick={() => { const nz=Math.max(zoom/1.5,1); setZoom(nz); if(nz===1)setPan({x:0,y:0}) }}>−</button>
         <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:12 }} onClick={() => { setZoom(1); setPan({x:0,y:0}) }}>Reset</button>
         <button style={{ ...S.btn, flex:1, padding:'6px 0', fontSize:12 }} onClick={autoSelectNext}>Auto Next →</button>
       </div>
@@ -1618,8 +1659,8 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids }) {
         </div>
       </div>
       <div style={{ display:'flex', gap:6 }}>
-        <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18 }} onClick={() => setZoom(z=>Math.min(z*1.5,8))}>+</button>
-        <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18 }} onClick={() => { setZoom(z=>Math.max(z/1.5,1)); setPan({x:0,y:0}) }}>−</button>
+        <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18 }} onClick={() => { const nz=Math.min(zoom*1.5,8); const cx=(480-pan.x)/zoom; const cy=(250-pan.y)/zoom; setPan({x:480-cx*nz,y:250-cy*nz}); setZoom(nz) }}>+</button>
+        <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18, opacity:zoom<=1?0.3:1 }} disabled={zoom<=1} onClick={() => { const nz=Math.max(zoom/1.5,1); setZoom(nz); if(nz===1)setPan({x:0,y:0}) }}>−</button>
         <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:12 }} onClick={() => { setZoom(1); setPan({x:0,y:0}) }}>Reset</button>
         <button style={{ ...S.btn, flex:1, padding:'6px 0', fontSize:12 }} onClick={autoSelectNext}>Auto Next →</button>
       </div>

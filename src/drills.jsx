@@ -1,5 +1,46 @@
 import { useState, useEffect, useRef } from 'react'
 
+// ─── Fuzzy Match ─────────────────────────────────────────────────────────────
+function normalize(s) {
+  return (s || '').toLowerCase()
+    .replace(/[.\-''']/g, '')   // remove periods, hyphens, apostrophes
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function levenshtein(a, b) {
+  const m = a.length, n = b.length
+  const dp = Array.from({ length: m + 1 }, (_, i) => Array.from({ length: n + 1 }, (_, j) => i === 0 ? j : j === 0 ? i : 0))
+  for (let i = 1; i <= m; i++)
+    for (let j = 1; j <= n; j++)
+      dp[i][j] = a[i-1] === b[j-1] ? dp[i-1][j-1] : 1 + Math.min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1])
+  return dp[m][n]
+}
+
+function fuzzyMatch(input, target) {
+  const a = normalize(input)
+  const b = normalize(target)
+  if (a === b) return true
+  // Allow up to 2 edits for strings longer than 5 chars, 1 edit for shorter
+  const maxDist = b.length > 8 ? 2 : b.length > 4 ? 1 : 0
+  return levenshtein(a, b) <= maxDist
+}
+
+// ─── Drill Stats Storage ──────────────────────────────────────────────────────
+const DRILL_STATS_KEY = 'jeo-drill-stats'
+
+function loadDrillStats() {
+  try { return JSON.parse(localStorage.getItem(DRILL_STATS_KEY) || '{}') } catch { return {} }
+}
+
+function saveDrillSession(drillId, score, total) {
+  const stats = loadDrillStats()
+  if (!stats[drillId]) stats[drillId] = []
+  stats[drillId].unshift({ score, total, pct: Math.round(score / total * 100), date: new Date().toLocaleDateString() })
+  stats[drillId] = stats[drillId].slice(0, 20) // keep last 20
+  localStorage.setItem(DRILL_STATS_KEY, JSON.stringify(stats))
+}
+
 // ─── Presidents Data ──────────────────────────────────────────────────────────
 export const PRESIDENTS = [
   { num: 1, name: 'George Washington', years: '1789–1797', party: 'Unaffiliated' },
@@ -289,17 +330,17 @@ export function PresidentsDrill({ onBack }) {
     setMode('quiz')
   }
 
-  function checkAnswer() {
+  function checkAnswer(override = false) {
     const pres = queue[idx]
-    const userAns = answer.trim()
-    let correct = false
+    const userAns = override ? '(marked correct)' : answer.trim()
+    let correct = override
 
-    if (prompt === 'number') {
-      // User types name, we show number+years
-      correct = userAns.toLowerCase() === pres.name.toLowerCase()
-    } else {
-      // User types number, we show name+years
-      correct = userAns === String(pres.num)
+    if (!override) {
+      if (prompt === 'number') {
+        correct = fuzzyMatch(userAns, pres.name)
+      } else {
+        correct = userAns.trim() === String(pres.num)
+      }
     }
 
     setResults(prev => [...prev, { president: pres, userAnswer: userAns, correct }])
@@ -307,8 +348,19 @@ export function PresidentsDrill({ onBack }) {
     setTimeout(() => inputRef.current?.focus(), 50)
   }
 
+  function markCorrect() {
+    // Override last result as correct
+    setResults(prev => {
+      const updated = [...prev]
+      updated[updated.length - 1] = { ...updated[updated.length - 1], correct: true }
+      return updated
+    })
+  }
+
   function next() {
     if (idx + 1 >= queue.length) {
+      const finalResults = [...results, { correct: results.length < queue.length }]
+      saveDrillSession('presidents', results.filter(r => r.correct).length, queue.length)
       setMode('results')
     } else {
       setIdx(i => i + 1)
@@ -401,7 +453,15 @@ export function PresidentsDrill({ onBack }) {
           <div style={{ marginTop: 8 }}>
             {results[results.length-1]?.correct
               ? <span style={S.correct}>✓ Correct!</span>
-              : <span style={S.incorrect}>✗ {pres.name}</span>}
+              : (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={S.incorrect}>✗ {pres.name}</span>
+                  <button
+                    style={{ fontSize: 10, color: '#4caf7d', border: '1px solid #2e8c50', borderRadius: 6, padding: '2px 8px', background: '#0a1e10', cursor: 'pointer' }}
+                    onClick={markCorrect}
+                  >Mark correct</button>
+                </div>
+              )}
           </div>
         )}
       </div>
@@ -478,15 +538,24 @@ export function WorldMapDrill({ onBack }) {
     setTimeout(() => inputRef.current?.focus(), 100)
   }
 
-  function checkAnswer() {
+  function checkAnswer(overrideCountry = false, overrideCapital = false) {
     const country = COUNTRY_MAP[selected]
     if (!country) return
-    const countryCorrect = answer.country.trim().toLowerCase() === country.name.toLowerCase()
-    const capitalCorrect = answer.capital.trim().toLowerCase() === country.capital.toLowerCase()
+    const countryCorrect = overrideCountry || fuzzyMatch(answer.country, country.name)
+    const capitalCorrect = overrideCapital || fuzzyMatch(answer.capital, country.capital)
     const bothCorrect = countryCorrect && capitalCorrect
     setResult({ countryCorrect, capitalCorrect, country })
     setAttempted(prev => new Set([...prev, selected]))
     setScore(prev => ({ correct: prev.correct + (bothCorrect ? 1 : 0), total: prev.total + 1 }))
+  }
+
+  function markItemCorrect(field) {
+    if (!result) return
+    const updated = { ...result, [field + 'Correct']: true }
+    setResult(updated)
+    if (updated.countryCorrect && updated.capitalCorrect) {
+      setScore(prev => ({ ...prev, correct: prev.correct + 1 }))
+    }
   }
 
   function getColor(id) {
@@ -554,15 +623,21 @@ export function WorldMapDrill({ onBack }) {
         <div style={S.card}>
           {result ? (
             <div>
-              <div style={{ marginBottom: 6 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
                 <span style={result.countryCorrect ? S.correct : S.incorrect}>
                   {result.countryCorrect ? '✓' : '✗'} Country: {result.country.name}
                 </span>
+                {!result.countryCorrect && (
+                  <button style={{ fontSize: 10, color: '#4caf7d', border: '1px solid #2e8c50', borderRadius: 6, padding: '2px 8px', background: '#0a1e10', cursor: 'pointer' }} onClick={() => markItemCorrect('country')}>Mark correct</button>
+                )}
               </div>
-              <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span style={result.capitalCorrect ? S.correct : S.incorrect}>
                   {result.capitalCorrect ? '✓' : '✗'} Capital: {result.country.capital}
                 </span>
+                {!result.capitalCorrect && (
+                  <button style={{ fontSize: 10, color: '#4caf7d', border: '1px solid #2e8c50', borderRadius: 6, padding: '2px 8px', background: '#0a1e10', cursor: 'pointer' }} onClick={() => markItemCorrect('capital')}>Mark correct</button>
+                )}
               </div>
               <button style={{ ...S.btn, marginTop: 12, fontSize: 14 }} onClick={() => setSelected(null)}>
                 TAP ANOTHER COUNTRY
@@ -602,10 +677,19 @@ export function WorldMapDrill({ onBack }) {
 
 // ─── Drills Hub ───────────────────────────────────────────────────────────────
 export function DrillsView() {
-  const [drill, setDrill] = useState(null) // null | 'presidents' | 'worldmap'
+  const [drill, setDrill] = useState(null)
+  const [stats, setStats] = useState(loadDrillStats())
 
-  if (drill === 'presidents') return <PresidentsDrill onBack={() => setDrill(null)} />
-  if (drill === 'worldmap') return <WorldMapDrill onBack={() => setDrill(null)} />
+  // Reload stats when returning from a drill
+  const handleBack = () => { setDrill(null); setStats(loadDrillStats()) }
+
+  if (drill === 'presidents') return <PresidentsDrill onBack={handleBack} />
+  if (drill === 'worldmap') return <WorldMapDrill onBack={handleBack} />
+
+  const drillDefs = [
+    { id: 'presidents', emoji: '🇺🇸', label: 'US PRESIDENTS', desc: 'All 47 presidents · number, name & years', total: 47 },
+    { id: 'worldmap', emoji: '🌍', label: 'WORLD MAP', desc: 'Tap unlabeled countries · name & capital', total: 195 },
+  ]
 
   return (
     <div style={{ ...S.wrap, paddingTop: 8 }}>
@@ -614,15 +698,36 @@ export function DrillsView() {
         <div style={S.subtitle}>STANDALONE PRACTICE TESTS</div>
       </div>
 
-      <button style={{ ...S.card, textAlign: 'left', cursor: 'pointer', border: '1px solid #1a2460', width: '100%' }} onClick={() => setDrill('presidents')}>
-        <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 18, color: '#f5c518', letterSpacing: 2 }}>🇺🇸 US PRESIDENTS</div>
-        <div style={{ fontSize: 11, color: '#4060a0', marginTop: 2 }}>All 47 presidents · number, name & years</div>
-      </button>
-
-      <button style={{ ...S.card, textAlign: 'left', cursor: 'pointer', border: '1px solid #1a2460', width: '100%' }} onClick={() => setDrill('worldmap')}>
-        <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 18, color: '#f5c518', letterSpacing: 2 }}>🌍 WORLD MAP</div>
-        <div style={{ fontSize: 11, color: '#4060a0', marginTop: 2 }}>Tap unlabeled countries · name & capital</div>
-      </button>
+      {drillDefs.map(d => {
+        const history = stats[d.id] || []
+        const best = history.length > 0 ? Math.max(...history.map(s => s.pct)) : null
+        const last = history[0] || null
+        return (
+          <button key={d.id} style={{ ...S.card, textAlign: 'left', cursor: 'pointer', border: '1px solid #1a2460', width: '100%' }} onClick={() => setDrill(d.id)}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <div>
+                <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 18, color: '#f5c518', letterSpacing: 2 }}>{d.emoji} {d.label}</div>
+                <div style={{ fontSize: 11, color: '#4060a0', marginTop: 2 }}>{d.desc}</div>
+              </div>
+              {best !== null && (
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: best >= 80 ? '#4caf7d' : best >= 60 ? '#f5c518' : '#e57373' }}>{best}%</div>
+                  <div style={{ fontSize: 9, color: '#4060a0', letterSpacing: 1 }}>BEST</div>
+                </div>
+              )}
+            </div>
+            {history.length > 0 && (
+              <div style={{ display: 'flex', gap: 4, marginTop: 8, flexWrap: 'wrap' }}>
+                {history.slice(0, 5).map((s, i) => (
+                  <span key={i} style={{ fontSize: 9, color: s.pct >= 80 ? '#4caf7d' : s.pct >= 60 ? '#f5c518' : '#e57373', background: '#060b1a', borderRadius: 4, padding: '2px 6px', border: '1px solid #1a2040' }}>
+                    {s.pct}% · {s.date}
+                  </span>
+                ))}
+              </div>
+            )}
+          </button>
+        )
+      })}
     </div>
   )
 }

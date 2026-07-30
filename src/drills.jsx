@@ -669,17 +669,19 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids }) {
     if (preloadedPaths?.length > 0) {
       setPaths(preloadedPaths)
       if (preloadedCentroids) pathCentroids.current = preloadedCentroids.current
+      setGeoData(true) // mark as loaded
       setLoading(false)
       return
     }
+    // Fetch directly if hub hasn't pre-fetched yet
     fetch('https://raw.githubusercontent.com/holtzy/D3-graph-gallery/master/DATA/world.geojson')
-      .then(r => r.json())
+      .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json() })
       .then(data => {
         setGeoData(data)
-        setLoading(false)
         buildPaths(data)
+        setLoading(false)
       })
-      .catch(() => setLoading(false))
+      .catch(err => { console.error('World map fetch failed:', err); setLoading(false) })
   }, [preloadedPaths])
 
   function buildPaths(data) {
@@ -975,38 +977,43 @@ export function DrillsView() {
   }, [])
 
   if (drill === 'presidents') return <PresidentsDrill onBack={handleBack} />
-  if (drill === 'worldmap') return <WorldMapDrill onBack={handleBack} preloadedPaths={worldPaths} preloadedCentroids={worldCentroids} />
-  if (drill?.startsWith('region-')) return <RegionalMapDrill regionKey={drill.replace('region-','')} onBack={handleBack} worldPaths={worldPaths} worldCentroids={worldCentroids} />
-  if (drill === 'us-states') return <SubnationalMapDrill onBack={handleBack} config={{ geojsonUrl:'https://raw.githubusercontent.com/PublicaMundi/MappingAPI/master/data/geojson/us-states.json', data:US_STATES, regionLabel:'State', bounds:[-130,65,24,50], width:960, height:600 }} />
-  if (drill === 'canada') return <SubnationalMapDrill onBack={handleBack} config={{ geojsonUrl:'https://raw.githubusercontent.com/codeforamerica/click_that_hood/master/public/data/canada.geojson', data:CANADA_PROVINCES, regionLabel:'Province', bounds:[-141,-52,41,84], width:960, height:600 }} />
-  if (drill === 'mexico') return <SubnationalMapDrill onBack={handleBack} config={{ geojsonUrl:'https://raw.githubusercontent.com/codeforamerica/click_that_hood/master/public/data/mexico.geojson', data:MEXICO_STATES, regionLabel:'State', bounds:[-118,-86,14,33], width:960, height:600 }} />
+  if (drill && FLASH_DRILLS[drill]) return <FlashDrill drillKey={drill} onBack={handleBack} />
+  if (drill === 'geography') return (
+    <GeographyHub
+      onBack={handleBack}
+      onSelect={setDrill}
+      stats={stats}
+      worldLoading={worldLoading}
+    />
+  )
+  if (drill === 'worldmap') return <WorldMapDrill onBack={() => setDrill('geography')} preloadedPaths={worldPaths} preloadedCentroids={worldCentroids} />
+  if (drill?.startsWith('region-')) return <RegionalMapDrill regionKey={drill.replace('region-','')} onBack={() => setDrill('geography')} worldPaths={worldPaths} worldCentroids={worldCentroids} />
+  if (drill === 'us-states') return <SubnationalMapDrill onBack={() => setDrill('geography')} config={{ geojsonUrl:'https://raw.githubusercontent.com/PublicaMundi/MappingAPI/master/data/geojson/us-states.json', data:US_STATES, regionLabel:'State', bounds:[-125,-66,24,50], width:960, height:560 }} />
+  if (drill === 'canada') return <SubnationalMapDrill onBack={() => setDrill('geography')} config={{ geojsonUrl:'https://raw.githubusercontent.com/codeforamerica/click_that_hood/master/public/data/canada.geojson', data:CANADA_PROVINCES, regionLabel:'Province', bounds:[-141,-52,41,84], width:960, height:640 }} />
+  if (drill === 'mexico') return <SubnationalMapDrill onBack={() => setDrill('geography')} config={{ geojsonUrl:'https://raw.githubusercontent.com/codeforamerica/click_that_hood/master/public/data/mexico.geojson', data:MEXICO_STATES, regionLabel:'State', bounds:[-118,-86,14,33], width:960, height:500 }} />
 
-  const drillDefs = [
-    { id: 'presidents', emoji: '🇺🇸', label: 'US PRESIDENTS', desc: 'All 47 presidents · number, name & years', total: 47 },
-    { id: 'worldmap', emoji: '🌍', label: 'WORLD MAP', desc: 'Tap unlabeled countries · name & capital', total: 195 },
-    { id: null, label: '─ REGIONAL MAPS ─', desc: '', isHeader: true },
-    { id: 'region-europe', emoji: '🇪🇺', label: 'EUROPE', desc: `${REGIONS.europe.ids.size} countries`, total: REGIONS.europe.ids.size },
-    { id: 'region-asia', emoji: '🌏', label: 'ASIA', desc: `${REGIONS.asia.ids.size} countries`, total: REGIONS.asia.ids.size },
-    { id: 'region-africa', emoji: '🌍', label: 'AFRICA', desc: `${REGIONS.africa.ids.size} countries`, total: REGIONS.africa.ids.size },
-    { id: 'region-south_america', emoji: '🌎', label: 'SOUTH AMERICA', desc: `${REGIONS.south_america.ids.size} countries`, total: REGIONS.south_america.ids.size },
-    { id: 'region-oceania', emoji: '🌊', label: 'OCEANIA', desc: `${REGIONS.oceania.ids.size} countries`, total: REGIONS.oceania.ids.size },
-    { id: null, label: '─ SUBNATIONAL MAPS ─', desc: '', isHeader: true },
-    { id: 'us-states', emoji: '🗺', label: 'US STATES', desc: '50 states & capitals', total: 50 },
-    { id: 'canada', emoji: '🍁', label: 'CANADA', desc: '13 provinces & territories', total: 13 },
-    { id: 'mexico', emoji: '🇲🇽', label: 'MEXICO', desc: '32 states & capitals', total: 32 },
-  ]
-
+  // Top-level hub
   return (
     <div style={{ ...S.wrap, paddingTop: 8 }}>
       <div style={S.card}>
         <div style={S.title}>DRILLS</div>
-        <div style={S.subtitle}>STANDALONE PRACTICE TESTS{worldLoading ? ' · Loading maps...' : ''}</div>
+        <div style={S.subtitle}>STANDALONE PRACTICE TESTS</div>
       </div>
 
-      {drillDefs.map((d, i) => {
-        if (d.isHeader) return (
-          <div key={i} style={{ fontSize: 9, color: '#2a3460', letterSpacing: 3, textAlign: 'center', padding: '4px 0' }}>{d.label}</div>
-        )
+      {[
+        { id: 'presidents', emoji: '🇺🇸', label: 'US PRESIDENTS', desc: 'All 47 presidents · number, name & years' },
+        { id: 'geography', emoji: '🌍', label: 'GEOGRAPHY', desc: 'World & regional maps, states & capitals' },
+      { id: null, isHeader: true, label: '─ KNOWLEDGE ─' },
+      { id: 'vice_presidents', emoji: '🏛', label: 'US VICE PRESIDENTS', desc: '49 VPs · name, number & president served' },
+      { id: 'astronomy', emoji: '🪐', label: 'PLANETS & ASTRONOMY', desc: 'Solar system, moons & space facts' },
+      { id: 'shakespeare', emoji: '🎭', label: 'SHAKESPEARE', desc: 'Plays, characters & quotes' },
+      { id: 'authors', emoji: '📚', label: 'FAMOUS AUTHORS', desc: 'Authors and their major works' },
+      { id: 'painters', emoji: '🎨', label: 'FAMOUS PAINTERS', desc: 'Artists, paintings & movements' },
+      { id: 'composers', emoji: '🎼', label: 'CLASSICAL COMPOSERS', desc: 'Composers, works & eras' },
+      { id: 'ballets', emoji: '🩰', label: 'FAMOUS BALLETS', desc: 'Ballets, composers & characters' },
+      { id: 'greek_latin_roots', emoji: '📜', label: 'GREEK & LATIN ROOTS', desc: 'Roots, meanings & example words' },
+      ].map((d, i) => {
+        if (d.isHeader) return <div key={i} style={{ fontSize: 9, color: '#2a3460', letterSpacing: 3, textAlign: 'center', padding: '4px 0' }}>{d.label}</div>
         const history = stats[d.id] || []
         const best = history.length > 0 ? Math.max(...history.map(s => s.pct)) : null
         return (
@@ -1018,20 +1025,72 @@ export function DrillsView() {
               </div>
               {best !== null && (
                 <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: best >= 80 ? '#4caf7d' : best >= 60 ? '#f5c518' : '#e57373' }}>{best}%</div>
+                  <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 18, color: best >= 80 ? '#4caf7d' : best >= 60 ? '#f5c518' : '#e57373' }}>{best}%</div>
                   <div style={{ fontSize: 9, color: '#4060a0', letterSpacing: 1 }}>BEST</div>
                 </div>
               )}
             </div>
-            {history.length > 0 && (
-              <div style={{ display: 'flex', gap: 4, marginTop: 8, flexWrap: 'wrap' }}>
-                {history.slice(0, 5).map((s, j) => (
-                  <span key={j} style={{ fontSize: 9, color: s.pct >= 80 ? '#4caf7d' : s.pct >= 60 ? '#f5c518' : '#e57373', background: '#060b1a', borderRadius: 4, padding: '2px 6px', border: '1px solid #1a2040' }}>
-                    {s.pct}% · {s.date}
-                  </span>
-                ))}
+            {history.slice(0,3).map((s, j) => (
+              <span key={j} style={{ fontSize: 9, color: s.pct >= 80 ? '#4caf7d' : s.pct >= 60 ? '#f5c518' : '#e57373', background: '#060b1a', borderRadius: 4, padding: '2px 6px', border: '1px solid #1a2040', marginRight: 4, display: 'inline-block', marginTop: 6 }}>
+                {s.pct}% · {s.date}
+              </span>
+            ))}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+// ─── Geography Hub ────────────────────────────────────────────────────────────
+function GeographyHub({ onBack, onSelect, stats, worldLoading }) {
+  const geoDrills = [
+    { id: 'worldmap', emoji: '🌍', label: 'WORLD MAP', desc: '195 countries · name & capital' },
+    { id: null, isHeader: true, label: '── REGIONAL ──' },
+    { id: 'region-europe', emoji: '🇪🇺', label: 'EUROPE', desc: `${REGIONS.europe.ids.size} countries` },
+    { id: 'region-asia', emoji: '🌏', label: 'ASIA', desc: `${REGIONS.asia.ids.size} countries` },
+    { id: 'region-africa', emoji: '🌍', label: 'AFRICA', desc: `${REGIONS.africa.ids.size} countries` },
+    { id: 'region-south_america', emoji: '🌎', label: 'SOUTH AMERICA', desc: `${REGIONS.south_america.ids.size} countries` },
+    { id: 'region-oceania', emoji: '🌊', label: 'OCEANIA', desc: `${REGIONS.oceania.ids.size} countries` },
+    { id: null, isHeader: true, label: '── SUBNATIONAL ──' },
+    { id: 'us-states', emoji: '🗺', label: 'US STATES', desc: '50 states & capitals' },
+    { id: 'canada', emoji: '🍁', label: 'CANADA', desc: '13 provinces & territories' },
+    { id: 'mexico', emoji: '🇲🇽', label: 'MEXICO', desc: '32 states & capitals' },
+  ]
+
+  return (
+    <div style={{ ...S.wrap, paddingTop: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+        <button style={{ fontSize: 12, color: '#4060a0', background: 'none', border: 'none', cursor: 'pointer' }} onClick={onBack}>← Back</button>
+        <div style={S.title}>GEOGRAPHY</div>
+      </div>
+      {worldLoading && <div style={{ fontSize: 10, color: '#4060a0', letterSpacing: 2, textAlign: 'center' }}>Loading world map data...</div>}
+
+      {geoDrills.map((d, i) => {
+        if (d.isHeader) return (
+          <div key={i} style={{ fontSize: 9, color: '#2a3460', letterSpacing: 3, textAlign: 'center', padding: '4px 0' }}>{d.label}</div>
+        )
+        const history = stats[d.id] || []
+        const best = history.length > 0 ? Math.max(...history.map(s => s.pct)) : null
+        return (
+          <button key={d.id} style={{ ...S.card, textAlign: 'left', cursor: 'pointer', border: '1px solid #1a2460', width: '100%', padding: '10px 14px' }} onClick={() => onSelect(d.id)}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 16, color: '#f5c518', letterSpacing: 2 }}>{d.emoji} {d.label}</div>
+                <div style={{ fontSize: 10, color: '#4060a0', marginTop: 1 }}>{d.desc}</div>
               </div>
-            )}
+              {best !== null && (
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 18, color: best >= 80 ? '#4caf7d' : best >= 60 ? '#f5c518' : '#e57373' }}>{best}%</div>
+                  <div style={{ fontSize: 9, color: '#4060a0', letterSpacing: 1 }}>BEST</div>
+                </div>
+              )}
+            </div>
+            {history.slice(0,3).map((s, j) => (
+              <span key={j} style={{ fontSize: 9, color: s.pct >= 80 ? '#4caf7d' : s.pct >= 60 ? '#f5c518' : '#e57373', background: '#060b1a', borderRadius: 4, padding: '2px 6px', border: '1px solid #1a2040', marginRight: 4, display: 'inline-block', marginTop: 6 }}>
+                {s.pct}% · {s.date}
+              </span>
+            ))}
           </button>
         )
       })}
@@ -1189,6 +1248,18 @@ function SubnationalMapDrill({ config, onBack }) {
         setPaths(built)
         setCentroids(newCentroids)
         setLoading(false)
+        // Auto-fit: center and zoom to fill
+        const cs = Object.values(newCentroids)
+        if (cs.length) {
+          const xs = cs.map(c => c.x), ys = cs.map(c => c.y)
+          const cx = (Math.min(...xs) + Math.max(...xs)) / 2
+          const cy = (Math.min(...ys) + Math.max(...ys)) / 2
+          const spanX = Math.max(...xs) - Math.min(...xs)
+          const spanY = Math.max(...ys) - Math.min(...ys)
+          const vw2 = config.width || 960, vh2 = config.height || 500
+          const newZoom = Math.min(Math.max(Math.min(vw2 * 0.9 / (spanX||1), vh2 * 0.9 / (spanY||1)), 1), 8)
+          setPan({ x: vw2/2 - cx * newZoom, y: vh2/2 - cy * newZoom })
+        }
       })
       .catch(() => setLoading(false))
   }, [config])
@@ -1420,6 +1491,23 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids }) {
   const regionCountries = COUNTRIES.filter(c => region.ids.has(c.id))
   const remaining = regionCountries.length - attempted.size
 
+  // Auto-center on region when paths load
+  useEffect(() => {
+    if (!regionPaths.length || !Object.keys(worldCentroids.current).length) return
+    const cs = regionCountries.map(c => worldCentroids.current[c.id]).filter(Boolean)
+    if (!cs.length) return
+    const xs = cs.map(c => c.x), ys = cs.map(c => c.y)
+    const minX = Math.min(...xs), maxX = Math.max(...xs)
+    const minY = Math.min(...ys), maxY = Math.max(...ys)
+    const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2
+    const spanX = maxX - minX, spanY = maxY - minY
+    // Fit region to ~80% of viewport (960x500)
+    const zx = 960 * 0.8 / (spanX || 1), zy = 500 * 0.8 / (spanY || 1)
+    const newZoom = Math.min(Math.max(Math.min(zx, zy), 1), 8)
+    setZoom(newZoom)
+    setPan({ x: 480 - cx * newZoom, y: 250 - cy * newZoom })
+  }, [worldPaths.length])
+
   function handleClick(id) {
     if (!COUNTRY_MAP[id] || attempted.has(id) || !region.ids.has(id)) return
     setSelected(id)
@@ -1583,6 +1671,549 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids }) {
         </div>
       )}
       {!selected && <div style={{ textAlign:'center', fontSize:12, color:'#2a3460', padding:'8px 0' }}>Tap any country on the map</div>}
+    </div>
+  )
+}
+
+// ─── Flash Drill Data ─────────────────────────────────────────────────────────
+
+export const FLASH_DRILLS = {
+  vice_presidents: {
+    label: 'US VICE PRESIDENTS',
+    emoji: '🏛',
+    desc: 'All 49 VPs · number, name & president served under',
+    modes: [
+      { id: 'num_to_name', prompt: 'Number & President → VP Name', qField: 'prompt_num', aField: 'name' },
+      { id: 'name_to_num', prompt: 'Name & President → Number', qField: 'prompt_name', aField: 'numStr' },
+    ],
+    items: [
+      { num: 1, name: 'John Adams', president: 'Washington', years: '1789–1797' },
+      { num: 2, name: 'Thomas Jefferson', president: 'Adams', years: '1797–1801' },
+      { num: 3, name: 'Aaron Burr', president: 'Jefferson', years: '1801–1805' },
+      { num: 4, name: 'George Clinton', president: 'Jefferson/Madison', years: '1805–1812' },
+      { num: 5, name: 'Elbridge Gerry', president: 'Madison', years: '1813–1814' },
+      { num: 6, name: 'Daniel D. Tompkins', president: 'Monroe', years: '1817–1825' },
+      { num: 7, name: 'John C. Calhoun', president: 'Adams/Jackson', years: '1825–1832' },
+      { num: 8, name: 'Martin Van Buren', president: 'Jackson', years: '1833–1837' },
+      { num: 9, name: 'Richard Mentor Johnson', president: 'Van Buren', years: '1837–1841' },
+      { num: 10, name: 'John Tyler', president: 'Harrison', years: '1841' },
+      { num: 11, name: 'George M. Dallas', president: 'Polk', years: '1845–1849' },
+      { num: 12, name: 'Millard Fillmore', president: 'Taylor', years: '1849–1850' },
+      { num: 13, name: 'William Rufus DeVane King', president: 'Pierce', years: '1853' },
+      { num: 14, name: 'John C. Breckinridge', president: 'Buchanan', years: '1857–1861' },
+      { num: 15, name: 'Hannibal Hamlin', president: 'Lincoln', years: '1861–1865' },
+      { num: 16, name: 'Andrew Johnson', president: 'Lincoln', years: '1865' },
+      { num: 17, name: 'Schuyler Colfax', president: 'Grant', years: '1869–1873' },
+      { num: 18, name: 'Henry Wilson', president: 'Grant', years: '1873–1875' },
+      { num: 19, name: 'William A. Wheeler', president: 'Hayes', years: '1877–1881' },
+      { num: 20, name: 'Chester A. Arthur', president: 'Garfield', years: '1881' },
+      { num: 21, name: 'Thomas A. Hendricks', president: 'Cleveland', years: '1885' },
+      { num: 22, name: 'Levi P. Morton', president: 'Harrison', years: '1889–1893' },
+      { num: 23, name: 'Adlai Stevenson I', president: 'Cleveland', years: '1893–1897' },
+      { num: 24, name: 'Garret Hobart', president: 'McKinley', years: '1897–1899' },
+      { num: 25, name: 'Theodore Roosevelt', president: 'McKinley', years: '1901' },
+      { num: 26, name: 'Charles W. Fairbanks', president: 'Roosevelt', years: '1905–1909' },
+      { num: 27, name: 'James S. Sherman', president: 'Taft', years: '1909–1912' },
+      { num: 28, name: 'Thomas R. Marshall', president: 'Wilson', years: '1913–1921' },
+      { num: 29, name: 'Calvin Coolidge', president: 'Harding', years: '1921–1923' },
+      { num: 30, name: 'Charles G. Dawes', president: 'Coolidge', years: '1925–1929' },
+      { num: 31, name: 'Charles Curtis', president: 'Hoover', years: '1929–1933' },
+      { num: 32, name: 'John Nance Garner', president: 'Roosevelt', years: '1933–1941' },
+      { num: 33, name: 'Henry A. Wallace', president: 'Roosevelt', years: '1941–1945' },
+      { num: 34, name: 'Harry S. Truman', president: 'Roosevelt', years: '1945' },
+      { num: 35, name: 'Alben W. Barkley', president: 'Truman', years: '1949–1953' },
+      { num: 36, name: 'Richard Nixon', president: 'Eisenhower', years: '1953–1961' },
+      { num: 37, name: 'Lyndon B. Johnson', president: 'Kennedy', years: '1961–1963' },
+      { num: 38, name: 'Hubert Humphrey', president: 'Johnson', years: '1965–1969' },
+      { num: 39, name: 'Spiro Agnew', president: 'Nixon', years: '1969–1973' },
+      { num: 40, name: 'Gerald Ford', president: 'Nixon', years: '1973–1974' },
+      { num: 41, name: 'Nelson Rockefeller', president: 'Ford', years: '1974–1977' },
+      { num: 42, name: 'Walter Mondale', president: 'Carter', years: '1977–1981' },
+      { num: 43, name: 'George H.W. Bush', president: 'Reagan', years: '1981–1989' },
+      { num: 44, name: 'Dan Quayle', president: 'Bush', years: '1989–1993' },
+      { num: 45, name: 'Al Gore', president: 'Clinton', years: '1993–2001' },
+      { num: 46, name: 'Dick Cheney', president: 'Bush', years: '2001–2009' },
+      { num: 47, name: 'Joe Biden', president: 'Obama', years: '2009–2017' },
+      { num: 48, name: 'Mike Pence', president: 'Trump', years: '2017–2021' },
+      { num: 49, name: 'Kamala Harris', president: 'Biden', years: '2021–2025' },
+    ].map(v => ({ ...v, numStr: String(v.num), prompt_num: `#${v.num} · Under ${v.president} · ${v.years}`, prompt_name: `${v.name} · ${v.years}` })),
+  },
+
+  astronomy: {
+    label: 'PLANETS, MOONS & ASTRONOMY',
+    emoji: '🪐',
+    desc: 'Solar system, moons, stars & space facts',
+    modes: [
+      { id: 'qa', prompt: 'Question → Answer', qField: 'question', aField: 'answer' },
+    ],
+    items: [
+      // Planets
+      { question: 'Closest planet to the Sun', answer: 'Mercury' },
+      { question: 'Hottest planet in the solar system', answer: 'Venus' },
+      { question: 'Largest planet in the solar system', answer: 'Jupiter' },
+      { question: 'Planet with the most moons', answer: 'Saturn (100+)' },
+      { question: 'Planet known for its prominent ring system', answer: 'Saturn' },
+      { question: 'Planet that rotates on its side', answer: 'Uranus' },
+      { question: 'Farthest planet from the Sun', answer: 'Neptune' },
+      { question: 'Smallest planet in the solar system', answer: 'Mercury' },
+      { question: 'Planet with the Great Red Spot', answer: 'Jupiter' },
+      { question: 'Planet with the Great Dark Spot (observed 1989)', answer: 'Neptune' },
+      { question: 'Only planet not named after a Roman deity', answer: 'Earth' },
+      { question: 'Planet with the shortest day (~10 hours)', answer: 'Jupiter' },
+      { question: 'Planet with the longest year (~248 Earth years) — now dwarf', answer: 'Pluto' },
+      { question: 'Planet with the longest day (~243 Earth days)', answer: 'Venus' },
+      // Moons
+      { question: "Earth's only natural satellite", answer: 'The Moon (Luna)' },
+      { question: "Largest moon in the solar system", answer: "Ganymede (Jupiter's moon)" },
+      { question: "Jupiter's moon with active volcanoes", answer: 'Io' },
+      { question: "Jupiter's moon thought to have a subsurface ocean", answer: 'Europa' },
+      { question: "Saturn's largest moon, with a thick atmosphere", answer: 'Titan' },
+      { question: "Saturn's moon with geysers of water ice", answer: 'Enceladus' },
+      { question: "Neptune's largest moon, orbits retrograde", answer: 'Triton' },
+      { question: "Mars has two moons — name them", answer: 'Phobos and Deimos' },
+      // Stars & space
+      { question: 'Closest star to Earth (other than the Sun)', answer: 'Proxima Centauri' },
+      { question: 'Largest known star by radius', answer: 'UY Scuti' },
+      { question: 'Our galaxy\'s name', answer: 'The Milky Way' },
+      { question: 'Nearest large galaxy to the Milky Way', answer: 'Andromeda (M31)' },
+      { question: 'What is a light-year?', answer: 'Distance light travels in one year (~9.46 trillion km)' },
+      { question: 'Year humans first landed on the Moon', answer: '1969 (Apollo 11)' },
+      { question: 'First human in space', answer: 'Yuri Gagarin (1961)' },
+      { question: 'Name of the force keeping planets in orbit', answer: 'Gravity' },
+      { question: 'What is the asteroid belt?', answer: 'Region between Mars and Jupiter with many asteroids' },
+      { question: 'What is a nebula?', answer: 'A cloud of gas and dust in space, often a stellar nursery' },
+      { question: 'What causes a solar eclipse?', answer: 'The Moon passes between Earth and the Sun' },
+      { question: 'What is the Kuiper Belt?', answer: 'Region beyond Neptune with icy bodies, including Pluto' },
+      { question: 'Hubble Space Telescope launched in what year?', answer: '1990' },
+      { question: 'Speed of light (approximate)', answer: '300,000 km/s (186,000 miles/s)' },
+    ],
+  },
+
+  shakespeare: {
+    label: 'SHAKESPEARE',
+    emoji: '🎭',
+    desc: 'Plays, characters, quotes & categories',
+    modes: [
+      { id: 'char_to_play', prompt: 'Character → Play', qField: 'char_prompt', aField: 'play' },
+      { id: 'play_to_type', prompt: 'Play → Type (Tragedy/Comedy/History)', qField: 'play', aField: 'type' },
+      { id: 'quote_to_play', prompt: 'Quote → Play', qField: 'quote', aField: 'play' },
+    ],
+    items: [
+      { play: 'Hamlet', type: 'Tragedy', characters: 'Hamlet, Ophelia, Polonius, Claudius', quote: 'To be, or not to be, that is the question', char_prompt: 'Ophelia, Polonius, Claudius' },
+      { play: 'Macbeth', type: 'Tragedy', characters: 'Macbeth, Lady Macbeth, Banquo', quote: 'Out, damned spot!', char_prompt: 'Lady Macbeth, Banquo, the Three Witches' },
+      { play: 'Romeo and Juliet', type: 'Tragedy', characters: 'Romeo, Juliet, Mercutio, Tybalt', quote: 'What\'s in a name? That which we call a rose by any other name would smell as sweet', char_prompt: 'Mercutio, Tybalt, Friar Lawrence' },
+      { play: 'Othello', type: 'Tragedy', characters: 'Othello, Iago, Desdemona, Cassio', quote: 'O, beware, my lord, of jealousy! It is the green-eyed monster', char_prompt: 'Iago, Desdemona, Cassio' },
+      { play: 'King Lear', type: 'Tragedy', characters: 'Lear, Cordelia, Goneril, Regan, Edmund', quote: 'How sharper than a serpent\'s tooth it is to have a thankless child', char_prompt: 'Cordelia, Goneril, Regan, the Fool' },
+      { play: 'A Midsummer Night\'s Dream', type: 'Comedy', characters: 'Puck, Titania, Oberon, Bottom', quote: 'Lord, what fools these mortals be!', char_prompt: 'Puck, Titania, Oberon, Bottom' },
+      { play: 'The Merchant of Venice', type: 'Comedy', characters: 'Shylock, Portia, Antonio, Bassanio', quote: 'If you prick us, do we not bleed?', char_prompt: 'Shylock, Portia, Antonio' },
+      { play: 'Twelfth Night', type: 'Comedy', characters: 'Viola, Malvolio, Olivia, Sir Toby Belch', quote: 'If music be the food of love, play on', char_prompt: 'Viola, Malvolio, Sir Toby Belch' },
+      { play: 'Much Ado About Nothing', type: 'Comedy', characters: 'Beatrice, Benedick, Don John', quote: 'Sigh no more, ladies, sigh no more', char_prompt: 'Beatrice, Benedick, Don John' },
+      { play: 'The Tempest', type: 'Comedy', characters: 'Prospero, Caliban, Ariel, Miranda', quote: 'We are such stuff as dreams are made on', char_prompt: 'Prospero, Caliban, Ariel' },
+      { play: 'As You Like It', type: 'Comedy', characters: 'Rosalind, Orlando, Jaques', quote: 'All the world\'s a stage', char_prompt: 'Rosalind, Orlando, Jaques' },
+      { play: 'The Taming of the Shrew', type: 'Comedy', characters: 'Katherine, Petruchio', quote: 'I am ashamed that women are so simple', char_prompt: 'Katherine, Petruchio, Bianca' },
+      { play: 'Richard III', type: 'History', characters: 'Richard III, Lady Anne, Buckingham', quote: 'A horse! A horse! My kingdom for a horse!', char_prompt: 'Richard III, Lady Anne, Buckingham' },
+      { play: 'Henry V', type: 'History', characters: 'King Henry V, Falstaff', quote: 'Once more unto the breach, dear friends', char_prompt: 'King Henry V, Pistol, Fluellen' },
+      { play: 'Julius Caesar', type: 'Tragedy', characters: 'Caesar, Brutus, Cassius, Mark Antony', quote: 'Et tu, Brute?', char_prompt: 'Brutus, Cassius, Mark Antony, Casca' },
+      { play: 'Antony and Cleopatra', type: 'Tragedy', characters: 'Antony, Cleopatra, Octavius Caesar', quote: 'Age cannot wither her, nor custom stale her infinite variety', char_prompt: 'Cleopatra, Enobarbus, Octavius Caesar' },
+      { play: 'The Winter\'s Tale', type: 'Comedy', characters: 'Leontes, Hermione, Perdita', quote: 'Exit, pursued by a bear', char_prompt: 'Leontes, Hermione, Perdita, Autolycus' },
+      { play: 'Measure for Measure', type: 'Comedy', characters: 'Isabella, Angelo, Duke Vincentio', quote: 'The quality of mercy is not strained', char_prompt: 'Isabella, Angelo, Duke Vincentio' },
+    ],
+  },
+
+  authors: {
+    label: 'FAMOUS AUTHORS & WORKS',
+    emoji: '📚',
+    desc: 'Authors, novels, plays & poems',
+    modes: [
+      { id: 'work_to_author', prompt: 'Work → Author', qField: 'work', aField: 'author' },
+      { id: 'author_to_work', prompt: 'Author → Major Work', qField: 'author_prompt', aField: 'work' },
+    ],
+    items: [
+      { author: 'Jane Austen', work: 'Pride and Prejudice', author_prompt: 'Jane Austen (English novelist, early 19th c.)' },
+      { author: 'Jane Austen', work: 'Sense and Sensibility', author_prompt: 'Jane Austen (author of Emma)' },
+      { author: 'Charles Dickens', work: 'A Tale of Two Cities', author_prompt: 'Charles Dickens (Victorian era)' },
+      { author: 'Charles Dickens', work: 'Great Expectations', author_prompt: 'Charles Dickens (Oliver Twist author)' },
+      { author: 'Leo Tolstoy', work: 'War and Peace', author_prompt: 'Leo Tolstoy (Russian, 19th c.)' },
+      { author: 'Leo Tolstoy', work: 'Anna Karenina', author_prompt: 'Leo Tolstoy (War and Peace author)' },
+      { author: 'Fyodor Dostoevsky', work: 'Crime and Punishment', author_prompt: 'Fyodor Dostoevsky (Russian, 19th c.)' },
+      { author: 'Fyodor Dostoevsky', work: 'The Brothers Karamazov', author_prompt: 'Fyodor Dostoevsky (Crime and Punishment author)' },
+      { author: 'Franz Kafka', work: 'The Metamorphosis', author_prompt: 'Franz Kafka (Czech-German, early 20th c.)' },
+      { author: 'Franz Kafka', work: 'The Trial', author_prompt: 'Franz Kafka (The Metamorphosis author)' },
+      { author: 'Gabriel García Márquez', work: 'One Hundred Years of Solitude', author_prompt: 'Gabriel García Márquez (Colombian, magical realism)' },
+      { author: 'James Joyce', work: 'Ulysses', author_prompt: 'James Joyce (Irish modernist)' },
+      { author: 'James Joyce', work: 'Dubliners', author_prompt: 'James Joyce (Ulysses author)' },
+      { author: 'Virginia Woolf', work: 'Mrs Dalloway', author_prompt: 'Virginia Woolf (English modernist)' },
+      { author: 'Virginia Woolf', work: 'To the Lighthouse', author_prompt: 'Virginia Woolf (Mrs Dalloway author)' },
+      { author: 'Ernest Hemingway', work: 'The Old Man and the Sea', author_prompt: 'Ernest Hemingway (American, Nobel 1954)' },
+      { author: 'Ernest Hemingway', work: 'A Farewell to Arms', author_prompt: 'Ernest Hemingway (The Sun Also Rises author)' },
+      { author: 'William Faulkner', work: 'The Sound and the Fury', author_prompt: 'William Faulkner (American South, Nobel 1949)' },
+      { author: 'F. Scott Fitzgerald', work: 'The Great Gatsby', author_prompt: 'F. Scott Fitzgerald (Jazz Age author)' },
+      { author: 'John Steinbeck', work: 'The Grapes of Wrath', author_prompt: 'John Steinbeck (Of Mice and Men author)' },
+      { author: 'Toni Morrison', work: 'Beloved', author_prompt: 'Toni Morrison (American, Nobel 1993)' },
+      { author: 'George Orwell', work: '1984', author_prompt: 'George Orwell (dystopian fiction)' },
+      { author: 'George Orwell', work: 'Animal Farm', author_prompt: 'George Orwell (1984 author)' },
+      { author: 'Aldous Huxley', work: 'Brave New World', author_prompt: 'Aldous Huxley (English, 20th c.)' },
+      { author: 'Homer', work: 'The Iliad', author_prompt: 'Homer (ancient Greek epic poet)' },
+      { author: 'Homer', work: 'The Odyssey', author_prompt: 'Homer (The Iliad author)' },
+      { author: 'Dante Alighieri', work: 'The Divine Comedy', author_prompt: 'Dante Alighieri (Italian, medieval)' },
+      { author: 'Miguel de Cervantes', work: 'Don Quixote', author_prompt: 'Miguel de Cervantes (Spanish, 17th c.)' },
+      { author: 'Victor Hugo', work: 'Les Misérables', author_prompt: 'Victor Hugo (French, 19th c.)' },
+      { author: 'Victor Hugo', work: 'The Hunchback of Notre-Dame', author_prompt: 'Victor Hugo (Les Misérables author)' },
+      { author: 'Gustave Flaubert', work: 'Madame Bovary', author_prompt: 'Gustave Flaubert (French realist)' },
+      { author: 'Marcel Proust', work: 'In Search of Lost Time', author_prompt: 'Marcel Proust (French, early 20th c.)' },
+      { author: 'Albert Camus', work: 'The Stranger', author_prompt: 'Albert Camus (French-Algerian, Nobel 1957)' },
+      { author: 'Jean-Paul Sartre', work: 'Nausea', author_prompt: 'Jean-Paul Sartre (French existentialist)' },
+      { author: 'Samuel Beckett', work: 'Waiting for Godot', author_prompt: 'Samuel Beckett (Irish, Nobel 1969)' },
+      { author: 'Chinua Achebe', work: 'Things Fall Apart', author_prompt: 'Chinua Achebe (Nigerian)' },
+      { author: 'Haruki Murakami', work: 'Norwegian Wood', author_prompt: 'Haruki Murakami (Japanese contemporary)' },
+      { author: 'Fyodor Dostoevsky', work: 'The Idiot', author_prompt: 'Fyodor Dostoevsky (Notes from Underground author)' },
+    ],
+  },
+
+  painters: {
+    label: 'FAMOUS PAINTERS & WORKS',
+    emoji: '🎨',
+    desc: 'Artists, paintings & movements',
+    modes: [
+      { id: 'work_to_artist', prompt: 'Painting → Artist', qField: 'work', aField: 'artist' },
+      { id: 'artist_to_work', prompt: 'Artist → Major Work', qField: 'artist_prompt', aField: 'work' },
+    ],
+    items: [
+      { artist: 'Leonardo da Vinci', work: 'Mona Lisa', movement: 'Renaissance', artist_prompt: 'Leonardo da Vinci (Italian Renaissance)' },
+      { artist: 'Leonardo da Vinci', work: 'The Last Supper', movement: 'Renaissance', artist_prompt: 'Leonardo da Vinci (Mona Lisa painter)' },
+      { artist: 'Michelangelo', work: 'The Creation of Adam', movement: 'Renaissance', artist_prompt: 'Michelangelo (Sistine Chapel ceiling)' },
+      { artist: 'Raphael', work: 'The School of Athens', movement: 'Renaissance', artist_prompt: 'Raphael (Italian High Renaissance)' },
+      { artist: 'Sandro Botticelli', work: 'The Birth of Venus', movement: 'Renaissance', artist_prompt: 'Sandro Botticelli (Italian Renaissance)' },
+      { artist: 'Rembrandt', work: 'The Night Watch', movement: 'Dutch Golden Age', artist_prompt: 'Rembrandt van Rijn (Dutch master)' },
+      { artist: 'Johannes Vermeer', work: 'Girl with a Pearl Earring', movement: 'Dutch Golden Age', artist_prompt: 'Johannes Vermeer (Dutch, 17th c.)' },
+      { artist: 'Francisco Goya', work: 'The Third of May 1808', movement: 'Romanticism', artist_prompt: 'Francisco Goya (Spanish, late 18th c.)' },
+      { artist: 'Eugène Delacroix', work: 'Liberty Leading the People', movement: 'Romanticism', artist_prompt: 'Eugène Delacroix (French Romantic)' },
+      { artist: 'J.M.W. Turner', work: 'The Fighting Temeraire', movement: 'Romanticism', artist_prompt: 'J.M.W. Turner (English landscape painter)' },
+      { artist: 'Claude Monet', work: 'Water Lilies', movement: 'Impressionism', artist_prompt: 'Claude Monet (French Impressionist)' },
+      { artist: 'Claude Monet', work: 'Impression, Sunrise', movement: 'Impressionism', artist_prompt: 'Claude Monet (Water Lilies painter)' },
+      { artist: 'Pierre-Auguste Renoir', work: 'Luncheon of the Boating Party', movement: 'Impressionism', artist_prompt: 'Pierre-Auguste Renoir (French Impressionist)' },
+      { artist: 'Edgar Degas', work: 'The Dance Class', movement: 'Impressionism', artist_prompt: 'Edgar Degas (French, ballet paintings)' },
+      { artist: 'Georges Seurat', work: 'A Sunday on La Grande Jatte', movement: 'Post-Impressionism', artist_prompt: 'Georges Seurat (Pointillism founder)' },
+      { artist: 'Paul Cézanne', work: 'The Card Players', movement: 'Post-Impressionism', artist_prompt: 'Paul Cézanne (father of modern art)' },
+      { artist: 'Paul Gauguin', work: 'Where Do We Come From?', movement: 'Post-Impressionism', artist_prompt: 'Paul Gauguin (Tahitian paintings)' },
+      { artist: 'Vincent van Gogh', work: 'The Starry Night', movement: 'Post-Impressionism', artist_prompt: 'Vincent van Gogh (Dutch Post-Impressionist)' },
+      { artist: 'Vincent van Gogh', work: 'Sunflowers', movement: 'Post-Impressionism', artist_prompt: 'Vincent van Gogh (The Starry Night painter)' },
+      { artist: 'Edvard Munch', work: 'The Scream', movement: 'Expressionism', artist_prompt: 'Edvard Munch (Norwegian Expressionist)' },
+      { artist: 'Gustav Klimt', work: 'The Kiss', movement: 'Symbolism', artist_prompt: 'Gustav Klimt (Austrian, golden style)' },
+      { artist: 'Pablo Picasso', work: 'Guernica', movement: 'Cubism', artist_prompt: 'Pablo Picasso (Spanish, co-founder of Cubism)' },
+      { artist: 'Pablo Picasso', work: 'Les Demoiselles d\'Avignon', movement: 'Cubism', artist_prompt: 'Pablo Picasso (Guernica painter)' },
+      { artist: 'Henri Matisse', work: 'Dance', movement: 'Fauvism', artist_prompt: 'Henri Matisse (French, bold color)' },
+      { artist: 'Salvador Dalí', work: 'The Persistence of Memory', movement: 'Surrealism', artist_prompt: 'Salvador Dalí (Spanish Surrealist)' },
+      { artist: 'René Magritte', work: 'The Treachery of Images', movement: 'Surrealism', artist_prompt: 'René Magritte (Belgian Surrealist, pipe painting)' },
+      { artist: 'Frida Kahlo', work: 'The Two Fridas', movement: 'Surrealism', artist_prompt: 'Frida Kahlo (Mexican, self-portraits)' },
+      { artist: 'Jackson Pollock', work: 'No. 31', movement: 'Abstract Expressionism', artist_prompt: 'Jackson Pollock (drip painting technique)' },
+      { artist: 'Mark Rothko', work: 'Orange and Yellow', movement: 'Abstract Expressionism', artist_prompt: 'Mark Rothko (color field painting)' },
+      { artist: 'Andy Warhol', work: 'Campbell\'s Soup Cans', movement: 'Pop Art', artist_prompt: 'Andy Warhol (American Pop Art)' },
+      { artist: 'Roy Lichtenstein', work: 'Whaam!', movement: 'Pop Art', artist_prompt: 'Roy Lichtenstein (comic-style Pop Art)' },
+      { artist: 'Grant Wood', work: 'American Gothic', movement: 'Regionalism', artist_prompt: 'Grant Wood (American Regionalism)' },
+      { artist: 'Edward Hopper', work: 'Nighthawks', movement: 'Realism', artist_prompt: 'Edward Hopper (American Realist)' },
+      { artist: 'Jan van Eyck', work: 'The Arnolfini Portrait', movement: 'Northern Renaissance', artist_prompt: 'Jan van Eyck (Flemish, early Northern Renaissance)' },
+      { artist: 'Hieronymus Bosch', work: 'The Garden of Earthly Delights', movement: 'Northern Renaissance', artist_prompt: 'Hieronymus Bosch (Dutch, fantastical imagery)' },
+    ],
+  },
+
+  composers: {
+    label: 'CLASSICAL COMPOSERS',
+    emoji: '🎼',
+    desc: 'Composers, works & eras',
+    modes: [
+      { id: 'work_to_composer', prompt: 'Work → Composer', qField: 'work', aField: 'composer' },
+      { id: 'composer_to_work', prompt: 'Composer → Major Work', qField: 'composer_prompt', aField: 'work' },
+    ],
+    items: [
+      { composer: 'Johann Sebastian Bach', work: 'Brandenburg Concertos', era: 'Baroque', composer_prompt: 'J.S. Bach (German Baroque)' },
+      { composer: 'Johann Sebastian Bach', work: 'Mass in B Minor', era: 'Baroque', composer_prompt: 'J.S. Bach (Toccata and Fugue composer)' },
+      { composer: 'George Frideric Handel', work: 'Messiah', era: 'Baroque', composer_prompt: 'Handel (German-British Baroque)' },
+      { composer: 'Antonio Vivaldi', work: 'The Four Seasons', era: 'Baroque', composer_prompt: 'Vivaldi (Italian Baroque)' },
+      { composer: 'Franz Joseph Haydn', work: 'The Creation', era: 'Classical', composer_prompt: 'Haydn (father of the symphony)' },
+      { composer: 'Wolfgang Amadeus Mozart', work: 'Symphony No. 40', era: 'Classical', composer_prompt: 'Mozart (child prodigy, Classical era)' },
+      { composer: 'Wolfgang Amadeus Mozart', work: 'Don Giovanni', era: 'Classical', composer_prompt: 'Mozart (The Magic Flute composer)' },
+      { composer: 'Wolfgang Amadeus Mozart', work: 'Requiem', era: 'Classical', composer_prompt: 'Mozart (Symphony No. 40 composer)' },
+      { composer: 'Ludwig van Beethoven', work: 'Symphony No. 9', era: 'Classical/Romantic', composer_prompt: 'Beethoven (deaf composer, German)' },
+      { composer: 'Ludwig van Beethoven', work: 'Moonlight Sonata', era: 'Classical/Romantic', composer_prompt: 'Beethoven (Symphony No. 5 composer)' },
+      { composer: 'Ludwig van Beethoven', work: 'Für Elise', era: 'Classical/Romantic', composer_prompt: 'Beethoven (Ode to Joy composer)' },
+      { composer: 'Franz Schubert', work: 'Symphony No. 8 "Unfinished"', era: 'Romantic', composer_prompt: 'Schubert (Austrian Romantic)' },
+      { composer: 'Frédéric Chopin', work: 'Nocturnes', era: 'Romantic', composer_prompt: 'Chopin (Polish Romantic, piano works)' },
+      { composer: 'Robert Schumann', work: 'Piano Concerto in A minor', era: 'Romantic', composer_prompt: 'Robert Schumann (German Romantic)' },
+      { composer: 'Felix Mendelssohn', work: 'A Midsummer Night\'s Dream', era: 'Romantic', composer_prompt: 'Mendelssohn (German Romantic)' },
+      { composer: 'Johannes Brahms', work: 'Symphony No. 4', era: 'Romantic', composer_prompt: 'Brahms (German, late Romantic)' },
+      { composer: 'Richard Wagner', work: 'The Ring Cycle', era: 'Romantic', composer_prompt: 'Wagner (German opera composer)' },
+      { composer: 'Richard Wagner', work: 'Tristan und Isolde', era: 'Romantic', composer_prompt: 'Wagner (The Ride of the Valkyries)' },
+      { composer: 'Giuseppe Verdi', work: 'La Traviata', era: 'Romantic', composer_prompt: 'Verdi (Italian opera, 19th c.)' },
+      { composer: 'Giuseppe Verdi', work: 'Aida', era: 'Romantic', composer_prompt: 'Verdi (Rigoletto, La Traviata composer)' },
+      { composer: 'Giacomo Puccini', work: 'La Bohème', era: 'Late Romantic', composer_prompt: 'Puccini (Italian opera, verismo)' },
+      { composer: 'Giacomo Puccini', work: 'Madama Butterfly', era: 'Late Romantic', composer_prompt: 'Puccini (La Bohème composer)' },
+      { composer: 'Pyotr Ilyich Tchaikovsky', work: 'Swan Lake', era: 'Romantic', composer_prompt: 'Tchaikovsky (Russian Romantic)' },
+      { composer: 'Pyotr Ilyich Tchaikovsky', work: '1812 Overture', era: 'Romantic', composer_prompt: 'Tchaikovsky (Swan Lake composer)' },
+      { composer: 'Antonín Dvořák', work: 'Symphony No. 9 "From the New World"', era: 'Romantic', composer_prompt: 'Dvořák (Czech Romantic)' },
+      { composer: 'Claude Debussy', work: 'Clair de Lune', era: 'Impressionist', composer_prompt: 'Debussy (French Impressionist)' },
+      { composer: 'Maurice Ravel', work: 'Bolero', era: 'Impressionist', composer_prompt: 'Ravel (French, early 20th c.)' },
+      { composer: 'Igor Stravinsky', work: 'The Rite of Spring', era: 'Modern', composer_prompt: 'Stravinsky (Russian-American, modernist)' },
+      { composer: 'Sergei Rachmaninoff', work: 'Piano Concerto No. 2', era: 'Late Romantic', composer_prompt: 'Rachmaninoff (Russian Romantic)' },
+      { composer: 'Dmitri Shostakovich', work: 'Symphony No. 5', era: 'Modern', composer_prompt: 'Shostakovich (Soviet-era Russian)' },
+      { composer: 'Aaron Copland', work: 'Appalachian Spring', era: 'Modern', composer_prompt: 'Copland (American, 20th c.)' },
+      { composer: 'George Gershwin', work: 'Rhapsody in Blue', era: 'Modern', composer_prompt: 'Gershwin (American, jazz-classical fusion)' },
+    ],
+  },
+
+  ballets: {
+    label: 'FAMOUS BALLETS',
+    emoji: '🩰',
+    desc: 'Ballets, composers & major characters',
+    modes: [
+      { id: 'ballet_to_composer', prompt: 'Ballet → Composer', qField: 'ballet', aField: 'composer' },
+      { id: 'composer_to_ballet', prompt: 'Composer → Ballet', qField: 'composer_prompt', aField: 'ballet' },
+      { id: 'ballet_to_chars', prompt: 'Ballet → Major Characters', qField: 'ballet', aField: 'characters' },
+    ],
+    items: [
+      { ballet: 'Swan Lake', composer: 'Tchaikovsky', characters: 'Odette/Odile, Prince Siegfried, Rothbart', composer_prompt: 'Tchaikovsky (most famous ballet)' },
+      { ballet: 'The Sleeping Beauty', composer: 'Tchaikovsky', characters: 'Aurora, Prince Désiré, Carabosse, Lilac Fairy', composer_prompt: 'Tchaikovsky (Aurora is the princess)' },
+      { ballet: 'The Nutcracker', composer: 'Tchaikovsky', characters: 'Clara, the Nutcracker Prince, Sugar Plum Fairy', composer_prompt: 'Tchaikovsky (Christmas classic)' },
+      { ballet: 'Giselle', composer: 'Adolphe Adam', characters: 'Giselle, Albrecht, Hilarion, Myrtha', composer_prompt: 'Adolphe Adam (Romantic era ballet)' },
+      { ballet: 'Coppélia', composer: 'Léo Delibes', characters: 'Swanilda, Franz, Dr. Coppélius', composer_prompt: 'Léo Delibes (comic ballet)' },
+      { ballet: 'La Bayadère', composer: 'Ludwig Minkus', characters: 'Nikiya, Solor, Gamzatti', composer_prompt: 'Ludwig Minkus (Indian temple setting)' },
+      { ballet: 'Don Quixote', composer: 'Ludwig Minkus', characters: 'Kitri, Basilio, Don Quixote, Sancho Panza', composer_prompt: 'Ludwig Minkus (Spanish setting)' },
+      { ballet: 'Romeo and Juliet', composer: 'Sergei Prokofiev', characters: 'Romeo, Juliet, Mercutio, Tybalt', composer_prompt: 'Prokofiev (Shakespeare adaptation)' },
+      { ballet: 'Cinderella', composer: 'Sergei Prokofiev', characters: 'Cinderella, the Prince, Stepsisters', composer_prompt: 'Prokofiev (fairy tale ballet)' },
+      { ballet: 'The Firebird', composer: 'Igor Stravinsky', characters: 'The Firebird, Ivan Tsarevich, Koschei', composer_prompt: 'Stravinsky (first major ballet, 1910)' },
+      { ballet: 'Petrushka', composer: 'Igor Stravinsky', characters: 'Petrushka, the Ballerina, the Moor', composer_prompt: 'Stravinsky (Russian puppet ballet)' },
+      { ballet: 'The Rite of Spring', composer: 'Igor Stravinsky', characters: 'The Chosen One, Elders, Maidens', composer_prompt: 'Stravinsky (caused riot at premiere, 1913)' },
+      { ballet: 'Les Sylphides', composer: 'Frédéric Chopin (orch. various)', characters: 'A Poet, Sylphides (no narrative)', composer_prompt: 'Chopin / Fokine (plotless Romantic ballet)' },
+      { ballet: 'Spartacus', composer: 'Aram Khachaturian', characters: 'Spartacus, Phrygia, Crassus, Aegina', composer_prompt: 'Khachaturian (Bolshoi classic)' },
+      { ballet: 'La Sylphide', composer: 'Jean Madeleine Schneitzhoeffer', characters: 'James, the Sylph, Madge, Effie', composer_prompt: 'Schneitzhoeffer (first Romantic ballet, 1832)' },
+    ],
+  },
+
+  greek_latin_roots: {
+    label: 'GREEK & LATIN ROOTS',
+    emoji: '📜',
+    desc: 'Roots, meanings & example words',
+    modes: [
+      { id: 'root_to_meaning', prompt: 'Root → Meaning', qField: 'root_prompt', aField: 'meaning' },
+      { id: 'meaning_to_root', prompt: 'Meaning → Root', qField: 'meaning', aField: 'root' },
+    ],
+    items: [
+      { root: 'aqua', origin: 'Latin', meaning: 'water', examples: 'aquatic, aquarium, aqueduct', root_prompt: 'aqua- (Latin)' },
+      { root: 'bio', origin: 'Greek', meaning: 'life', examples: 'biology, biography, antibiotic', root_prompt: 'bio- (Greek)' },
+      { root: 'chron', origin: 'Greek', meaning: 'time', examples: 'chronology, synchronize, anachronism', root_prompt: 'chron- (Greek)' },
+      { root: 'dem', origin: 'Greek', meaning: 'people', examples: 'democracy, epidemic, demographic', root_prompt: 'dem- (Greek)' },
+      { root: 'dict', origin: 'Latin', meaning: 'say/speak', examples: 'dictate, predict, contradict', root_prompt: 'dict- (Latin)' },
+      { root: 'duc/duct', origin: 'Latin', meaning: 'lead', examples: 'conduct, produce, introduce', root_prompt: 'duc/duct- (Latin)' },
+      { root: 'geo', origin: 'Greek', meaning: 'earth', examples: 'geography, geology, geometry', root_prompt: 'geo- (Greek)' },
+      { root: 'graph/gram', origin: 'Greek', meaning: 'write/draw', examples: 'biography, telegram, autograph', root_prompt: 'graph/gram- (Greek)' },
+      { root: 'hydr', origin: 'Greek', meaning: 'water', examples: 'hydrogen, hydraulic, dehydrate', root_prompt: 'hydr- (Greek)' },
+      { root: 'log', origin: 'Greek', meaning: 'word/study/reason', examples: 'biology, logic, dialogue', root_prompt: 'log- (Greek)' },
+      { root: 'luc/lum', origin: 'Latin', meaning: 'light', examples: 'illuminate, lucid, translucent', root_prompt: 'luc/lum- (Latin)' },
+      { root: 'magna/magni', origin: 'Latin', meaning: 'great/large', examples: 'magnificent, magnify, magnitude', root_prompt: 'magna/magni- (Latin)' },
+      { root: 'mal', origin: 'Latin', meaning: 'bad/evil', examples: 'malicious, malfunction, malady', root_prompt: 'mal- (Latin)' },
+      { root: 'man/manu', origin: 'Latin', meaning: 'hand', examples: 'manual, manufacture, manuscript', root_prompt: 'man/manu- (Latin)' },
+      { root: 'min', origin: 'Latin', meaning: 'small', examples: 'minimum, miniature, minute', root_prompt: 'min- (Latin)' },
+      { root: 'mit/miss', origin: 'Latin', meaning: 'send', examples: 'transmit, mission, dismiss', root_prompt: 'mit/miss- (Latin)' },
+      { root: 'mort', origin: 'Latin', meaning: 'death', examples: 'mortal, immortal, mortify', root_prompt: 'mort- (Latin)' },
+      { root: 'omni', origin: 'Latin', meaning: 'all', examples: 'omnipotent, omnivore, omniscient', root_prompt: 'omni- (Latin)' },
+      { root: 'path', origin: 'Greek', meaning: 'feeling/disease', examples: 'empathy, pathology, sympathy', root_prompt: 'path- (Greek)' },
+      { root: 'phil', origin: 'Greek', meaning: 'love', examples: 'philosophy, philanthropist, bibliophile', root_prompt: 'phil- (Greek)' },
+      { root: 'phon', origin: 'Greek', meaning: 'sound', examples: 'telephone, microphone, symphony', root_prompt: 'phon- (Greek)' },
+      { root: 'photo', origin: 'Greek', meaning: 'light', examples: 'photograph, photosynthesis, photon', root_prompt: 'photo- (Greek)' },
+      { root: 'poly', origin: 'Greek', meaning: 'many', examples: 'polygon, polyglot, polygamy', root_prompt: 'poly- (Greek)' },
+      { root: 'port', origin: 'Latin', meaning: 'carry', examples: 'transport, portable, export', root_prompt: 'port- (Latin)' },
+      { root: 'psych', origin: 'Greek', meaning: 'mind/soul', examples: 'psychology, psychiatry, psychic', root_prompt: 'psych- (Greek)' },
+      { root: 'rupt', origin: 'Latin', meaning: 'break', examples: 'rupture, interrupt, disrupt', root_prompt: 'rupt- (Latin)' },
+      { root: 'scrib/script', origin: 'Latin', meaning: 'write', examples: 'describe, manuscript, prescription', root_prompt: 'scrib/script- (Latin)' },
+      { root: 'sens/sent', origin: 'Latin', meaning: 'feel', examples: 'sensitive, consent, sentence', root_prompt: 'sens/sent- (Latin)' },
+      { root: 'sol', origin: 'Latin', meaning: 'sun/alone', examples: 'solar, solitary, soliloquy', root_prompt: 'sol- (Latin)' },
+      { root: 'spec/spect', origin: 'Latin', meaning: 'look/see', examples: 'spectacle, inspect, perspective', root_prompt: 'spec/spect- (Latin)' },
+      { root: 'struct', origin: 'Latin', meaning: 'build', examples: 'construct, structure, destroy', root_prompt: 'struct- (Latin)' },
+      { root: 'tele', origin: 'Greek', meaning: 'far/distant', examples: 'telephone, telescope, television', root_prompt: 'tele- (Greek)' },
+      { root: 'terra', origin: 'Latin', meaning: 'earth/land', examples: 'territory, terrain, terrestrial', root_prompt: 'terra- (Latin)' },
+      { root: 'therm', origin: 'Greek', meaning: 'heat', examples: 'thermometer, thermal, thermostat', root_prompt: 'therm- (Greek)' },
+      { root: 'trans', origin: 'Latin', meaning: 'across/beyond', examples: 'transport, transform, transit', root_prompt: 'trans- (Latin)' },
+      { root: 'ven/vent', origin: 'Latin', meaning: 'come', examples: 'convene, event, adventure', root_prompt: 'ven/vent- (Latin)' },
+      { root: 'vid/vis', origin: 'Latin', meaning: 'see', examples: 'vision, video, evident', root_prompt: 'vid/vis- (Latin)' },
+      { root: 'vit/viv', origin: 'Latin', meaning: 'life/live', examples: 'vital, vivid, revive', root_prompt: 'vit/viv- (Latin)' },
+      { root: 'voc/vok', origin: 'Latin', meaning: 'voice/call', examples: 'vocal, invoke, vocabulary', root_prompt: 'voc/vok- (Latin)' },
+      { root: 'zoo', origin: 'Greek', meaning: 'animal', examples: 'zoology, zoo, protozoa', root_prompt: 'zoo- (Greek)' },
+      { root: 'anthrop', origin: 'Greek', meaning: 'human', examples: 'anthropology, philanthropy, misanthrope', root_prompt: 'anthrop- (Greek)' },
+      { root: 'arch', origin: 'Greek', meaning: 'rule/chief/ancient', examples: 'monarchy, anarchy, archaeology', root_prompt: 'arch- (Greek)' },
+      { root: 'cred', origin: 'Latin', meaning: 'believe', examples: 'credible, credit, incredible', root_prompt: 'cred- (Latin)' },
+      { root: 'culp', origin: 'Latin', meaning: 'blame/fault', examples: 'culprit, culpable, exculpate', root_prompt: 'culp- (Latin)' },
+      { root: 'cycl', origin: 'Greek', meaning: 'circle/wheel', examples: 'bicycle, cycle, encyclopedia', root_prompt: 'cycl- (Greek)' },
+    ],
+  },
+}
+
+// ─── Flash Drill Component ────────────────────────────────────────────────────
+function FlashDrill({ drillKey, onBack }) {
+  const drill = FLASH_DRILLS[drillKey]
+  const [mode, setMode] = useState('setup')
+  const [selectedMode, setSelectedMode] = useState(drill.modes[0].id)
+  const [order, setOrder] = useState('sequential')
+  const [showReference, setShowReference] = useState(false)
+  const [queue, setQueue] = useState([])
+  const [idx, setIdx] = useState(0)
+  const [answer, setAnswer] = useState('')
+  const [results, setResults] = useState([])
+  const [revealed, setRevealed] = useState(false)
+  const [listSearch, setListSearch] = useState('')
+  const inputRef = useRef(null)
+
+  const modeConfig = drill.modes.find(m => m.id === selectedMode) || drill.modes[0]
+
+  function startQuiz() {
+    const q = order === 'sequential' ? [...drill.items] : [...drill.items].sort(() => Math.random() - 0.5)
+    setQueue(q)
+    setIdx(0)
+    setResults([])
+    setAnswer('')
+    setRevealed(false)
+    setMode('quiz')
+  }
+
+  function checkAnswer(override = false) {
+    const item = queue[idx]
+    const userAns = override ? '(marked correct)' : answer.trim()
+    const correct = override || fuzzyMatch(userAns, String(item[modeConfig.aField] || ''))
+    setResults(prev => [...prev, { item, userAnswer: userAns, correct, expected: item[modeConfig.aField] }])
+    setRevealed(true)
+    setTimeout(() => inputRef.current?.focus(), 50)
+  }
+
+  function markCorrect() {
+    setResults(prev => { const u = [...prev]; u[u.length-1] = { ...u[u.length-1], correct: true }; return u })
+  }
+
+  function next() {
+    if (idx + 1 >= queue.length) {
+      saveDrillSession(drillKey, results.filter(r => r.correct).length, queue.length)
+      setMode('results')
+    } else {
+      setIdx(i => i + 1)
+      setAnswer('')
+      setRevealed(false)
+    }
+  }
+
+  const item = queue[idx]
+  const score = results.filter(r => r.correct).length
+  const filteredItems = drill.items.filter(it =>
+    !listSearch ||
+    Object.values(it).some(v => String(v).toLowerCase().includes(listSearch.toLowerCase()))
+  )
+
+  if (showReference) return (
+    <div style={S.wrap}>
+      <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:4 }}>
+        <button style={{ fontSize:12, color:'#4060a0', background:'none', border:'none', cursor:'pointer' }} onClick={() => setShowReference(false)}>← Back</button>
+        <div style={S.title}>{drill.emoji} {drill.label}</div>
+      </div>
+      <input style={S.input} value={listSearch} onChange={e => setListSearch(e.target.value)} placeholder="Search..." />
+      <div style={{ ...S.card, padding:0, overflow:'hidden', maxHeight:600, overflowY:'auto' }}>
+        {filteredItems.map((it, i) => (
+          <div key={i} style={{ padding:'8px 14px', borderBottom:i<filteredItems.length-1?'1px solid #0d1235':'none', background:i%2===0?'transparent':'#060b1a' }}>
+            {Object.entries(it)
+              .filter(([k]) => !k.includes('_prompt') && !k.includes('numStr'))
+              .map(([k, v]) => (
+                <div key={k} style={{ display:'flex', gap:8, fontSize:12, marginBottom:2 }}>
+                  <span style={{ color:'#4060a0', minWidth:80, fontSize:10, letterSpacing:1 }}>{k.toUpperCase()}</span>
+                  <span style={{ color:'#c0c8e8' }}>{String(v)}</span>
+                </div>
+              ))
+            }
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+
+  if (mode === 'setup') return (
+    <div style={S.wrap}>
+      <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:4 }}>
+        <button style={{ fontSize:12, color:'#4060a0', background:'none', border:'none', cursor:'pointer' }} onClick={onBack}>← Back</button>
+        <div style={S.title}>{drill.emoji} {drill.label}</div>
+      </div>
+      <div style={S.card}>
+        <div style={{ fontSize:10, color:'#4060a0', letterSpacing:2, marginBottom:8 }}>MODE</div>
+        <div style={{ display:'flex', flexDirection:'column', gap:6, marginBottom:16 }}>
+          {drill.modes.map(m => (
+            <button key={m.id} onClick={() => setSelectedMode(m.id)} style={{ padding:'8px 12px', borderRadius:8, border:`1px solid ${selectedMode===m.id?'#f5c518':'#1a2460'}`, background:selectedMode===m.id?'rgba(245,197,24,0.1)':'#060b1a', color:selectedMode===m.id?'#f5c518':'#6070a0', cursor:'pointer', fontSize:12, textAlign:'left' }}>{m.prompt}</button>
+          ))}
+        </div>
+        <div style={{ fontSize:10, color:'#4060a0', letterSpacing:2, marginBottom:8 }}>ORDER</div>
+        <div style={{ display:'flex', gap:8, marginBottom:16 }}>
+          {[['sequential','In Order'],['random','Random']].map(([v,l]) => (
+            <button key={v} onClick={() => setOrder(v)} style={{ flex:1, padding:'8px 0', borderRadius:8, border:`1px solid ${order===v?'#f5c518':'#1a2460'}`, background:order===v?'rgba(245,197,24,0.1)':'#060b1a', color:order===v?'#f5c518':'#6070a0', cursor:'pointer', fontSize:13 }}>{l}</button>
+          ))}
+        </div>
+        <button style={S.btn} onClick={startQuiz}>START QUIZ</button>
+      </div>
+      <button style={{ ...S.btnSecondary, color:'#4dd0e1', borderColor:'#1a4060' }} onClick={() => setShowReference(true)}>📋 View Reference List</button>
+    </div>
+  )
+
+  if (mode === 'results') return (
+    <div style={S.wrap}>
+      <div style={S.card}>
+        <div style={S.title}>RESULTS</div>
+        <div style={S.scoreBox}>
+          <div style={S.bigNum}>{score}/{queue.length}</div>
+          <div style={{ fontSize:13, color:score/queue.length>=0.9?'#4caf7d':score/queue.length>=0.7?'#f5c518':'#e57373' }}>
+            {score/queue.length>=0.9?'Excellent!':score/queue.length>=0.7?'Good work':score/queue.length>=0.5?'Keep practicing':'Needs work'}
+          </div>
+        </div>
+        <div style={{ maxHeight:300, overflowY:'auto' }}>
+          {results.filter(r => !r.correct).map((r, i) => (
+            <div key={i} style={{ borderBottom:'1px solid #1a2040', padding:'6px 0', fontSize:11 }}>
+              <div style={{ color:'#4060a0', fontSize:10 }}>{r.item[modeConfig.qField]}</div>
+              <span style={{ color:'#e57373' }}>✗ {r.userAnswer || '(blank)'}</span>
+              <span style={{ color:'#4caf7d', marginLeft:8 }}>→ {r.expected}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+      <button style={S.btn} onClick={() => setMode('setup')}>Try Again</button>
+      <button style={S.btnSecondary} onClick={onBack}>← Back</button>
+    </div>
+  )
+
+  // Quiz mode
+  return (
+    <div style={S.wrap}>
+      <div style={S.progress}>{idx+1} / {queue.length} · {score} correct</div>
+      <div style={S.card}>
+        <div style={{ fontSize:10, color:'#4060a0', letterSpacing:2, marginBottom:8 }}>{modeConfig.prompt.toUpperCase()}</div>
+        <div style={{ fontSize:15, color:'#c0c8e8', lineHeight:1.5, marginBottom:12 }}>{item[modeConfig.qField]}</div>
+        <input
+          ref={inputRef}
+          autoFocus
+          style={{ ...S.input, borderColor:revealed?(results[results.length-1]?.correct?'#4caf7d':'#e57373'):'#1a2460' }}
+          value={answer}
+          onChange={e => setAnswer(e.target.value)}
+          onKeyDown={e => { if(e.key==='Enter') revealed?next():checkAnswer() }}
+          placeholder="Your answer..."
+          disabled={revealed}
+        />
+        {revealed && (
+          <div style={{ marginTop:8 }}>
+            {results[results.length-1]?.correct
+              ? <span style={S.correct}>✓ Correct!</span>
+              : (
+                <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
+                  <span style={S.incorrect}>✗ {item[modeConfig.aField]}</span>
+                  <button style={{ fontSize:10, color:'#4caf7d', border:'1px solid #2e8c50', borderRadius:6, padding:'2px 8px', background:'#0a1e10', cursor:'pointer' }} onClick={markCorrect}>Mark correct</button>
+                </div>
+              )}
+          </div>
+        )}
+      </div>
+      {!revealed
+        ? <button style={S.btn} onClick={() => checkAnswer()}>CHECK</button>
+        : <button style={S.btn} onClick={next}>{idx+1>=queue.length?'SEE RESULTS':'NEXT →'}</button>}
+      <button style={S.btnSecondary} onClick={() => setMode('setup')}>← Setup</button>
     </div>
   )
 }

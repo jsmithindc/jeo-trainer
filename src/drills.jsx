@@ -893,8 +893,8 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids }) {
             if (!res || !c) return null
             return (
               <g key={`lbl-${p.id}`} style={{ pointerEvents: 'none' }}>
-                <text x={c.x} y={c.y - 4/zoom} textAnchor="middle" fontSize={7/zoom} fill={res.correct ? '#4caf7d' : '#ff8a80'} fontWeight="bold" fontFamily="sans-serif">{res.country.name}</text>
-                <text x={c.x} y={c.y + 5/zoom} textAnchor="middle" fontSize={6/zoom} fill={res.correct ? '#a5d6a7' : '#ffcdd2'} fontFamily="sans-serif">{res.country.capital}</text>
+                <text x={c.x} y={c.y - 4/zoom} textAnchor="middle" fontSize={7/zoom} fill={res.correct ? '#ffffff' : '#ff8a80'} fontWeight="bold" fontFamily="sans-serif">{res.country.name}</text>
+                <text x={c.x} y={c.y + 5/zoom} textAnchor="middle" fontSize={6/zoom} fill={res.correct ? '#f5c518' : '#ffcdd2'} fontFamily="sans-serif">{res.country.capital}</text>
               </g>
             )
           })}
@@ -1257,6 +1257,7 @@ function SubnationalMapDrill({ config, onBack }) {
   const [centroids, setCentroids] = useState({})
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState(null)
+  const [loadError, setLoadError] = useState(null)
   const [answer, setAnswer] = useState({ region: '', capital: '' })
   const [result, setResult] = useState(null)
   const [score, setScore] = useState({ correct: 0, total: 0 })
@@ -1537,8 +1538,8 @@ function SubnationalMapDrill({ config, onBack }) {
             if (!res || !c) return null
             return (
               <g key={`lbl-${p.name}`} style={{ pointerEvents: 'none' }}>
-                <text x={c.x} y={c.y - 4/zoom} textAnchor="middle" fontSize={8/zoom} fill={res.correct ? '#4caf7d' : '#ff8a80'} fontWeight="bold" fontFamily="sans-serif">{p.name}</text>
-                <text x={c.x} y={c.y + 6/zoom} textAnchor="middle" fontSize={7/zoom} fill={res.correct ? '#a5d6a7' : '#ffcdd2'} fontFamily="sans-serif">{res.data.capital}</text>
+                <text x={c.x} y={c.y - 4/zoom} textAnchor="middle" fontSize={8/zoom} fill={res.correct ? '#ffffff' : '#ff8a80'} fontWeight="bold" fontFamily="sans-serif">{p.name}</text>
+                <text x={c.x} y={c.y + 6/zoom} textAnchor="middle" fontSize={7/zoom} fill={res.correct ? '#f5c518' : '#ffcdd2'} fontFamily="sans-serif">{res.data.capital}</text>
               </g>
             )
           })}
@@ -1796,8 +1797,8 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids }) {
               if (!res || !c) return null
               return (
                 <g key={`lbl-${p.id}`} style={{ pointerEvents:'none' }}>
-                  <text x={c.x} y={c.y-4/zoom} textAnchor="middle" fontSize={7/zoom} fill={res.correct?'#4caf7d':'#ff8a80'} fontWeight="bold" fontFamily="sans-serif">{res.country.name}</text>
-                  <text x={c.x} y={c.y+5/zoom} textAnchor="middle" fontSize={6/zoom} fill={res.correct?'#a5d6a7':'#ffcdd2'} fontFamily="sans-serif">{res.country.capital}</text>
+                  <text x={c.x} y={c.y-4/zoom} textAnchor="middle" fontSize={7/zoom} fill={res.correct?'#ffffff':'#ff8a80'} fontWeight="bold" fontFamily="sans-serif">{res.country.name}</text>
+                  <text x={c.x} y={c.y+5/zoom} textAnchor="middle" fontSize={6/zoom} fill={res.correct?'#f5c518':'#ffcdd2'} fontFamily="sans-serif">{res.country.capital}</text>
                 </g>
               )
             })}

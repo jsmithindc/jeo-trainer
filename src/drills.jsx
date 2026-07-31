@@ -504,6 +504,7 @@ function LabeledMapReference({ onBack, paths, pathCentroids }) {
   const [refMode, setRefMode] = useState('map') // map | list
   const [revealed, setRevealed] = useState(new Set())
   const [zoom, setZoom] = useState(1)
+  const [minZoom] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
   const [dragging, setDragging] = useState(false)
   const [dragStart, setDragStart] = useState(null)
@@ -539,8 +540,8 @@ function LabeledMapReference({ onBack, paths, pathCentroids }) {
           {/* Zoom controls */}
           <div style={{ display: 'flex', gap: 8 }}>
             <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18 }} onClick={() => { const nz = Math.min(zoom * 1.5, 8); const cx = (480 - pan.x) / zoom; const cy = (250 - pan.y) / zoom; setPan({ x: 480 - cx * nz, y: 250 - cy * nz }); setZoom(nz) }}>+</button>
-            <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18, opacity: zoom <= 1 ? 0.3 : 1 }} disabled={zoom <= 1} onClick={() => { const nz = Math.max(zoom / 1.5, 1); setZoom(nz); if (nz === 1) setPan({ x: 0, y: 0 }) }}>−</button>
-            <button style={{ ...S.btnSecondary, flex: 1, padding: '6px 0', fontSize: 12 }} onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }) }}>Reset View</button>
+            <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18, opacity: zoom <= minZoom ? 0.3 : 1 }} disabled={zoom <= minZoom} onClick={() => { const nz = Math.max(zoom / 1.5, 1); setZoom(nz); if (nz <= minZoom) { setZoom(minZoom); setPan({ x: 0, y: 0 }) } }}>−</button>
+            <button style={{ ...S.btnSecondary, flex: 1, padding: '6px 0', fontSize: 12 }} onClick={() => { setZoom(minZoom); setPan({ x: 0, y: 0 }) }}>Reset View</button>
             <button style={{ ...S.btnSecondary, flex: 1, padding: '6px 0', fontSize: 11, color: '#4dd0e1' }} onClick={() => setRevealed(new Set(COUNTRIES.map(c => c.id)))}>Show All</button>
             <button style={{ ...S.btnSecondary, flex: 1, padding: '6px 0', fontSize: 11 }} onClick={() => setRevealed(new Set())}>Hide All</button>
           </div>
@@ -579,8 +580,9 @@ function LabeledMapReference({ onBack, paths, pathCentroids }) {
                 {paths.map(p => {
                   const country = COUNTRY_MAP[p.id]
                   const centroid = pathCentroids.current[p.id]
-                  if (!country || !centroid || zoom < 1.5) return null
+                  if (!country || !centroid) return null
                   const isRevealed = revealed.has(p.id)
+                  if (!isRevealed && zoom < 1.5) return null // hide unselected labels when zoomed out
                   return (
                     <g key={`label-${p.id}`} onClick={e => { if (!dragging) { e.stopPropagation(); toggleReveal(p.id) } }} style={{ cursor: 'pointer' }}>
                       <text
@@ -838,8 +840,8 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids }) {
       {/* Zoom controls */}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18 }} onClick={() => { const nz = Math.min(zoom * 1.5, 8); const cx = (480 - pan.x) / zoom; const cy = (250 - pan.y) / zoom; setPan({ x: 480 - cx * nz, y: 250 - cy * nz }); setZoom(nz) }}>+</button>
-        <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18, opacity: zoom <= 1 ? 0.3 : 1 }} disabled={zoom <= 1} onClick={() => { const nz = Math.max(zoom / 1.5, 1); setZoom(nz); if (nz === 1) setPan({ x: 0, y: 0 }) }}>−</button>
-        <button style={{ ...S.btnSecondary, flex: 1, padding: '6px 0', fontSize: 12 }} onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }) }}>Reset View</button>
+        <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18, opacity: zoom <= minZoom ? 0.3 : 1 }} disabled={zoom <= minZoom} onClick={() => { const nz = Math.max(zoom / 1.5, 1); setZoom(nz); if (nz <= minZoom) { setZoom(minZoom); setPan({ x: 0, y: 0 }) } }}>−</button>
+        <button style={{ ...S.btnSecondary, flex: 1, padding: '6px 0', fontSize: 12 }} onClick={() => { setZoom(minZoom); setPan({ x: 0, y: 0 }) }}>Reset View</button>
         <button style={{ ...S.btn, flex: 1, padding: '6px 0', fontSize: 12 }} onClick={autoSelectNext}>Auto Next →</button>
       </div>
 
@@ -1299,6 +1301,8 @@ function SubnationalMapDrill({ config, onBack }) {
           const spanY = Math.max(...ys) - Math.min(...ys)
           const vw2 = config.width || 960, vh2 = config.height || 500
           const newZoom = Math.min(Math.max(Math.min(vw2 * 0.9 / (spanX||1), vh2 * 0.9 / (spanY||1)), 1), 8)
+          setZoom(newZoom)
+          setMinZoom(newZoom)
           setPan({ x: vw2/2 - cx * newZoom, y: vh2/2 - cy * newZoom })
         }
       })
@@ -1368,8 +1372,8 @@ function SubnationalMapDrill({ config, onBack }) {
         <>
           <div style={{ display: 'flex', gap: 6 }}>
             <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18 }} onClick={() => setZoom(z => Math.min(z*1.5,8))}>+</button>
-            <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18, opacity: zoom <= 1 ? 0.3 : 1 }} disabled={zoom <= 1} onClick={() => { const nz = Math.max(zoom/1.5, 1); setZoom(nz); if (nz === 1) setPan({x:0,y:0}) }}>−</button>
-            <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:11 }} onClick={() => { setZoom(1); setPan({x:0,y:0}) }}>Reset</button>
+            <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18, opacity: zoom <= minZoom ? 0.3 : 1 }} disabled={zoom <= minZoom} onClick={() => { const nz = Math.max(zoom/1.5, 1); setZoom(nz); if (nz === 1) setPan({x:0,y:0}) }}>−</button>
+            <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:11 }} onClick={() => { setZoom(minZoom); setPan({x:0,y:0}) }}>Reset</button>
             <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:11, color:'#4dd0e1' }} onClick={() => setRevealed(new Set(config.data.map(d=>d.name)))}>Show All</button>
             <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:11 }} onClick={() => setRevealed(new Set())}>Hide All</button>
           </div>
@@ -1400,8 +1404,9 @@ function SubnationalMapDrill({ config, onBack }) {
                 {paths.map(p => {
                   const data = getRegionData(p.name)
                   const c = centroids[p.name]
-                  if (!data || !c || zoom < 1.2) return null
+                  if (!data || !c) return null
                   const isRevealed = revealed.has(p.name)
+                  if (!isRevealed && zoom < minZoom * 1.5) return null
                   return (
                     <g key={`l-${p.name}`} onClick={e => { if(!dragging){e.stopPropagation();setRevealed(prev=>{const n=new Set(prev);n.has(p.name)?n.delete(p.name):n.add(p.name);return n})} }} style={{ cursor:'pointer' }}>
                       <text x={c.x} y={c.y-(isRevealed?5:0)} textAnchor="middle" fontSize={10/zoom} fill={isRevealed?'#fff':'#8890d0'} style={{ pointerEvents:'none', fontFamily:'sans-serif' }}>{p.name}</text>
@@ -1447,8 +1452,8 @@ function SubnationalMapDrill({ config, onBack }) {
 
       <div style={{ display:'flex', gap:6 }}>
         <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18 }} onClick={() => { const nz=Math.min(zoom*1.5,8); const cx=(480-pan.x)/zoom; const cy=(250-pan.y)/zoom; setPan({x:480-cx*nz,y:250-cy*nz}); setZoom(nz) }}>+</button>
-        <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18, opacity:zoom<=1?0.3:1 }} disabled={zoom<=1} onClick={() => { const nz=Math.max(zoom/1.5,1); setZoom(nz); if(nz===1)setPan({x:0,y:0}) }}>−</button>
-        <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:12 }} onClick={() => { setZoom(1); setPan({x:0,y:0}) }}>Reset</button>
+        <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18, opacity:zoom<=1?0.3:1 }} disabled={zoom<=1} onClick={() => { const nz=Math.max(zoom/1.5,1); setZoom(nz); if(nz<=minZoom){setZoom(minZoom);setPan({x:0,y:0})} }}>−</button>
+        <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:12 }} onClick={() => { setZoom(minZoom); setPan({x:0,y:0}) }}>Reset</button>
         <button style={{ ...S.btn, flex:1, padding:'6px 0', fontSize:12 }} onClick={autoSelectNext}>Auto Next →</button>
       </div>
 
@@ -1521,6 +1526,7 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids }) {
   const [showReference, setShowReference] = useState(false)
   const [refMode, setRefMode] = useState('map')
   const [zoom, setZoom] = useState(1)
+  const [minZoom, setMinZoom] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
   const [dragging, setDragging] = useState(false)
   const [dragStart, setDragStart] = useState(null)
@@ -1546,6 +1552,7 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids }) {
     const zx = 960 * 0.8 / (spanX || 1), zy = 500 * 0.8 / (spanY || 1)
     const newZoom = Math.min(Math.max(Math.min(zx, zy), 1), 8)
     setZoom(newZoom)
+    setMinZoom(newZoom)
     setPan({ x: 480 - cx * newZoom, y: 250 - cy * newZoom })
   }, [worldPaths.length])
 
@@ -1600,30 +1607,49 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids }) {
         </div>
       </div>
       {refMode === 'map' && (
-        <div style={{ width:'100%', background:'#060b1a', borderRadius:12, overflow:'hidden', border:'1px solid #1a2460' }}>
-          <svg viewBox="0 0 960 500" style={{ width:'100%', height:'auto', display:'block' }}>
-            <rect width="960" height="500" fill="#060b1a" />
-            {regionPaths.map(p => {
-              const country = COUNTRY_MAP[p.id]
-              const isRevealed = revealed.has(p.id)
-              const c = worldCentroids.current[p.id]
-              return (
-                <g key={p.id}>
-                  <path d={p.d} fill={isRevealed?'#4dd0e1':'#1a3070'} stroke="#0a0f2e" strokeWidth="0.5"
-                    onClick={() => setRevealed(prev => { const n=new Set(prev); n.has(p.id)?n.delete(p.id):n.add(p.id); return n })}
-                    style={{ cursor:'pointer', transition:'fill 0.2s' }}
-                  />
-                  {c && country && (
-                    <g onClick={() => setRevealed(prev => { const n=new Set(prev); n.has(p.id)?n.delete(p.id):n.add(p.id); return n })} style={{ cursor:'pointer' }}>
-                      <text x={c.x} y={c.y-(isRevealed?5:0)} textAnchor="middle" fontSize="8" fill={isRevealed?'#fff':'#8890d0'} style={{ pointerEvents:'none', fontFamily:'sans-serif' }}>{country.name}</text>
-                      {isRevealed && <text x={c.x} y={c.y+10} textAnchor="middle" fontSize="7" fill="#f5c518" style={{ pointerEvents:'none', fontFamily:'sans-serif' }}>{country.capital}</text>}
+        <>
+          <div style={{ display:'flex', gap:6 }}>
+            <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18 }} onClick={() => { const nz=Math.min(zoom*1.5,8); const cx=(480-pan.x)/zoom; const cy=(250-pan.y)/zoom; setPan({x:480-cx*nz,y:250-cy*nz}); setZoom(nz) }}>+</button>
+            <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18, opacity:zoom<=minZoom?0.3:1 }} disabled={zoom<=minZoom} onClick={() => { const nz=Math.max(zoom/1.5,minZoom); setZoom(nz); if(nz<=minZoom){setPan({x:0,y:0})} }}>−</button>
+            <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:11 }} onClick={() => { setZoom(minZoom); setPan({x:0,y:0}) }}>Reset</button>
+            <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:11, color:'#4dd0e1' }} onClick={() => setRevealed(new Set(regionCountries.map(c=>c.id)))}>Show All</button>
+            <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:11 }} onClick={() => setRevealed(new Set())}>Hide All</button>
+          </div>
+          <div
+            style={{ width:'100%', background:'#060b1a', borderRadius:12, overflow:'hidden', border:'1px solid #1a2460', cursor:dragging?'grabbing':'grab', userSelect:'none' }}
+            onMouseDown={e => { setDragging(true); setDragStart({x:e.clientX-pan.x,y:e.clientY-pan.y}) }}
+            onMouseMove={e => { if(dragging&&dragStart) setPan({x:e.clientX-dragStart.x,y:e.clientY-dragStart.y}) }}
+            onMouseUp={() => setDragging(false)} onMouseLeave={() => setDragging(false)}
+            onTouchStart={e => { const t=e.touches[0]; setDragging(true); setDragStart({x:t.clientX-pan.x,y:t.clientY-pan.y}) }}
+            onTouchMove={e => { if(dragging&&dragStart){const t=e.touches[0];setPan({x:t.clientX-dragStart.x,y:t.clientY-dragStart.y})} }}
+            onTouchEnd={() => setDragging(false)}
+          >
+            <svg viewBox="0 0 960 500" style={{ width:'100%', height:'auto', display:'block' }}>
+              <rect width="960" height="500" fill="#060b1a" />
+              <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
+                {regionPaths.map(p => {
+                  const country = COUNTRY_MAP[p.id]
+                  const isRevealed = revealed.has(p.id)
+                  const c = worldCentroids.current[p.id]
+                  return (
+                    <g key={p.id}>
+                      <path d={p.d} fill={isRevealed?'#4dd0e1':'#1a3070'} stroke="#0a0f2e" strokeWidth={0.5/zoom}
+                        onClick={e => { if(!dragging) { e.stopPropagation(); setRevealed(prev => { const n=new Set(prev); n.has(p.id)?n.delete(p.id):n.add(p.id); return n }) } }}
+                        style={{ cursor:'pointer', transition:'fill 0.2s' }}
+                      />
+                      {c && country && (isRevealed || zoom >= minZoom * 1.5) && (
+                        <g onClick={e => { if(!dragging){e.stopPropagation();setRevealed(prev => { const n=new Set(prev); n.has(p.id)?n.delete(p.id):n.add(p.id); return n })} }} style={{ cursor:'pointer' }}>
+                          <text x={c.x} y={c.y-(isRevealed?5:0)} textAnchor="middle" fontSize={8/zoom} fill={isRevealed?'#fff':'#8890d0'} style={{ pointerEvents:'none', fontFamily:'sans-serif' }}>{country.name}</text>
+                          {isRevealed && <text x={c.x} y={c.y+10/zoom} textAnchor="middle" fontSize={7/zoom} fill="#f5c518" style={{ pointerEvents:'none', fontFamily:'sans-serif' }}>{country.capital}</text>}
+                        </g>
+                      )}
                     </g>
-                  )}
-                </g>
-              )
-            })}
-          </svg>
-        </div>
+                  )
+                })}
+              </g>
+            </svg>
+          </div>
+        </>
       )}
       {refMode === 'list' && (
         <>
@@ -1660,8 +1686,8 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids }) {
       </div>
       <div style={{ display:'flex', gap:6 }}>
         <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18 }} onClick={() => { const nz=Math.min(zoom*1.5,8); const cx=(480-pan.x)/zoom; const cy=(250-pan.y)/zoom; setPan({x:480-cx*nz,y:250-cy*nz}); setZoom(nz) }}>+</button>
-        <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18, opacity:zoom<=1?0.3:1 }} disabled={zoom<=1} onClick={() => { const nz=Math.max(zoom/1.5,1); setZoom(nz); if(nz===1)setPan({x:0,y:0}) }}>−</button>
-        <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:12 }} onClick={() => { setZoom(1); setPan({x:0,y:0}) }}>Reset</button>
+        <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18, opacity:zoom<=1?0.3:1 }} disabled={zoom<=1} onClick={() => { const nz=Math.max(zoom/1.5,1); setZoom(nz); if(nz<=minZoom){setZoom(minZoom);setPan({x:0,y:0})} }}>−</button>
+        <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:12 }} onClick={() => { setZoom(minZoom); setPan({x:0,y:0}) }}>Reset</button>
         <button style={{ ...S.btn, flex:1, padding:'6px 0', fontSize:12 }} onClick={autoSelectNext}>Auto Next →</button>
       </div>
       <div
@@ -1827,6 +1853,37 @@ export const FLASH_DRILLS = {
       { question: 'What is the Kuiper Belt?', answer: 'Region beyond Neptune with icy bodies, including Pluto' },
       { question: 'Hubble Space Telescope launched in what year?', answer: '1990' },
       { question: 'Speed of light (approximate)', answer: '300,000 km/s (186,000 miles/s)' },
+      // Space missions
+      { question: 'First artificial satellite launched into orbit', answer: 'Sputnik 1 (USSR, 1957)' },
+      { question: 'First American in space', answer: 'Alan Shepard (1961, Freedom 7)' },
+      { question: 'First American to orbit Earth', answer: 'John Glenn (1962, Friendship 7)' },
+      { question: 'Apollo 11 crew members', answer: 'Neil Armstrong, Buzz Aldrin, Michael Collins' },
+      { question: 'First person to walk on the Moon', answer: 'Neil Armstrong (July 20, 1969)' },
+      { question: 'Second person to walk on the Moon', answer: 'Buzz Aldrin (Apollo 11)' },
+      { question: 'Last mission to land humans on the Moon', answer: 'Apollo 17 (December 1972)' },
+      { question: 'Mission that famously said "Houston, we have a problem"', answer: 'Apollo 13 (1970)' },
+      { question: 'Space Shuttle that broke apart on re-entry in 2003', answer: 'Columbia' },
+      { question: 'Space Shuttle that exploded 73 seconds after launch in 1986', answer: 'Challenger' },
+      { question: 'First space station (USSR, 1971)', answer: 'Salyut 1' },
+      { question: 'International Space Station construction began in what year?', answer: '1998' },
+      { question: 'First Mars rover (NASA, 1997)', answer: 'Sojourner (Mars Pathfinder mission)' },
+      { question: 'Mars rover that discovered evidence of ancient water (2004)', answer: 'Opportunity (and Spirit)' },
+      { question: 'Mars rover currently operating (as of 2021)', answer: 'Perseverance (and Curiosity)' },
+      { question: 'Mission that took the first images of Pluto up close (2015)', answer: 'New Horizons' },
+      { question: 'Voyager 1 launched in what year?', answer: '1977' },
+      { question: 'What is Voyager 1 notable for?', answer: 'First human-made object to enter interstellar space' },
+      { question: 'Space telescope that revealed deep field images of early universe', answer: 'James Webb Space Telescope (JWST)' },
+      { question: 'Mission that proved gravitational waves exist (2015)', answer: 'LIGO (Laser Interferometer Gravitational-Wave Observatory)' },
+      { question: 'First private company to send astronauts to the ISS', answer: 'SpaceX (Crew Dragon, 2020)' },
+      { question: 'Mission that returned samples from the asteroid Ryugu', answer: 'Hayabusa2 (JAXA, Japan)' },
+      { question: 'NASA mission that crashed a spacecraft into an asteroid to test deflection (2022)', answer: 'DART (Double Asteroid Redirection Test)' },
+      { question: 'What is the Artemis program?', answer: "NASA's program to return humans to the Moon (2020s)" },
+      { question: 'First woman in space', answer: 'Valentina Tereshkova (USSR, 1963)' },
+      { question: 'First American woman in space', answer: 'Sally Ride (1983, STS-7)' },
+      { question: 'Longest human spaceflight record holder (as of 2022)', answer: 'Oleg Kononenko (Russia, 878+ days cumulative)' },
+      { question: 'Telescope used to first confirm exoplanets around sun-like stars', answer: 'Kepler Space Telescope' },
+      { question: 'What was the Cassini mission?', answer: 'NASA spacecraft that orbited Saturn 2004–2017' },
+      { question: 'What is the Event Horizon Telescope famous for?', answer: 'First image of a black hole (M87*, 2019)' },
     ],
   },
 
@@ -1858,6 +1915,17 @@ export const FLASH_DRILLS = {
       { play: 'Antony and Cleopatra', type: 'Tragedy', characters: 'Antony, Cleopatra, Octavius Caesar', quote: 'Age cannot wither her, nor custom stale her infinite variety', char_prompt: 'Cleopatra, Enobarbus, Octavius Caesar' },
       { play: 'The Winter\'s Tale', type: 'Comedy', characters: 'Leontes, Hermione, Perdita', quote: 'Exit, pursued by a bear', char_prompt: 'Leontes, Hermione, Perdita, Autolycus' },
       { play: 'Measure for Measure', type: 'Comedy', characters: 'Isabella, Angelo, Duke Vincentio', quote: 'The quality of mercy is not strained', char_prompt: 'Isabella, Angelo, Duke Vincentio' },
+      { play: 'The Merry Wives of Windsor', type: 'Comedy', characters: 'Falstaff, Mistress Ford, Mistress Page', quote: "Why then the world's mine oyster", char_prompt: 'Falstaff, Mistress Ford, Mistress Page' },
+      { play: "Love's Labour's Lost", type: 'Comedy', characters: 'Berowne, Rosaline, King Ferdinand', quote: "The world's a stage", char_prompt: 'Berowne, Rosaline, Don Armado' },
+      { play: "All's Well That Ends Well", type: 'Comedy', characters: 'Helena, Bertram, Parolles', quote: "All's well that ends well", char_prompt: 'Helena, Bertram, Parolles' },
+      { play: 'Coriolanus', type: 'Tragedy', characters: 'Coriolanus, Volumnia, Aufidius', quote: 'There is a world elsewhere', char_prompt: 'Coriolanus, Volumnia, Menenius' },
+      { play: 'Troilus and Cressida', type: 'Tragedy', characters: 'Troilus, Cressida, Pandarus, Hector', quote: 'Time hath, my lord, a wallet at his back', char_prompt: 'Troilus, Cressida, Pandarus' },
+      { play: 'Titus Andronicus', type: 'Tragedy', characters: 'Titus, Tamora, Aaron, Lavinia', quote: 'She is a woman, therefore may be wooed', char_prompt: 'Titus, Tamora, Aaron the Moor' },
+      { play: 'Pericles', type: 'Comedy', characters: 'Pericles, Marina, Thaisa', quote: 'Few love to hear the sins they love to act', char_prompt: 'Pericles, Marina, Thaisa' },
+      { play: 'Cymbeline', type: 'Comedy', characters: 'Imogen, Posthumus, Iachimo', quote: "Fear no more the heat o' the sun", char_prompt: 'Imogen, Posthumus, Iachimo' },
+      { play: 'Henry IV Part 1', type: 'History', characters: 'Prince Hal, Falstaff, Hotspur', quote: 'The better part of valour is discretion', char_prompt: 'Prince Hal, Falstaff, Hotspur' },
+      { play: 'Richard II', type: 'History', characters: 'Richard II, Bolingbroke, John of Gaunt', quote: 'This sceptred isle... this precious stone set in a silver sea', char_prompt: 'Richard II, Bolingbroke, John of Gaunt' },
+      { play: 'Henry VI Part 1', type: 'History', characters: 'Henry VI, Joan of Arc, Talbot', quote: 'Defer no time, delays have dangerous ends', char_prompt: 'Henry VI, Joan of Arc, Talbot' },
     ],
   },
 
@@ -1908,6 +1976,37 @@ export const FLASH_DRILLS = {
       { author: 'Chinua Achebe', work: 'Things Fall Apart', author_prompt: 'Chinua Achebe (Nigerian)' },
       { author: 'Haruki Murakami', work: 'Norwegian Wood', author_prompt: 'Haruki Murakami (Japanese contemporary)' },
       { author: 'Fyodor Dostoevsky', work: 'The Idiot', author_prompt: 'Fyodor Dostoevsky (Notes from Underground author)' },
+      { author: 'John Milton', work: 'Paradise Lost', author_prompt: 'John Milton (English, 17th c. epic poet)' },
+      { author: 'Geoffrey Chaucer', work: 'The Canterbury Tales', author_prompt: 'Geoffrey Chaucer (Middle English poet)' },
+      { author: 'William Blake', work: 'Songs of Innocence and of Experience', author_prompt: 'William Blake (English Romantic poet)' },
+      { author: 'Edgar Allan Poe', work: 'The Tell-Tale Heart', author_prompt: 'Edgar Allan Poe (American Gothic)' },
+      { author: 'Edgar Allan Poe', work: 'The Raven', author_prompt: 'Edgar Allan Poe (The Tell-Tale Heart author)' },
+      { author: 'Mark Twain', work: 'Adventures of Huckleberry Finn', author_prompt: 'Mark Twain (American humorist)' },
+      { author: 'Herman Melville', work: 'Moby-Dick', author_prompt: 'Herman Melville (American, 19th c.)' },
+      { author: 'Nathaniel Hawthorne', work: 'The Scarlet Letter', author_prompt: 'Nathaniel Hawthorne (American Puritan era)' },
+      { author: 'Henry David Thoreau', work: 'Walden', author_prompt: 'Henry David Thoreau (American Transcendentalist)' },
+      { author: 'Walt Whitman', work: 'Leaves of Grass', author_prompt: 'Walt Whitman (American poet, free verse)' },
+      { author: 'Emily Dickinson', work: 'Because I Could Not Stop for Death', author_prompt: 'Emily Dickinson (American reclusive poet)' },
+      { author: 'Oscar Wilde', work: 'The Picture of Dorian Gray', author_prompt: 'Oscar Wilde (Irish wit, late Victorian)' },
+      { author: 'Oscar Wilde', work: 'The Importance of Being Earnest', author_prompt: 'Oscar Wilde (The Picture of Dorian Gray author)' },
+      { author: 'Thomas Hardy', work: "Tess of the d'Urbervilles", author_prompt: 'Thomas Hardy (English Victorian)' },
+      { author: 'Joseph Conrad', work: 'Heart of Darkness', author_prompt: 'Joseph Conrad (Polish-British modernist)' },
+      { author: 'D.H. Lawrence', work: "Lady Chatterley's Lover", author_prompt: "D.H. Lawrence (Sons and Lovers author)" },
+      { author: 'T.S. Eliot', work: 'The Waste Land', author_prompt: 'T.S. Eliot (American-British poet, Nobel 1948)' },
+      { author: 'William Butler Yeats', work: 'The Second Coming', author_prompt: 'W.B. Yeats (Irish poet, Nobel 1923)' },
+      { author: 'Boris Pasternak', work: 'Doctor Zhivago', author_prompt: 'Boris Pasternak (Russian, Nobel 1958)' },
+      { author: 'Alexander Solzhenitsyn', work: 'One Day in the Life of Ivan Denisovich', author_prompt: 'Solzhenitsyn (Russian dissident, Nobel 1970)' },
+      { author: 'Gabriel García Márquez', work: 'Love in the Time of Cholera', author_prompt: 'García Márquez (One Hundred Years of Solitude author)' },
+      { author: 'Isabel Allende', work: 'The House of the Spirits', author_prompt: 'Isabel Allende (Chilean magical realism)' },
+      { author: 'Jorge Luis Borges', work: 'Ficciones', author_prompt: 'Jorge Luis Borges (Argentine, short stories)' },
+      { author: 'Umberto Eco', work: 'The Name of the Rose', author_prompt: 'Umberto Eco (Italian semiotician)' },
+      { author: 'Italo Calvino', work: "If on a Winter's Night a Traveler", author_prompt: "Italo Calvino (Italian postmodernist)" },
+      { author: 'Naguib Mahfouz', work: 'The Cairo Trilogy', author_prompt: 'Naguib Mahfouz (Egyptian, Nobel 1988)' },
+      { author: 'Kenzaburō Ōe', work: 'A Personal Matter', author_prompt: 'Kenzaburō Ōe (Japanese, Nobel 1994)' },
+      { author: 'Yasunari Kawabata', work: 'Snow Country', author_prompt: 'Yasunari Kawabata (Japanese, Nobel 1968)' },
+      { author: 'Doris Lessing', work: 'The Golden Notebook', author_prompt: 'Doris Lessing (British-Zimbabwean, Nobel 2007)' },
+      { author: 'Kazuo Ishiguro', work: 'The Remains of the Day', author_prompt: 'Kazuo Ishiguro (British-Japanese, Nobel 2017)' },
+      { author: 'Salman Rushdie', work: "Midnight's Children", author_prompt: 'Salman Rushdie (British-Indian)' },
     ],
   },
 
@@ -1920,41 +2019,60 @@ export const FLASH_DRILLS = {
       { id: 'artist_to_work', prompt: 'Artist → Major Work', qField: 'artist_prompt', aField: 'work' },
     ],
     items: [
-      { artist: 'Leonardo da Vinci', work: 'Mona Lisa', movement: 'Renaissance', artist_prompt: 'Leonardo da Vinci (Italian Renaissance)' },
-      { artist: 'Leonardo da Vinci', work: 'The Last Supper', movement: 'Renaissance', artist_prompt: 'Leonardo da Vinci (Mona Lisa painter)' },
-      { artist: 'Michelangelo', work: 'The Creation of Adam', movement: 'Renaissance', artist_prompt: 'Michelangelo (Sistine Chapel ceiling)' },
-      { artist: 'Raphael', work: 'The School of Athens', movement: 'Renaissance', artist_prompt: 'Raphael (Italian High Renaissance)' },
-      { artist: 'Sandro Botticelli', work: 'The Birth of Venus', movement: 'Renaissance', artist_prompt: 'Sandro Botticelli (Italian Renaissance)' },
-      { artist: 'Rembrandt', work: 'The Night Watch', movement: 'Dutch Golden Age', artist_prompt: 'Rembrandt van Rijn (Dutch master)' },
-      { artist: 'Johannes Vermeer', work: 'Girl with a Pearl Earring', movement: 'Dutch Golden Age', artist_prompt: 'Johannes Vermeer (Dutch, 17th c.)' },
-      { artist: 'Francisco Goya', work: 'The Third of May 1808', movement: 'Romanticism', artist_prompt: 'Francisco Goya (Spanish, late 18th c.)' },
-      { artist: 'Eugène Delacroix', work: 'Liberty Leading the People', movement: 'Romanticism', artist_prompt: 'Eugène Delacroix (French Romantic)' },
+      { artist: 'Leonardo da Vinci', work: 'Mona Lisa', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/e/ec/Mona_Lisa%2C_by_Leonardo_da_Vinci%2C_from_C2RMF_retouched.jpg/200px-Mona_Lisa%2C_by_Leonardo_da_Vinci%2C_from_C2RMF_retouched.jpg', movement: 'Renaissance', artist_prompt: 'Leonardo da Vinci (Italian Renaissance)' },
+      { artist: 'Leonardo da Vinci', work: 'The Last Supper', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/4/4b/%22The_Last_Supper%22_by_Leonardo_da_Vinci%2C_High_Resolution_32x16.jpg/320px-%22The_Last_Supper%22_by_Leonardo_da_Vinci%2C_High_Resolution_32x16.jpg', movement: 'Renaissance', artist_prompt: 'Leonardo da Vinci (Mona Lisa painter)' },
+      { artist: 'Michelangelo', work: 'The Creation of Adam', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/5/5b/Michelangelo_-_Creation_of_Adam_%28cropped%29.jpg/320px-Michelangelo_-_Creation_of_Adam_%28cropped%29.jpg', movement: 'Renaissance', artist_prompt: 'Michelangelo (Sistine Chapel ceiling)' },
+      { artist: 'Raphael', work: 'The School of Athens', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/4/49/%22The_School_of_Athens%22_by_Raffaello_Sanzio_da_Urbino.jpg/320px-%22The_School_of_Athens%22_by_Raffaello_Sanzio_da_Urbino.jpg', movement: 'Renaissance', artist_prompt: 'Raphael (Italian High Renaissance)' },
+      { artist: 'Sandro Botticelli', work: 'The Birth of Venus', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/2/26/Sandro_Botticelli_046.jpg/320px-Sandro_Botticelli_046.jpg', movement: 'Renaissance', artist_prompt: 'Sandro Botticelli (Italian Renaissance)' },
+      { artist: 'Rembrandt', work: 'The Night Watch', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/5/5a/De_Nachtwacht_van_Rembrandt.jpg/320px-De_Nachtwacht_van_Rembrandt.jpg', movement: 'Dutch Golden Age', artist_prompt: 'Rembrandt van Rijn (Dutch master)' },
+      { artist: 'Johannes Vermeer', work: 'Girl with a Pearl Earring', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/0/0f/1665_Girl_with_a_Pearl_Earring.jpg/200px-1665_Girl_with_a_Pearl_Earring.jpg', movement: 'Dutch Golden Age', artist_prompt: 'Johannes Vermeer (Dutch, 17th c.)' },
+      { artist: 'Francisco Goya', work: 'The Third of May 1808', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/f/fd/El_Tres_de_Mayo%2C_by_Francisco_de_Goya%2C_from_Prado_thin_black_margin.jpg/320px-El_Tres_de_Mayo%2C_by_Francisco_de_Goya%2C_from_Prado_thin_black_margin.jpg', movement: 'Romanticism', artist_prompt: 'Francisco Goya (Spanish, late 18th c.)' },
+      { artist: 'Eugène Delacroix', work: 'Liberty Leading the People', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/5/5d/Eug%C3%A8ne_Delacroix_-_La_libert%C3%A9_guidant_le_peuple.jpg/320px-Eug%C3%A8ne_Delacroix_-_La_libert%C3%A9_guidant_le_peuple.jpg', movement: 'Romanticism', artist_prompt: 'Eugène Delacroix (French Romantic)' },
       { artist: 'J.M.W. Turner', work: 'The Fighting Temeraire', movement: 'Romanticism', artist_prompt: 'J.M.W. Turner (English landscape painter)' },
-      { artist: 'Claude Monet', work: 'Water Lilies', movement: 'Impressionism', artist_prompt: 'Claude Monet (French Impressionist)' },
+      { artist: 'Claude Monet', work: 'Water Lilies', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/a/aa/Claude_Monet_-_Water_Lilies_-_1906%2C_Ryerson.jpg/320px-Claude_Monet_-_Water_Lilies_-_1906%2C_Ryerson.jpg', movement: 'Impressionism', artist_prompt: 'Claude Monet (French Impressionist)' },
       { artist: 'Claude Monet', work: 'Impression, Sunrise', movement: 'Impressionism', artist_prompt: 'Claude Monet (Water Lilies painter)' },
       { artist: 'Pierre-Auguste Renoir', work: 'Luncheon of the Boating Party', movement: 'Impressionism', artist_prompt: 'Pierre-Auguste Renoir (French Impressionist)' },
       { artist: 'Edgar Degas', work: 'The Dance Class', movement: 'Impressionism', artist_prompt: 'Edgar Degas (French, ballet paintings)' },
-      { artist: 'Georges Seurat', work: 'A Sunday on La Grande Jatte', movement: 'Post-Impressionism', artist_prompt: 'Georges Seurat (Pointillism founder)' },
+      { artist: 'Georges Seurat', work: 'A Sunday on La Grande Jatte', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/7/7d/A_Sunday_on_La_Grande_Jatte%2C_Georges_Seurat%2C_1884.jpg/320px-A_Sunday_on_La_Grande_Jatte%2C_Georges_Seurat%2C_1884.jpg', movement: 'Post-Impressionism', artist_prompt: 'Georges Seurat (Pointillism founder)' },
       { artist: 'Paul Cézanne', work: 'The Card Players', movement: 'Post-Impressionism', artist_prompt: 'Paul Cézanne (father of modern art)' },
       { artist: 'Paul Gauguin', work: 'Where Do We Come From?', movement: 'Post-Impressionism', artist_prompt: 'Paul Gauguin (Tahitian paintings)' },
-      { artist: 'Vincent van Gogh', work: 'The Starry Night', movement: 'Post-Impressionism', artist_prompt: 'Vincent van Gogh (Dutch Post-Impressionist)' },
+      { artist: 'Vincent van Gogh', work: 'The Starry Night', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/e/ea/Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg/320px-Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg', movement: 'Post-Impressionism', artist_prompt: 'Vincent van Gogh (Dutch Post-Impressionist)' },
       { artist: 'Vincent van Gogh', work: 'Sunflowers', movement: 'Post-Impressionism', artist_prompt: 'Vincent van Gogh (The Starry Night painter)' },
-      { artist: 'Edvard Munch', work: 'The Scream', movement: 'Expressionism', artist_prompt: 'Edvard Munch (Norwegian Expressionist)' },
-      { artist: 'Gustav Klimt', work: 'The Kiss', movement: 'Symbolism', artist_prompt: 'Gustav Klimt (Austrian, golden style)' },
-      { artist: 'Pablo Picasso', work: 'Guernica', movement: 'Cubism', artist_prompt: 'Pablo Picasso (Spanish, co-founder of Cubism)' },
+      { artist: 'Edvard Munch', work: 'The Scream', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Edvard_Munch%2C_1893%2C_The_Scream%2C_oil%2C_tempera_and_pastel_on_cardboard%2C_91_x_73_cm%2C_National_Gallery_of_Norway.jpg/200px-Edvard_Munch%2C_1893%2C_The_Scream%2C_oil%2C_tempera_and_pastel_on_cardboard%2C_91_x_73_cm%2C_National_Gallery_of_Norway.jpg', movement: 'Expressionism', artist_prompt: 'Edvard Munch (Norwegian Expressionist)' },
+      { artist: 'Gustav Klimt', work: 'The Kiss', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/4/40/The_Kiss_-_Gustav_Klimt_-_Google_Cultural_Institute.jpg/200px-The_Kiss_-_Gustav_Klimt_-_Google_Cultural_Institute.jpg', movement: 'Symbolism', artist_prompt: 'Gustav Klimt (Austrian, golden style)' },
+      { artist: 'Pablo Picasso', work: 'Guernica', image: 'https://upload.wikimedia.org/wikipedia/en/thumb/7/74/PicassoGuernica.jpg/320px-PicassoGuernica.jpg', movement: 'Cubism', artist_prompt: 'Pablo Picasso (Spanish, co-founder of Cubism)' },
       { artist: 'Pablo Picasso', work: 'Les Demoiselles d\'Avignon', movement: 'Cubism', artist_prompt: 'Pablo Picasso (Guernica painter)' },
       { artist: 'Henri Matisse', work: 'Dance', movement: 'Fauvism', artist_prompt: 'Henri Matisse (French, bold color)' },
-      { artist: 'Salvador Dalí', work: 'The Persistence of Memory', movement: 'Surrealism', artist_prompt: 'Salvador Dalí (Spanish Surrealist)' },
+      { artist: 'Salvador Dalí', work: 'The Persistence of Memory', image: 'https://upload.wikimedia.org/wikipedia/en/thumb/d/dd/The_Persistence_of_Memory.jpg/320px-The_Persistence_of_Memory.jpg', movement: 'Surrealism', artist_prompt: 'Salvador Dalí (Spanish Surrealist)' },
       { artist: 'René Magritte', work: 'The Treachery of Images', movement: 'Surrealism', artist_prompt: 'René Magritte (Belgian Surrealist, pipe painting)' },
-      { artist: 'Frida Kahlo', work: 'The Two Fridas', movement: 'Surrealism', artist_prompt: 'Frida Kahlo (Mexican, self-portraits)' },
+      { artist: 'Frida Kahlo', work: 'The Two Fridas', image: 'https://upload.wikimedia.org/wikipedia/en/thumb/1/18/Frida_Kahlo_%28self_portrait%29.jpg/200px-Frida_Kahlo_%28self_portrait%29.jpg', movement: 'Surrealism', artist_prompt: 'Frida Kahlo (Mexican, self-portraits)' },
       { artist: 'Jackson Pollock', work: 'No. 31', movement: 'Abstract Expressionism', artist_prompt: 'Jackson Pollock (drip painting technique)' },
       { artist: 'Mark Rothko', work: 'Orange and Yellow', movement: 'Abstract Expressionism', artist_prompt: 'Mark Rothko (color field painting)' },
       { artist: 'Andy Warhol', work: 'Campbell\'s Soup Cans', movement: 'Pop Art', artist_prompt: 'Andy Warhol (American Pop Art)' },
       { artist: 'Roy Lichtenstein', work: 'Whaam!', movement: 'Pop Art', artist_prompt: 'Roy Lichtenstein (comic-style Pop Art)' },
-      { artist: 'Grant Wood', work: 'American Gothic', movement: 'Regionalism', artist_prompt: 'Grant Wood (American Regionalism)' },
-      { artist: 'Edward Hopper', work: 'Nighthawks', movement: 'Realism', artist_prompt: 'Edward Hopper (American Realist)' },
-      { artist: 'Jan van Eyck', work: 'The Arnolfini Portrait', movement: 'Northern Renaissance', artist_prompt: 'Jan van Eyck (Flemish, early Northern Renaissance)' },
-      { artist: 'Hieronymus Bosch', work: 'The Garden of Earthly Delights', movement: 'Northern Renaissance', artist_prompt: 'Hieronymus Bosch (Dutch, fantastical imagery)' },
+      { artist: 'Grant Wood', work: 'American Gothic', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/c/cc/Grant_DeVolson_Wood_-_American_Gothic.jpg/200px-Grant_DeVolson_Wood_-_American_Gothic.jpg', movement: 'Regionalism', artist_prompt: 'Grant Wood (American Regionalism)' },
+      { artist: 'Edward Hopper', work: 'Nighthawks', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/a/a8/Edward_Hopper_Nighthawks_1942.jpg/320px-Edward_Hopper_Nighthawks_1942.jpg', movement: 'Realism', artist_prompt: 'Edward Hopper (American Realist)' },
+      { artist: 'Jan van Eyck', work: 'The Arnolfini Portrait', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/3/33/Van_Eyck_-_Arnolfini_Portrait.jpg/200px-Van_Eyck_-_Arnolfini_Portrait.jpg', movement: 'Northern Renaissance', artist_prompt: 'Jan van Eyck (Flemish, early Northern Renaissance)' },
+      { artist: 'Hieronymus Bosch', work: 'The Garden of Earthly Delights', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/9/96/The_Garden_of_earthly_delights.jpg/200px-The_Garden_of_earthly_delights.jpg', movement: 'Northern Renaissance', artist_prompt: 'Hieronymus Bosch (Dutch, fantastical imagery)' },
+      { artist: 'Pieter Bruegel the Elder', work: 'The Hunters in the Snow', movement: 'Northern Renaissance', artist_prompt: 'Bruegel the Elder (Flemish, peasant scenes)' },
+      { artist: 'Albrecht Dürer', work: 'Self-Portrait at 28', movement: 'Northern Renaissance', artist_prompt: 'Albrecht Dürer (German Renaissance printmaker)' },
+      { artist: 'Peter Paul Rubens', work: 'The Descent from the Cross', movement: 'Baroque', artist_prompt: 'Peter Paul Rubens (Flemish Baroque)' },
+      { artist: 'Diego Velázquez', work: 'Las Meninas', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/9/99/Las_Meninas_01.jpg/200px-Las_Meninas_01.jpg', movement: 'Baroque', artist_prompt: 'Diego Velázquez (Spanish Baroque court painter)' },
+      { artist: 'Caravaggio', work: 'The Calling of Saint Matthew', movement: 'Baroque', artist_prompt: 'Caravaggio (Italian, dramatic chiaroscuro)' },
+      { artist: 'Jacques-Louis David', work: 'The Death of Marat', movement: 'Neoclassicism', artist_prompt: 'Jacques-Louis David (French Neoclassicist)' },
+      { artist: 'Caspar David Friedrich', work: 'Wanderer above the Sea of Fog', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/b/b9/Caspar_David_Friedrich_-_Wanderer_above_the_sea_of_fog.jpg/200px-Caspar_David_Friedrich_-_Wanderer_above_the_sea_of_fog.jpg', movement: 'Romanticism', artist_prompt: 'Caspar David Friedrich (German Romantic)' },
+      { artist: 'Winslow Homer', work: 'The Gulf Stream', movement: 'Realism', artist_prompt: 'Winslow Homer (American Realist)' },
+      { artist: 'Thomas Eakins', work: 'The Gross Clinic', movement: 'Realism', artist_prompt: 'Thomas Eakins (American Realist)' },
+      { artist: 'Berthe Morisot', work: 'The Cradle', movement: 'Impressionism', artist_prompt: 'Berthe Morisot (French Impressionist, first woman)' },
+      { artist: 'Mary Cassatt', work: "The Child's Bath", movement: 'Impressionism', artist_prompt: 'Mary Cassatt (American Impressionist)' },
+      { artist: 'Egon Schiele', work: 'Self-Portrait with Physalis', movement: 'Expressionism', artist_prompt: 'Egon Schiele (Austrian Expressionist)' },
+      { artist: 'Wassily Kandinsky', work: 'Composition VIII', movement: 'Abstract', artist_prompt: 'Wassily Kandinsky (pioneer of abstract art)' },
+      { artist: 'Piet Mondrian', work: 'Broadway Boogie Woogie', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/3/30/Piet_Mondriaan%2C_1942_-_Broadway_Boogie-Woogie.jpg/200px-Piet_Mondriaan%2C_1942_-_Broadway_Boogie-Woogie.jpg', movement: 'De Stijl', artist_prompt: 'Piet Mondrian (Dutch, grid paintings)' },
+      { artist: "Georgia O'Keeffe", work: 'Jimson Weed/White Flower No. 1', movement: 'Modernism', artist_prompt: "Georgia O'Keeffe (American, flower & desert)" },
+      { artist: 'Diego Rivera', work: 'Man at the Crossroads', movement: 'Social Realism', artist_prompt: 'Diego Rivera (Mexican muralist)' },
+      { artist: 'René Magritte', work: 'The Son of Man', movement: 'Surrealism', artist_prompt: 'René Magritte (apple-in-front-of-face painting)' },
+      { artist: 'Jean-Michel Basquiat', work: 'Untitled (Skull)', movement: 'Neo-Expressionism', artist_prompt: 'Jean-Michel Basquiat (American, 1980s Neo-Exp.)' },
+      { artist: 'Banksy', work: 'Girl with Balloon', movement: 'Street Art', artist_prompt: 'Banksy (anonymous British street artist)' },
     ],
   },
 
@@ -1999,6 +2117,24 @@ export const FLASH_DRILLS = {
       { composer: 'Dmitri Shostakovich', work: 'Symphony No. 5', era: 'Modern', composer_prompt: 'Shostakovich (Soviet-era Russian)' },
       { composer: 'Aaron Copland', work: 'Appalachian Spring', era: 'Modern', composer_prompt: 'Copland (American, 20th c.)' },
       { composer: 'George Gershwin', work: 'Rhapsody in Blue', era: 'Modern', composer_prompt: 'Gershwin (American, jazz-classical fusion)' },
+      { composer: 'Béla Bartók', work: 'Concerto for Orchestra', era: 'Modern', composer_prompt: 'Bartók (Hungarian, folk-influenced)' },
+      { composer: 'Sergei Prokofiev', work: 'Peter and the Wolf', era: 'Modern', composer_prompt: 'Prokofiev (Russian, early 20th c.)' },
+      { composer: 'Sergei Prokofiev', work: 'Symphony No. 1 "Classical"', era: 'Modern', composer_prompt: 'Prokofiev (Romeo and Juliet composer)' },
+      { composer: 'Benjamin Britten', work: 'Peter Grimes', era: 'Modern', composer_prompt: 'Britten (English, 20th c. opera)' },
+      { composer: 'Philip Glass', work: 'Einstein on the Beach', era: 'Minimalist', composer_prompt: 'Philip Glass (American minimalist)' },
+      { composer: 'John Adams', work: 'Nixon in China', era: 'Minimalist', composer_prompt: 'John Adams (American minimalist opera)' },
+      { composer: 'Edvard Grieg', work: 'Peer Gynt Suite', era: 'Romantic', composer_prompt: 'Edvard Grieg (Norwegian Romantic)' },
+      { composer: 'Jean Sibelius', work: 'Finlandia', era: 'Romantic', composer_prompt: 'Sibelius (Finnish Romantic)' },
+      { composer: 'Camille Saint-Saëns', work: 'The Carnival of the Animals', era: 'Romantic', composer_prompt: 'Saint-Saëns (French, late Romantic)' },
+      { composer: 'Camille Saint-Saëns', work: 'Danse Macabre', era: 'Romantic', composer_prompt: 'Saint-Saëns (The Carnival of the Animals composer)' },
+      { composer: 'Gabriel Fauré', work: 'Requiem', era: 'Romantic', composer_prompt: 'Gabriel Fauré (French, late Romantic)' },
+      { composer: 'Erik Satie', work: 'Gymnopédies', era: 'Impressionist', composer_prompt: 'Erik Satie (French, early 20th c.)' },
+      { composer: 'Francis Poulenc', work: 'Dialogues of the Carmelites', era: 'Modern', composer_prompt: 'Francis Poulenc (French, 20th c. opera)' },
+      { composer: 'Carl Orff', work: 'Carmina Burana', era: 'Modern', composer_prompt: 'Carl Orff (German, 20th c.)' },
+      { composer: 'Arvo Pärt', work: 'Spiegel im Spiegel', era: 'Minimalist', composer_prompt: 'Arvo Pärt (Estonian, tintinnabuli style)' },
+      { composer: 'Hildegard von Bingen', work: 'Ordo Virtutum', era: 'Medieval', composer_prompt: 'Hildegard von Bingen (12th c. abbess, composer)' },
+      { composer: 'Claudio Monteverdi', work: "L'Orfeo", era: 'Baroque', composer_prompt: 'Monteverdi (Italian, first major opera, 1607)' },
+      { composer: 'Henry Purcell', work: 'Dido and Aeneas', era: 'Baroque', composer_prompt: 'Henry Purcell (English Baroque opera)' },
     ],
   },
 
@@ -2027,6 +2163,18 @@ export const FLASH_DRILLS = {
       { ballet: 'Les Sylphides', composer: 'Frédéric Chopin (orch. various)', characters: 'A Poet, Sylphides (no narrative)', composer_prompt: 'Chopin / Fokine (plotless Romantic ballet)' },
       { ballet: 'Spartacus', composer: 'Aram Khachaturian', characters: 'Spartacus, Phrygia, Crassus, Aegina', composer_prompt: 'Khachaturian (Bolshoi classic)' },
       { ballet: 'La Sylphide', composer: 'Jean Madeleine Schneitzhoeffer', characters: 'James, the Sylph, Madge, Effie', composer_prompt: 'Schneitzhoeffer (first Romantic ballet, 1832)' },
+      { ballet: 'Sleeping Beauty', composer: 'Tchaikovsky', characters: 'Princess Aurora, Prince Désiré, Carabosse, Lilac Fairy', composer_prompt: 'Tchaikovsky (Aurora is the princess, premiered 1890)' },
+      { ballet: 'Jewels', composer: 'Gabriel Fauré / Igor Stravinsky / Pyotr Tchaikovsky', characters: 'Three abstract sections: Emeralds, Rubies, Diamonds', composer_prompt: 'Balanchine / Fauré-Stravinsky-Tchaikovsky (plotless triptych)' },
+      { ballet: 'Manon', composer: 'Jules Massenet (arr. Leighton Lucas)', characters: 'Manon, Des Grieux, Lescaut', composer_prompt: 'MacMillan / Massenet (Royal Ballet classic)' },
+      { ballet: 'Onegin', composer: 'Pyotr Tchaikovsky (arr. Kurt-Heinz Stolze)', characters: 'Tatiana, Onegin, Lensky, Olga', composer_prompt: 'Cranko / Tchaikovsky (based on Pushkin poem)' },
+      { ballet: 'Mayerling', composer: 'Franz Liszt (arr. John Lanchbery)', characters: 'Crown Prince Rudolf, Mary Vetsera', composer_prompt: 'MacMillan / Liszt (Habsburg tragedy)' },
+      { ballet: 'La Fille Mal Gardée', composer: 'Ferdinand Hérold', characters: 'Lise, Colas, Widow Simone', composer_prompt: 'Hérold / Ashton (comic ballet, 1960 Royal Ballet)' },
+      { ballet: 'Apollo', composer: 'Igor Stravinsky', characters: 'Apollo, Calliope, Polyhymnia, Terpsichore', composer_prompt: 'Balanchine / Stravinsky (neoclassical, 1928)' },
+      { ballet: 'Serenade', composer: 'Pyotr Tchaikovsky', characters: 'Abstract (no narrative)', composer_prompt: 'Balanchine / Tchaikovsky (first Balanchine ballet in America)' },
+      { ballet: 'The Corsaire', composer: 'Adolphe Adam', characters: 'Conrad, Medora, Ali', composer_prompt: 'Adam / Perrot (19th c. Romantic, pirate theme)' },
+      { ballet: 'Le Corsaire pas de deux', composer: 'Ludwig Minkus', characters: 'The Slave (Ali), Medora', composer_prompt: 'Minkus (popular competition piece)' },
+      { ballet: 'Notre-Dame de Paris', composer: 'Maurice Jarre', characters: 'Quasimodo, Esmeralda, Frollo, Phoebus', composer_prompt: 'Petit / Jarre (based on Victor Hugo)' },
+      { ballet: 'Anna Karenina', composer: 'Pyotr Tchaikovsky (arr. various)', characters: 'Anna, Vronsky, Karenin', composer_prompt: 'Various choreographers / Tchaikovsky (based on Tolstoy)' },
     ],
   },
 
@@ -2155,16 +2303,21 @@ function FlashDrill({ drillKey, onBack }) {
       <input style={S.input} value={listSearch} onChange={e => setListSearch(e.target.value)} placeholder="Search..." />
       <div style={{ ...S.card, padding:0, overflow:'hidden', maxHeight:600, overflowY:'auto' }}>
         {filteredItems.map((it, i) => (
-          <div key={i} style={{ padding:'8px 14px', borderBottom:i<filteredItems.length-1?'1px solid #0d1235':'none', background:i%2===0?'transparent':'#060b1a' }}>
-            {Object.entries(it)
-              .filter(([k]) => !k.includes('_prompt') && !k.includes('numStr'))
-              .map(([k, v]) => (
-                <div key={k} style={{ display:'flex', gap:8, fontSize:12, marginBottom:2 }}>
-                  <span style={{ color:'#4060a0', minWidth:80, fontSize:10, letterSpacing:1 }}>{k.toUpperCase()}</span>
-                  <span style={{ color:'#c0c8e8' }}>{String(v)}</span>
-                </div>
-              ))
-            }
+          <div key={i} style={{ padding:'8px 14px', borderBottom:i<filteredItems.length-1?'1px solid #0d1235':'none', background:i%2===0?'transparent':'#060b1a', display:'flex', gap:10 }}>
+            {it.image && (
+              <img src={it.image} alt={it.work} style={{ width:64, height:64, objectFit:'contain', borderRadius:6, flexShrink:0, background:'#060b1a' }} onError={e => { e.target.style.display='none' }} />
+            )}
+            <div style={{ flex:1 }}>
+              {Object.entries(it)
+                .filter(([k]) => !k.includes('_prompt') && !k.includes('numStr') && k !== 'image')
+                .map(([k, v]) => (
+                  <div key={k} style={{ display:'flex', gap:8, fontSize:12, marginBottom:2 }}>
+                    <span style={{ color:'#4060a0', minWidth:80, fontSize:10, letterSpacing:1 }}>{k.toUpperCase()}</span>
+                    <span style={{ color:'#c0c8e8' }}>{String(v)}</span>
+                  </div>
+                ))
+              }
+            </div>
           </div>
         ))}
       </div>
@@ -2228,6 +2381,15 @@ function FlashDrill({ drillKey, onBack }) {
       <div style={S.card}>
         <div style={{ fontSize:10, color:'#4060a0', letterSpacing:2, marginBottom:8 }}>{modeConfig.prompt.toUpperCase()}</div>
         <div style={{ fontSize:15, color:'#c0c8e8', lineHeight:1.5, marginBottom:12 }}>{item[modeConfig.qField]}</div>
+        {/* Show artwork image when available */}
+        {item.image && revealed && (
+          <img
+            src={item.image}
+            alt={item.work || item[modeConfig.qField]}
+            style={{ width:'100%', maxHeight:180, objectFit:'contain', borderRadius:8, marginBottom:10, background:'#060b1a' }}
+            onError={e => { e.target.style.display='none' }}
+          />
+        )}
         <input
           ref={inputRef}
           autoFocus

@@ -656,6 +656,7 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids }) {
   const [result, setResult] = useState(null)
   const [score, setScore] = useState({ correct: 0, total: 0 })
   const [attempted, setAttempted] = useState(new Set())
+  const [attemptResults, setAttemptResults] = useState({}) // id → { correct, country }
   const [mode, setMode] = useState('map')
   const [showReference, setShowReference] = useState(false)
   const [retryCount, setRetryCount] = useState(0)
@@ -787,6 +788,7 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids }) {
     const bothCorrect = countryCorrect && capitalCorrect
     setResult({ countryCorrect, capitalCorrect, country })
     setAttempted(prev => new Set([...prev, selected]))
+    setAttemptResults(prev => ({ ...prev, [selected]: { correct: bothCorrect, country } }))
     setScore(prev => ({ correct: prev.correct + (bothCorrect ? 1 : 0), total: prev.total + 1 }))
   }
 
@@ -794,7 +796,9 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids }) {
     if (!result) return
     const updated = { ...result, [field + 'Correct']: true }
     setResult(updated)
-    if (updated.countryCorrect && updated.capitalCorrect) {
+    const nowBoth = updated.countryCorrect && updated.capitalCorrect
+    if (nowBoth) {
+      setAttemptResults(prev => ({ ...prev, [selected]: { ...prev[selected], correct: true } }))
       setScore(prev => ({ ...prev, correct: prev.correct + 1 }))
     }
   }
@@ -882,6 +886,18 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids }) {
                 style={{ cursor: COUNTRY_MAP[p.id] ? 'pointer' : 'default', transition: 'fill 0.15s' }}
               />
             ))}
+          {/* Permanent labels for attempted countries */}
+          {paths.map(p => {
+            const res = attemptResults[p.id]
+            const c = pathCentroids.current[p.id]
+            if (!res || !c) return null
+            return (
+              <g key={`lbl-${p.id}`} style={{ pointerEvents: 'none' }}>
+                <text x={c.x} y={c.y - 4/zoom} textAnchor="middle" fontSize={7/zoom} fill={res.correct ? '#4caf7d' : '#ff8a80'} fontWeight="bold" fontFamily="sans-serif">{res.country.name}</text>
+                <text x={c.x} y={c.y + 5/zoom} textAnchor="middle" fontSize={6/zoom} fill={res.correct ? '#a5d6a7' : '#ffcdd2'} fontFamily="sans-serif">{res.country.capital}</text>
+              </g>
+            )
+          })}
           </g>
         </svg>
       </div>
@@ -1246,10 +1262,12 @@ function SubnationalMapDrill({ config, onBack }) {
   const [score, setScore] = useState({ correct: 0, total: 0 })
   const [attempted, setAttempted] = useState(new Set())
   const [showReference, setShowReference] = useState(false)
+  const [attemptResults, setAttemptResults] = useState({})
   const [refMode, setRefMode] = useState('map')
   const [revealed, setRevealed] = useState(new Set())
   const [zoom, setZoom] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
+  const [minZoom, setMinZoom] = useState(1)
   const [dragging, setDragging] = useState(false)
   const [dragStart, setDragStart] = useState(null)
   const [listSearch, setListSearch] = useState('')
@@ -1322,7 +1340,7 @@ function SubnationalMapDrill({ config, onBack }) {
           setPan({ x: vw2/2 - cx * newZoom, y: vh2/2 - cy * newZoom })
         }
       })
-      .catch(() => setLoading(false))
+      .catch(err => { setLoadError(err.message || 'Failed to load'); setLoading(false) })
   }, [config])
 
   function getRegionData(name) {
@@ -1342,15 +1360,21 @@ function SubnationalMapDrill({ config, onBack }) {
     if (!data) return
     const regionCorrect = fuzzyMatch(answer.region, data.name)
     const capitalCorrect = fuzzyMatch(answer.capital, data.capital)
+    const both = regionCorrect && capitalCorrect
     setResult({ regionCorrect, capitalCorrect, data })
     setAttempted(prev => new Set([...prev, selected]))
-    const both = regionCorrect && capitalCorrect
+    setAttemptResults(prev => ({ ...prev, [selected]: { correct: both, data } }))
     setScore(prev => ({ correct: prev.correct + (both ? 1 : 0), total: prev.total + 1 }))
   }
 
   function markItemCorrect(field) {
     if (!result) return
-    setResult(prev => ({ ...prev, [field + 'Correct']: true }))
+    const updated = { ...result, [field + 'Correct']: true }
+    setResult(updated)
+    if (updated.regionCorrect && updated.capitalCorrect) {
+      setAttemptResults(prev => ({ ...prev, [selected]: { ...prev[selected], correct: true } }))
+      setScore(prev => ({ ...prev, correct: prev.correct + 1 }))
+    }
   }
 
   function autoSelectNext() {
@@ -1455,6 +1479,15 @@ function SubnationalMapDrill({ config, onBack }) {
   )
 
   if (loading) return <div style={{ ...S.wrap, alignItems:'center', padding:40 }}><div style={{ color:'#4060a0', fontSize:13 }}>Loading map...</div></div>
+  if (loadError || paths.length === 0) return (
+    <div style={S.wrap}>
+      <div style={S.card}>
+        <div style={{ color:'#e57373', fontSize:13, marginBottom:6 }}>Failed to load map.</div>
+        <div style={{ color:'#4060a0', fontSize:11 }}>{loadError || 'No map data received.'}</div>
+      </div>
+      <button style={S.btnSecondary} onClick={onBack}>← Back</button>
+    </div>
+  )
 
   return (
     <div style={{ display:'flex', flexDirection:'column', gap:10, width:'100%' }}>
@@ -1497,6 +1530,18 @@ function SubnationalMapDrill({ config, onBack }) {
                 />
               )
             })}
+          {/* Permanent labels for attempted regions */}
+          {paths.map(p => {
+            const res = attemptResults[p.name]
+            const c = centroids[p.name]
+            if (!res || !c) return null
+            return (
+              <g key={`lbl-${p.name}`} style={{ pointerEvents: 'none' }}>
+                <text x={c.x} y={c.y - 4/zoom} textAnchor="middle" fontSize={8/zoom} fill={res.correct ? '#4caf7d' : '#ff8a80'} fontWeight="bold" fontFamily="sans-serif">{p.name}</text>
+                <text x={c.x} y={c.y + 6/zoom} textAnchor="middle" fontSize={7/zoom} fill={res.correct ? '#a5d6a7' : '#ffcdd2'} fontFamily="sans-serif">{res.data.capital}</text>
+              </g>
+            )
+          })}
           </g>
         </svg>
       </div>
@@ -1539,6 +1584,7 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids }) {
   const [result, setResult] = useState(null)
   const [score, setScore] = useState({ correct: 0, total: 0 })
   const [attempted, setAttempted] = useState(new Set())
+  const [attemptResults, setAttemptResults] = useState({})
   const [showReference, setShowReference] = useState(false)
   const [refMode, setRefMode] = useState('map')
   const [zoom, setZoom] = useState(1)
@@ -1595,13 +1641,20 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids }) {
     if (!country) return
     const countryCorrect = fuzzyMatch(answer.country, country.name)
     const capitalCorrect = fuzzyMatch(answer.capital, country.capital)
+    const both = countryCorrect && capitalCorrect
     setResult({ countryCorrect, capitalCorrect, country })
     setAttempted(prev => new Set([...prev, selected]))
-    setScore(prev => ({ correct: prev.correct + (countryCorrect && capitalCorrect ? 1 : 0), total: prev.total + 1 }))
+    setAttemptResults(prev => ({ ...prev, [selected]: { correct: both, country } }))
+    setScore(prev => ({ correct: prev.correct + (both ? 1 : 0), total: prev.total + 1 }))
   }
 
   function markItemCorrect(field) {
-    setResult(prev => prev ? ({ ...prev, [field + 'Correct']: true }) : prev)
+    const updated = result ? { ...result, [field + 'Correct']: true } : null
+    setResult(updated)
+    if (updated?.countryCorrect && updated?.capitalCorrect) {
+      setAttemptResults(prev => ({ ...prev, [selected]: { ...prev[selected], correct: true } }))
+      setScore(prev => ({ ...prev, correct: prev.correct + 1 }))
+    }
   }
 
   function autoSelectNext() {
@@ -1736,6 +1789,18 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids }) {
                 style={{ cursor:COUNTRY_MAP[p.id]&&!attempted.has(p.id)?'pointer':'default', transition:'fill 0.15s' }}
               />
             ))}
+            {/* Permanent labels for attempted countries */}
+            {regionPaths.map(p => {
+              const res = attemptResults[p.id]
+              const c = worldCentroids.current[p.id]
+              if (!res || !c) return null
+              return (
+                <g key={`lbl-${p.id}`} style={{ pointerEvents:'none' }}>
+                  <text x={c.x} y={c.y-4/zoom} textAnchor="middle" fontSize={7/zoom} fill={res.correct?'#4caf7d':'#ff8a80'} fontWeight="bold" fontFamily="sans-serif">{res.country.name}</text>
+                  <text x={c.x} y={c.y+5/zoom} textAnchor="middle" fontSize={6/zoom} fill={res.correct?'#a5d6a7':'#ffcdd2'} fontFamily="sans-serif">{res.country.capital}</text>
+                </g>
+              )
+            })}
           </g>
         </svg>
       </div>

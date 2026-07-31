@@ -658,10 +658,12 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids }) {
   const [attempted, setAttempted] = useState(new Set())
   const [mode, setMode] = useState('map')
   const [showReference, setShowReference] = useState(false)
+  const [retryCount, setRetryCount] = useState(0)
   const inputRef = useRef(null)
   const svgRef = useRef(null)
   const [paths, setPaths] = useState([])
   const [zoom, setZoom] = useState(1)
+  const [minZoom, setMinZoom] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
   const [dragging, setDragging] = useState(false)
   const [dragStart, setDragStart] = useState(null)
@@ -684,7 +686,7 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids }) {
         setLoading(false)
       })
       .catch(err => { console.error('World map fetch failed:', err); setLoading(false) })
-  }, [preloadedPaths])
+  }, [preloadedPaths, retryCount])
 
   function buildPaths(data) {
     const w = 960, h = 500
@@ -703,11 +705,14 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids }) {
     }
 
     function getCentroid(coords) {
-      // Average of outer ring points
+      // Use bounding box center (more accurate than vertex average for irregular shapes)
       const ring = coords[0]
-      const xs = ring.map(p => project(p)[0])
-      const ys = ring.map(p => project(p)[1])
-      return { x: xs.reduce((a,b) => a+b,0)/xs.length, y: ys.reduce((a,b) => a+b,0)/ys.length }
+      const pts = ring.map(p => project(p))
+      const xs = pts.map(p => p[0]), ys = pts.map(p => p[1])
+      return {
+        x: (Math.min(...xs) + Math.max(...xs)) / 2,
+        y: (Math.min(...ys) + Math.max(...ys)) / 2,
+      }
     }
 
     const centroids = {}
@@ -812,16 +817,19 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids }) {
   )
 
   if (loading) return (
-    <div style={{ ...S.wrap, alignItems: 'center', padding: 40 }}>
-      <div style={{ color: '#4060a0', fontSize: 13 }}>Loading world map...</div>
+    <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', minHeight:300, gap:12 }}>
+      <div style={{ color: '#4060a0', fontSize: 13, letterSpacing:2 }}>LOADING WORLD MAP...</div>
+      <div style={{ fontSize:10, color:'#2a3460' }}>Fetching GeoJSON data</div>
     </div>
   )
 
-  if (!geoData) return (
+  if (!geoData || paths.length === 0) return (
     <div style={S.wrap}>
       <div style={S.card}>
-        <div style={{ color: '#e57373', fontSize: 13 }}>Failed to load map. Check your connection.</div>
+        <div style={{ color: '#e57373', fontSize: 13, marginBottom:8 }}>Failed to load map data.</div>
+        <div style={{ fontSize:11, color:'#4060a0' }}>Check your connection and try again.</div>
       </div>
+      <button style={S.btn} onClick={() => { setLoading(true); setGeoData(null); setPaths([]); setRetryCount(c => c+1) }}>Retry</button>
       <button style={S.btnSecondary} onClick={onBack}>← Back</button>
     </div>
   )
@@ -960,7 +968,11 @@ export function DrillsView() {
         }
         function getCentroid(coords) {
           const pts = coords[0].map(p => project(p))
-          return { x: pts.reduce((a,b)=>a+b[0],0)/pts.length, y: pts.reduce((a,b)=>a+b[1],0)/pts.length }
+          const xs = pts.map(p => p[0]), ys = pts.map(p => p[1])
+          return {
+            x: (Math.min(...xs) + Math.max(...xs)) / 2,
+            y: (Math.min(...ys) + Math.max(...ys)) / 2,
+          }
         }
         const centroids = {}
         const built = data.features.map(f => {
@@ -1271,7 +1283,11 @@ function SubnationalMapDrill({ config, onBack }) {
         function getCentroid(coords) {
           const ring = coords[0]
           const pts = ring.map(p => project(p))
-          return { x: pts.reduce((a,b) => a + b[0], 0) / pts.length, y: pts.reduce((a,b) => a + b[1], 0) / pts.length }
+          const xs = pts.map(p => p[0]), ys = pts.map(p => p[1])
+          return {
+            x: (Math.min(...xs) + Math.max(...xs)) / 2,
+            y: (Math.min(...ys) + Math.max(...ys)) / 2,
+          }
         }
         const newCentroids = {}
         const built = geo.features.map(f => {
@@ -1452,7 +1468,7 @@ function SubnationalMapDrill({ config, onBack }) {
 
       <div style={{ display:'flex', gap:6 }}>
         <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18 }} onClick={() => { const nz=Math.min(zoom*1.5,8); const cx=(480-pan.x)/zoom; const cy=(250-pan.y)/zoom; setPan({x:480-cx*nz,y:250-cy*nz}); setZoom(nz) }}>+</button>
-        <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18, opacity:zoom<=1?0.3:1 }} disabled={zoom<=1} onClick={() => { const nz=Math.max(zoom/1.5,1); setZoom(nz); if(nz<=minZoom){setZoom(minZoom);setPan({x:0,y:0})} }}>−</button>
+        <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18, opacity:zoom<=minZoom?0.3:1 }} disabled={zoom<=minZoom} onClick={() => { const nz=Math.max(zoom/1.5,minZoom); setZoom(nz); if(nz<=minZoom){setZoom(minZoom);setPan({x:0,y:0})} }}>−</button>
         <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:12 }} onClick={() => { setZoom(minZoom); setPan({x:0,y:0}) }}>Reset</button>
         <button style={{ ...S.btn, flex:1, padding:'6px 0', fontSize:12 }} onClick={autoSelectNext}>Auto Next →</button>
       </div>
@@ -1544,11 +1560,21 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids }) {
     const cs = regionCountries.map(c => worldCentroids.current[c.id]).filter(Boolean)
     if (!cs.length) return
     const xs = cs.map(c => c.x), ys = cs.map(c => c.y)
-    const minX = Math.min(...xs), maxX = Math.max(...xs)
+    // Detect date-line crossing: if x-range > 600 (>half the map), region likely crosses antimeridian
+    // In equirectangular, x=0 is lon=-180, x=960 is lon=180
+    // For Oceania: shift xs > 500 leftward by 960 to wrap them
+    const rawXSpan = Math.max(...xs) - Math.min(...xs)
+    let adjXs = xs
+    if (rawXSpan > 600) {
+      // Wrap: move high-x centroids (eastern hemisphere) to negative side
+      adjXs = xs.map(x => x > 480 ? x - 960 : x)
+    }
+    const minX = Math.min(...adjXs), maxX = Math.max(...adjXs)
     const minY = Math.min(...ys), maxY = Math.max(...ys)
-    const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2
+    let cx = (minX + maxX) / 2
+    if (cx < 0) cx += 960 // wrap back to positive
+    const cy = (minY + maxY) / 2
     const spanX = maxX - minX, spanY = maxY - minY
-    // Fit region to ~80% of viewport (960x500)
     const zx = 960 * 0.8 / (spanX || 1), zy = 500 * 0.8 / (spanY || 1)
     const newZoom = Math.min(Math.max(Math.min(zx, zy), 1), 8)
     setZoom(newZoom)
@@ -1686,7 +1712,7 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids }) {
       </div>
       <div style={{ display:'flex', gap:6 }}>
         <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18 }} onClick={() => { const nz=Math.min(zoom*1.5,8); const cx=(480-pan.x)/zoom; const cy=(250-pan.y)/zoom; setPan({x:480-cx*nz,y:250-cy*nz}); setZoom(nz) }}>+</button>
-        <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18, opacity:zoom<=1?0.3:1 }} disabled={zoom<=1} onClick={() => { const nz=Math.max(zoom/1.5,1); setZoom(nz); if(nz<=minZoom){setZoom(minZoom);setPan({x:0,y:0})} }}>−</button>
+        <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18, opacity:zoom<=minZoom?0.3:1 }} disabled={zoom<=minZoom} onClick={() => { const nz=Math.max(zoom/1.5,minZoom); setZoom(nz); if(nz<=minZoom){setZoom(minZoom);setPan({x:0,y:0})} }}>−</button>
         <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:12 }} onClick={() => { setZoom(minZoom); setPan({x:0,y:0}) }}>Reset</button>
         <button style={{ ...S.btn, flex:1, padding:'6px 0', fontSize:12 }} onClick={autoSelectNext}>Auto Next →</button>
       </div>
@@ -1934,79 +1960,79 @@ export const FLASH_DRILLS = {
     emoji: '📚',
     desc: 'Authors, novels, plays & poems',
     modes: [
-      { id: 'work_to_author', prompt: 'Work → Author', qField: 'work', aField: 'author' },
-      { id: 'author_to_work', prompt: 'Author → Major Work', qField: 'author_prompt', aField: 'work' },
+      { id: 'work_to_author', prompt: 'Title → Author', qField: 'work', aField: 'author' },
+      { id: 'chars_to_title_author', prompt: 'Characters → Title & Author', qField: 'characters', aField: 'work_and_author', skipIfNoField: true },
     ],
     items: [
-      { author: 'Jane Austen', work: 'Pride and Prejudice', author_prompt: 'Jane Austen (English novelist, early 19th c.)' },
-      { author: 'Jane Austen', work: 'Sense and Sensibility', author_prompt: 'Jane Austen (author of Emma)' },
-      { author: 'Charles Dickens', work: 'A Tale of Two Cities', author_prompt: 'Charles Dickens (Victorian era)' },
-      { author: 'Charles Dickens', work: 'Great Expectations', author_prompt: 'Charles Dickens (Oliver Twist author)' },
-      { author: 'Leo Tolstoy', work: 'War and Peace', author_prompt: 'Leo Tolstoy (Russian, 19th c.)' },
-      { author: 'Leo Tolstoy', work: 'Anna Karenina', author_prompt: 'Leo Tolstoy (War and Peace author)' },
-      { author: 'Fyodor Dostoevsky', work: 'Crime and Punishment', author_prompt: 'Fyodor Dostoevsky (Russian, 19th c.)' },
-      { author: 'Fyodor Dostoevsky', work: 'The Brothers Karamazov', author_prompt: 'Fyodor Dostoevsky (Crime and Punishment author)' },
-      { author: 'Franz Kafka', work: 'The Metamorphosis', author_prompt: 'Franz Kafka (Czech-German, early 20th c.)' },
+      { author: 'Jane Austen', work: 'Pride and Prejudice', characters: 'Elizabeth Bennet, Mr. Darcy, Jane Bennet, Mr. Wickham', author_prompt: 'Jane Austen (English novelist, early 19th c.)' },
+      { author: 'Jane Austen', work: 'Sense and Sensibility', characters: 'Elinor Dashwood, Marianne Dashwood, Edward Ferrars, Colonel Brandon', author_prompt: 'Jane Austen (author of Emma)' },
+      { author: 'Charles Dickens', work: 'A Tale of Two Cities', characters: 'Sydney Carton, Charles Darnay, Lucie Manette, Madame Defarge', author_prompt: 'Charles Dickens (Victorian era)' },
+      { author: 'Charles Dickens', work: 'Great Expectations', characters: 'Pip, Miss Havisham, Estella, Abel Magwitch', author_prompt: 'Charles Dickens (Oliver Twist author)' },
+      { author: 'Leo Tolstoy', work: 'War and Peace', characters: 'Pierre Bezukhov, Natasha Rostova, Andrei Bolkonsky, Napoleon', author_prompt: 'Leo Tolstoy (Russian, 19th c.)' },
+      { author: 'Leo Tolstoy', work: 'Anna Karenina', characters: 'Anna Karenina, Count Vronsky, Levin, Kitty', author_prompt: 'Leo Tolstoy (War and Peace author)' },
+      { author: 'Fyodor Dostoevsky', work: 'Crime and Punishment', characters: 'Raskolnikov, Sonia Marmeladova, Inspector Porfiry, Dunya', author_prompt: 'Fyodor Dostoevsky (Russian, 19th c.)' },
+      { author: 'Fyodor Dostoevsky', work: 'The Brothers Karamazov', characters: 'Alyosha, Ivan, Dmitri, Father Zosima', author_prompt: 'Fyodor Dostoevsky (Crime and Punishment author)' },
+      { author: 'Franz Kafka', work: 'The Metamorphosis', characters: 'Gregor Samsa, Grete Samsa', author_prompt: 'Franz Kafka (Czech-German, early 20th c.)' },
       { author: 'Franz Kafka', work: 'The Trial', author_prompt: 'Franz Kafka (The Metamorphosis author)' },
-      { author: 'Gabriel García Márquez', work: 'One Hundred Years of Solitude', author_prompt: 'Gabriel García Márquez (Colombian, magical realism)' },
-      { author: 'James Joyce', work: 'Ulysses', author_prompt: 'James Joyce (Irish modernist)' },
+      { author: 'Gabriel García Márquez', work: 'One Hundred Years of Solitude', characters: 'José Arcadio Buendía, Úrsula Iguarán, Colonel Aureliano Buendía', author_prompt: 'Gabriel García Márquez (Colombian, magical realism)' },
+      { author: 'James Joyce', work: 'Ulysses', characters: 'Leopold Bloom, Stephen Dedalus, Molly Bloom', author_prompt: 'James Joyce (Irish modernist)' },
       { author: 'James Joyce', work: 'Dubliners', author_prompt: 'James Joyce (Ulysses author)' },
-      { author: 'Virginia Woolf', work: 'Mrs Dalloway', author_prompt: 'Virginia Woolf (English modernist)' },
+      { author: 'Virginia Woolf', work: 'Mrs Dalloway', characters: 'Clarissa Dalloway, Septimus Warren Smith, Peter Walsh', author_prompt: 'Virginia Woolf (English modernist)' },
       { author: 'Virginia Woolf', work: 'To the Lighthouse', author_prompt: 'Virginia Woolf (Mrs Dalloway author)' },
-      { author: 'Ernest Hemingway', work: 'The Old Man and the Sea', author_prompt: 'Ernest Hemingway (American, Nobel 1954)' },
-      { author: 'Ernest Hemingway', work: 'A Farewell to Arms', author_prompt: 'Ernest Hemingway (The Sun Also Rises author)' },
-      { author: 'William Faulkner', work: 'The Sound and the Fury', author_prompt: 'William Faulkner (American South, Nobel 1949)' },
-      { author: 'F. Scott Fitzgerald', work: 'The Great Gatsby', author_prompt: 'F. Scott Fitzgerald (Jazz Age author)' },
-      { author: 'John Steinbeck', work: 'The Grapes of Wrath', author_prompt: 'John Steinbeck (Of Mice and Men author)' },
-      { author: 'Toni Morrison', work: 'Beloved', author_prompt: 'Toni Morrison (American, Nobel 1993)' },
-      { author: 'George Orwell', work: '1984', author_prompt: 'George Orwell (dystopian fiction)' },
-      { author: 'George Orwell', work: 'Animal Farm', author_prompt: 'George Orwell (1984 author)' },
-      { author: 'Aldous Huxley', work: 'Brave New World', author_prompt: 'Aldous Huxley (English, 20th c.)' },
-      { author: 'Homer', work: 'The Iliad', author_prompt: 'Homer (ancient Greek epic poet)' },
-      { author: 'Homer', work: 'The Odyssey', author_prompt: 'Homer (The Iliad author)' },
+      { author: 'Ernest Hemingway', work: 'The Old Man and the Sea', characters: 'Santiago, the Marlin', author_prompt: 'Ernest Hemingway (American, Nobel 1954)' },
+      { author: 'Ernest Hemingway', work: 'A Farewell to Arms', characters: 'Frederic Henry, Catherine Barkley', author_prompt: 'Ernest Hemingway (The Sun Also Rises author)' },
+      { author: 'William Faulkner', work: 'The Sound and the Fury', characters: 'Benjy, Quentin, Jason, Caddy Compson', author_prompt: 'William Faulkner (American South, Nobel 1949)' },
+      { author: 'F. Scott Fitzgerald', work: 'The Great Gatsby', characters: 'Jay Gatsby, Nick Carraway, Daisy Buchanan, Tom Buchanan, Jordan Baker', author_prompt: 'F. Scott Fitzgerald (Jazz Age author)' },
+      { author: 'John Steinbeck', work: 'The Grapes of Wrath', characters: 'Tom Joad, Ma Joad, Jim Casy, Rose of Sharon', author_prompt: 'John Steinbeck (Of Mice and Men author)' },
+      { author: 'Toni Morrison', work: 'Beloved', characters: 'Sethe, Beloved, Paul D, Baby Suggs', author_prompt: 'Toni Morrison (American, Nobel 1993)' },
+      { author: 'George Orwell', work: '1984', characters: "Winston Smith, Julia, O'Brien, Big Brother", author_prompt: 'George Orwell (dystopian fiction)' },
+      { author: 'George Orwell', work: 'Animal Farm', characters: 'Napoleon, Snowball, Boxer, Old Major', author_prompt: 'George Orwell (1984 author)' },
+      { author: 'Aldous Huxley', work: 'Brave New World', characters: 'Bernard Marx, John the Savage, Lenina Crowne, Mustapha Mond', author_prompt: 'Aldous Huxley (English, 20th c.)' },
+      { author: 'Homer', work: 'The Iliad', characters: 'Achilles, Hector, Priam, Agamemnon, Odysseus, Patroclus', author_prompt: 'Homer (ancient Greek epic poet)' },
+      { author: 'Homer', work: 'The Odyssey', characters: 'Odysseus, Penelope, Telemachus, Circe, Calypso, Polyphemus', author_prompt: 'Homer (The Iliad author)' },
       { author: 'Dante Alighieri', work: 'The Divine Comedy', author_prompt: 'Dante Alighieri (Italian, medieval)' },
-      { author: 'Miguel de Cervantes', work: 'Don Quixote', author_prompt: 'Miguel de Cervantes (Spanish, 17th c.)' },
-      { author: 'Victor Hugo', work: 'Les Misérables', author_prompt: 'Victor Hugo (French, 19th c.)' },
-      { author: 'Victor Hugo', work: 'The Hunchback of Notre-Dame', author_prompt: 'Victor Hugo (Les Misérables author)' },
-      { author: 'Gustave Flaubert', work: 'Madame Bovary', author_prompt: 'Gustave Flaubert (French realist)' },
+      { author: 'Miguel de Cervantes', work: 'Don Quixote', characters: 'Don Quixote, Sancho Panza, Dulcinea del Toboso', author_prompt: 'Miguel de Cervantes (Spanish, 17th c.)' },
+      { author: 'Victor Hugo', work: 'Les Misérables', characters: 'Jean Valjean, Javert, Fantine, Cosette, Marius, Éponine, Thénardier', author_prompt: 'Victor Hugo (French, 19th c.)' },
+      { author: 'Victor Hugo', work: 'The Hunchback of Notre-Dame', characters: 'Quasimodo, Esmeralda, Frollo, Phoebus', author_prompt: 'Victor Hugo (Les Misérables author)' },
+      { author: 'Gustave Flaubert', work: 'Madame Bovary', characters: 'Emma Bovary, Charles Bovary, Rodolphe, Léon', author_prompt: 'Gustave Flaubert (French realist)' },
       { author: 'Marcel Proust', work: 'In Search of Lost Time', author_prompt: 'Marcel Proust (French, early 20th c.)' },
-      { author: 'Albert Camus', work: 'The Stranger', author_prompt: 'Albert Camus (French-Algerian, Nobel 1957)' },
+      { author: 'Albert Camus', work: 'The Stranger', characters: 'Meursault, Marie, Raymond', author_prompt: 'Albert Camus (French-Algerian, Nobel 1957)' },
       { author: 'Jean-Paul Sartre', work: 'Nausea', author_prompt: 'Jean-Paul Sartre (French existentialist)' },
-      { author: 'Samuel Beckett', work: 'Waiting for Godot', author_prompt: 'Samuel Beckett (Irish, Nobel 1969)' },
-      { author: 'Chinua Achebe', work: 'Things Fall Apart', author_prompt: 'Chinua Achebe (Nigerian)' },
-      { author: 'Haruki Murakami', work: 'Norwegian Wood', author_prompt: 'Haruki Murakami (Japanese contemporary)' },
+      { author: 'Samuel Beckett', work: 'Waiting for Godot', characters: 'Vladimir, Estragon, Pozzo, Lucky, Godot', author_prompt: 'Samuel Beckett (Irish, Nobel 1969)' },
+      { author: 'Chinua Achebe', work: 'Things Fall Apart', characters: 'Okonkwo, Nwoye, Ezinma, Mr. Brown', author_prompt: 'Chinua Achebe (Nigerian)' },
+      { author: 'Haruki Murakami', work: 'Norwegian Wood', characters: 'Toru Watanabe, Naoko, Midori', author_prompt: 'Haruki Murakami (Japanese contemporary)' },
       { author: 'Fyodor Dostoevsky', work: 'The Idiot', author_prompt: 'Fyodor Dostoevsky (Notes from Underground author)' },
-      { author: 'John Milton', work: 'Paradise Lost', author_prompt: 'John Milton (English, 17th c. epic poet)' },
-      { author: 'Geoffrey Chaucer', work: 'The Canterbury Tales', author_prompt: 'Geoffrey Chaucer (Middle English poet)' },
+      { author: 'John Milton', work: 'Paradise Lost', characters: 'Satan, Adam, Eve, God, Raphael, Michael', author_prompt: 'John Milton (English, 17th c. epic poet)' },
+      { author: 'Geoffrey Chaucer', work: 'The Canterbury Tales', characters: "the Knight, the Miller, the Wife of Bath, the Pardoner", author_prompt: 'Geoffrey Chaucer (Middle English poet)' },
       { author: 'William Blake', work: 'Songs of Innocence and of Experience', author_prompt: 'William Blake (English Romantic poet)' },
-      { author: 'Edgar Allan Poe', work: 'The Tell-Tale Heart', author_prompt: 'Edgar Allan Poe (American Gothic)' },
+      { author: 'Edgar Allan Poe', work: 'The Tell-Tale Heart', characters: 'The Narrator, the Old Man', author_prompt: 'Edgar Allan Poe (American Gothic)' },
       { author: 'Edgar Allan Poe', work: 'The Raven', author_prompt: 'Edgar Allan Poe (The Tell-Tale Heart author)' },
-      { author: 'Mark Twain', work: 'Adventures of Huckleberry Finn', author_prompt: 'Mark Twain (American humorist)' },
-      { author: 'Herman Melville', work: 'Moby-Dick', author_prompt: 'Herman Melville (American, 19th c.)' },
-      { author: 'Nathaniel Hawthorne', work: 'The Scarlet Letter', author_prompt: 'Nathaniel Hawthorne (American Puritan era)' },
-      { author: 'Henry David Thoreau', work: 'Walden', author_prompt: 'Henry David Thoreau (American Transcendentalist)' },
+      { author: 'Mark Twain', work: 'Adventures of Huckleberry Finn', characters: "Huck Finn, Jim, Tom Sawyer, the Duke, the King", author_prompt: 'Mark Twain (American humorist)' },
+      { author: 'Herman Melville', work: 'Moby-Dick', characters: 'Ishmael, Captain Ahab, Queequeg, the White Whale', author_prompt: 'Herman Melville (American, 19th c.)' },
+      { author: 'Nathaniel Hawthorne', work: 'The Scarlet Letter', characters: 'Hester Prynne, Arthur Dimmesdale, Roger Chillingworth, Pearl', author_prompt: 'Nathaniel Hawthorne (American Puritan era)' },
+      { author: 'Henry David Thoreau', work: 'Walden', characters: 'Henry David Thoreau (narrator)', author_prompt: 'Henry David Thoreau (American Transcendentalist)' },
       { author: 'Walt Whitman', work: 'Leaves of Grass', author_prompt: 'Walt Whitman (American poet, free verse)' },
       { author: 'Emily Dickinson', work: 'Because I Could Not Stop for Death', author_prompt: 'Emily Dickinson (American reclusive poet)' },
-      { author: 'Oscar Wilde', work: 'The Picture of Dorian Gray', author_prompt: 'Oscar Wilde (Irish wit, late Victorian)' },
+      { author: 'Oscar Wilde', work: 'The Picture of Dorian Gray', characters: 'Dorian Gray, Lord Henry Wotton, Basil Hallward, Sibyl Vane', author_prompt: 'Oscar Wilde (Irish wit, late Victorian)' },
       { author: 'Oscar Wilde', work: 'The Importance of Being Earnest', author_prompt: 'Oscar Wilde (The Picture of Dorian Gray author)' },
       { author: 'Thomas Hardy', work: "Tess of the d'Urbervilles", author_prompt: 'Thomas Hardy (English Victorian)' },
-      { author: 'Joseph Conrad', work: 'Heart of Darkness', author_prompt: 'Joseph Conrad (Polish-British modernist)' },
+      { author: 'Joseph Conrad', work: 'Heart of Darkness', characters: 'Marlow, Kurtz', author_prompt: 'Joseph Conrad (Polish-British modernist)' },
       { author: 'D.H. Lawrence', work: "Lady Chatterley's Lover", author_prompt: "D.H. Lawrence (Sons and Lovers author)" },
       { author: 'T.S. Eliot', work: 'The Waste Land', author_prompt: 'T.S. Eliot (American-British poet, Nobel 1948)' },
       { author: 'William Butler Yeats', work: 'The Second Coming', author_prompt: 'W.B. Yeats (Irish poet, Nobel 1923)' },
-      { author: 'Boris Pasternak', work: 'Doctor Zhivago', author_prompt: 'Boris Pasternak (Russian, Nobel 1958)' },
+      { author: 'Boris Pasternak', work: 'Doctor Zhivago', characters: 'Yuri Zhivago, Lara, Tonya', author_prompt: 'Boris Pasternak (Russian, Nobel 1958)' },
       { author: 'Alexander Solzhenitsyn', work: 'One Day in the Life of Ivan Denisovich', author_prompt: 'Solzhenitsyn (Russian dissident, Nobel 1970)' },
       { author: 'Gabriel García Márquez', work: 'Love in the Time of Cholera', author_prompt: 'García Márquez (One Hundred Years of Solitude author)' },
-      { author: 'Isabel Allende', work: 'The House of the Spirits', author_prompt: 'Isabel Allende (Chilean magical realism)' },
+      { author: 'Isabel Allende', work: 'The House of the Spirits', characters: 'Esteban Trueba, Clara del Valle, Blanca, Alba', author_prompt: 'Isabel Allende (Chilean magical realism)' },
       { author: 'Jorge Luis Borges', work: 'Ficciones', author_prompt: 'Jorge Luis Borges (Argentine, short stories)' },
-      { author: 'Umberto Eco', work: 'The Name of the Rose', author_prompt: 'Umberto Eco (Italian semiotician)' },
+      { author: 'Umberto Eco', work: 'The Name of the Rose', characters: 'Brother William of Baskerville, Adso, Jorge of Burgos', author_prompt: 'Umberto Eco (Italian semiotician)' },
       { author: 'Italo Calvino', work: "If on a Winter's Night a Traveler", author_prompt: "Italo Calvino (Italian postmodernist)" },
       { author: 'Naguib Mahfouz', work: 'The Cairo Trilogy', author_prompt: 'Naguib Mahfouz (Egyptian, Nobel 1988)' },
       { author: 'Kenzaburō Ōe', work: 'A Personal Matter', author_prompt: 'Kenzaburō Ōe (Japanese, Nobel 1994)' },
       { author: 'Yasunari Kawabata', work: 'Snow Country', author_prompt: 'Yasunari Kawabata (Japanese, Nobel 1968)' },
       { author: 'Doris Lessing', work: 'The Golden Notebook', author_prompt: 'Doris Lessing (British-Zimbabwean, Nobel 2007)' },
-      { author: 'Kazuo Ishiguro', work: 'The Remains of the Day', author_prompt: 'Kazuo Ishiguro (British-Japanese, Nobel 2017)' },
-      { author: 'Salman Rushdie', work: "Midnight's Children", author_prompt: 'Salman Rushdie (British-Indian)' },
+      { author: 'Kazuo Ishiguro', work: 'The Remains of the Day', characters: 'Stevens, Miss Kenton, Lord Darlington', author_prompt: 'Kazuo Ishiguro (British-Japanese, Nobel 2017)' },
+      { author: 'Salman Rushdie', work: "Midnight's Children", characters: "Saleem Sinai, Shiva, Parvati-the-Witch", author_prompt: 'Salman Rushdie (British-Indian)' },
     ],
   },
 
@@ -2015,8 +2041,8 @@ export const FLASH_DRILLS = {
     emoji: '🎨',
     desc: 'Artists, paintings & movements',
     modes: [
-      { id: 'work_to_artist', prompt: 'Painting → Artist', qField: 'work', aField: 'artist' },
-      { id: 'artist_to_work', prompt: 'Artist → Major Work', qField: 'artist_prompt', aField: 'work' },
+      { id: 'work_to_artist', prompt: 'Painting Title → Artist', qField: 'work', aField: 'artist' },
+      { id: 'image_to_both', prompt: 'Image → Work Title & Artist', qField: 'image', aField: 'work_and_artist' },
     ],
     items: [
       { artist: 'Leonardo da Vinci', work: 'Mona Lisa', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/e/ec/Mona_Lisa%2C_by_Leonardo_da_Vinci%2C_from_C2RMF_retouched.jpg/200px-Mona_Lisa%2C_by_Leonardo_da_Vinci%2C_from_C2RMF_retouched.jpg', movement: 'Renaissance', artist_prompt: 'Leonardo da Vinci (Italian Renaissance)' },
@@ -2028,45 +2054,45 @@ export const FLASH_DRILLS = {
       { artist: 'Johannes Vermeer', work: 'Girl with a Pearl Earring', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/0/0f/1665_Girl_with_a_Pearl_Earring.jpg/200px-1665_Girl_with_a_Pearl_Earring.jpg', movement: 'Dutch Golden Age', artist_prompt: 'Johannes Vermeer (Dutch, 17th c.)' },
       { artist: 'Francisco Goya', work: 'The Third of May 1808', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/f/fd/El_Tres_de_Mayo%2C_by_Francisco_de_Goya%2C_from_Prado_thin_black_margin.jpg/320px-El_Tres_de_Mayo%2C_by_Francisco_de_Goya%2C_from_Prado_thin_black_margin.jpg', movement: 'Romanticism', artist_prompt: 'Francisco Goya (Spanish, late 18th c.)' },
       { artist: 'Eugène Delacroix', work: 'Liberty Leading the People', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/5/5d/Eug%C3%A8ne_Delacroix_-_La_libert%C3%A9_guidant_le_peuple.jpg/320px-Eug%C3%A8ne_Delacroix_-_La_libert%C3%A9_guidant_le_peuple.jpg', movement: 'Romanticism', artist_prompt: 'Eugène Delacroix (French Romantic)' },
-      { artist: 'J.M.W. Turner', work: 'The Fighting Temeraire', movement: 'Romanticism', artist_prompt: 'J.M.W. Turner (English landscape painter)' },
+      { artist: 'J.M.W. Turner', work: 'The Fighting Temeraire', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/7/79/The_Fighting_Temeraire%2C_JMW_Turner%2C_National_Gallery.jpg/320px-The_Fighting_Temeraire%2C_JMW_Turner%2C_National_Gallery.jpg', movement: 'Romanticism', artist_prompt: 'J.M.W. Turner (English landscape painter)' },
       { artist: 'Claude Monet', work: 'Water Lilies', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/a/aa/Claude_Monet_-_Water_Lilies_-_1906%2C_Ryerson.jpg/320px-Claude_Monet_-_Water_Lilies_-_1906%2C_Ryerson.jpg', movement: 'Impressionism', artist_prompt: 'Claude Monet (French Impressionist)' },
-      { artist: 'Claude Monet', work: 'Impression, Sunrise', movement: 'Impressionism', artist_prompt: 'Claude Monet (Water Lilies painter)' },
-      { artist: 'Pierre-Auguste Renoir', work: 'Luncheon of the Boating Party', movement: 'Impressionism', artist_prompt: 'Pierre-Auguste Renoir (French Impressionist)' },
-      { artist: 'Edgar Degas', work: 'The Dance Class', movement: 'Impressionism', artist_prompt: 'Edgar Degas (French, ballet paintings)' },
+      { artist: 'Claude Monet', work: 'Impression, Sunrise', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/5/59/Monet_-_Impression%2C_Sunrise.jpg/320px-Monet_-_Impression%2C_Sunrise.jpg', movement: 'Impressionism', artist_prompt: 'Claude Monet (Water Lilies painter)' },
+      { artist: 'Pierre-Auguste Renoir', work: 'Luncheon of the Boating Party', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/8/8d/Pierre-Auguste_Renoir_-_Luncheon_of_the_Boating_Party_-_Google_Art_Project.jpg/320px-Pierre-Auguste_Renoir_-_Luncheon_of_the_Boating_Party_-_Google_Art_Project.jpg', movement: 'Impressionism', artist_prompt: 'Pierre-Auguste Renoir (French Impressionist)' },
+      { artist: 'Edgar Degas', work: 'The Dance Class', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/7/7e/Degas_-_The_Dance_Class.jpg/240px-Degas_-_The_Dance_Class.jpg', movement: 'Impressionism', artist_prompt: 'Edgar Degas (French, ballet paintings)' },
       { artist: 'Georges Seurat', work: 'A Sunday on La Grande Jatte', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/7/7d/A_Sunday_on_La_Grande_Jatte%2C_Georges_Seurat%2C_1884.jpg/320px-A_Sunday_on_La_Grande_Jatte%2C_Georges_Seurat%2C_1884.jpg', movement: 'Post-Impressionism', artist_prompt: 'Georges Seurat (Pointillism founder)' },
-      { artist: 'Paul Cézanne', work: 'The Card Players', movement: 'Post-Impressionism', artist_prompt: 'Paul Cézanne (father of modern art)' },
-      { artist: 'Paul Gauguin', work: 'Where Do We Come From?', movement: 'Post-Impressionism', artist_prompt: 'Paul Gauguin (Tahitian paintings)' },
+      { artist: 'Paul Cézanne', work: 'The Card Players', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/8/8f/Paul_C%C3%A9zanne%2C_The_Card_Players%2C_1892-95.jpg/320px-Paul_C%C3%A9zanne%2C_The_Card_Players%2C_1892-95.jpg', movement: 'Post-Impressionism', artist_prompt: 'Paul Cézanne (father of modern art)' },
+      { artist: 'Paul Gauguin', work: 'Where Do We Come From?', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/7/71/Paul_Gauguin_-_D%27ou_venons-nous.jpg/320px-Paul_Gauguin_-_D%27ou_venons-nous.jpg', movement: 'Post-Impressionism', artist_prompt: 'Paul Gauguin (Tahitian paintings)' },
       { artist: 'Vincent van Gogh', work: 'The Starry Night', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/e/ea/Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg/320px-Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg', movement: 'Post-Impressionism', artist_prompt: 'Vincent van Gogh (Dutch Post-Impressionist)' },
-      { artist: 'Vincent van Gogh', work: 'Sunflowers', movement: 'Post-Impressionism', artist_prompt: 'Vincent van Gogh (The Starry Night painter)' },
+      { artist: 'Vincent van Gogh', work: 'Sunflowers', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/4/46/Vincent_van_Gogh_-_Sunflowers_%281888%2C_National_Gallery_London%29.jpg/240px-Vincent_van_Gogh_-_Sunflowers_%281888%2C_National_Gallery_London%29.jpg', movement: 'Post-Impressionism', artist_prompt: 'Vincent van Gogh (The Starry Night painter)' },
       { artist: 'Edvard Munch', work: 'The Scream', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Edvard_Munch%2C_1893%2C_The_Scream%2C_oil%2C_tempera_and_pastel_on_cardboard%2C_91_x_73_cm%2C_National_Gallery_of_Norway.jpg/200px-Edvard_Munch%2C_1893%2C_The_Scream%2C_oil%2C_tempera_and_pastel_on_cardboard%2C_91_x_73_cm%2C_National_Gallery_of_Norway.jpg', movement: 'Expressionism', artist_prompt: 'Edvard Munch (Norwegian Expressionist)' },
       { artist: 'Gustav Klimt', work: 'The Kiss', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/4/40/The_Kiss_-_Gustav_Klimt_-_Google_Cultural_Institute.jpg/200px-The_Kiss_-_Gustav_Klimt_-_Google_Cultural_Institute.jpg', movement: 'Symbolism', artist_prompt: 'Gustav Klimt (Austrian, golden style)' },
       { artist: 'Pablo Picasso', work: 'Guernica', image: 'https://upload.wikimedia.org/wikipedia/en/thumb/7/74/PicassoGuernica.jpg/320px-PicassoGuernica.jpg', movement: 'Cubism', artist_prompt: 'Pablo Picasso (Spanish, co-founder of Cubism)' },
       { artist: 'Pablo Picasso', work: 'Les Demoiselles d\'Avignon', movement: 'Cubism', artist_prompt: 'Pablo Picasso (Guernica painter)' },
-      { artist: 'Henri Matisse', work: 'Dance', movement: 'Fauvism', artist_prompt: 'Henri Matisse (French, bold color)' },
+      { artist: 'Henri Matisse', work: 'Dance', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/a/a7/Matissedance.jpg/320px-Matissedance.jpg', movement: 'Fauvism', artist_prompt: 'Henri Matisse (French, bold color)' },
       { artist: 'Salvador Dalí', work: 'The Persistence of Memory', image: 'https://upload.wikimedia.org/wikipedia/en/thumb/d/dd/The_Persistence_of_Memory.jpg/320px-The_Persistence_of_Memory.jpg', movement: 'Surrealism', artist_prompt: 'Salvador Dalí (Spanish Surrealist)' },
-      { artist: 'René Magritte', work: 'The Treachery of Images', movement: 'Surrealism', artist_prompt: 'René Magritte (Belgian Surrealist, pipe painting)' },
+      { artist: 'René Magritte', work: 'The Treachery of Images', image: 'https://upload.wikimedia.org/wikipedia/en/thumb/b/b9/MagrittePipe.jpg/320px-MagrittePipe.jpg', movement: 'Surrealism', artist_prompt: 'René Magritte (Belgian Surrealist, pipe painting)' },
       { artist: 'Frida Kahlo', work: 'The Two Fridas', image: 'https://upload.wikimedia.org/wikipedia/en/thumb/1/18/Frida_Kahlo_%28self_portrait%29.jpg/200px-Frida_Kahlo_%28self_portrait%29.jpg', movement: 'Surrealism', artist_prompt: 'Frida Kahlo (Mexican, self-portraits)' },
-      { artist: 'Jackson Pollock', work: 'No. 31', movement: 'Abstract Expressionism', artist_prompt: 'Jackson Pollock (drip painting technique)' },
-      { artist: 'Mark Rothko', work: 'Orange and Yellow', movement: 'Abstract Expressionism', artist_prompt: 'Mark Rothko (color field painting)' },
+      { artist: 'Jackson Pollock', work: 'No. 31', image: 'https://upload.wikimedia.org/wikipedia/en/thumb/2/2e/One31.jpg/320px-One31.jpg', movement: 'Abstract Expressionism', artist_prompt: 'Jackson Pollock (drip painting technique)' },
+      { artist: 'Mark Rothko', work: 'Orange and Yellow', image: 'https://upload.wikimedia.org/wikipedia/en/thumb/2/25/Rothko_No_61.jpg/200px-Rothko_No_61.jpg', movement: 'Abstract Expressionism', artist_prompt: 'Mark Rothko (color field painting)' },
       { artist: 'Andy Warhol', work: 'Campbell\'s Soup Cans', movement: 'Pop Art', artist_prompt: 'Andy Warhol (American Pop Art)' },
-      { artist: 'Roy Lichtenstein', work: 'Whaam!', movement: 'Pop Art', artist_prompt: 'Roy Lichtenstein (comic-style Pop Art)' },
+      { artist: 'Roy Lichtenstein', work: 'Whaam!', image: 'https://upload.wikimedia.org/wikipedia/en/thumb/5/56/Roy_Lichtenstein_Whaam.jpg/320px-Roy_Lichtenstein_Whaam.jpg', movement: 'Pop Art', artist_prompt: 'Roy Lichtenstein (comic-style Pop Art)' },
       { artist: 'Grant Wood', work: 'American Gothic', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/c/cc/Grant_DeVolson_Wood_-_American_Gothic.jpg/200px-Grant_DeVolson_Wood_-_American_Gothic.jpg', movement: 'Regionalism', artist_prompt: 'Grant Wood (American Regionalism)' },
       { artist: 'Edward Hopper', work: 'Nighthawks', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/a/a8/Edward_Hopper_Nighthawks_1942.jpg/320px-Edward_Hopper_Nighthawks_1942.jpg', movement: 'Realism', artist_prompt: 'Edward Hopper (American Realist)' },
       { artist: 'Jan van Eyck', work: 'The Arnolfini Portrait', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/3/33/Van_Eyck_-_Arnolfini_Portrait.jpg/200px-Van_Eyck_-_Arnolfini_Portrait.jpg', movement: 'Northern Renaissance', artist_prompt: 'Jan van Eyck (Flemish, early Northern Renaissance)' },
       { artist: 'Hieronymus Bosch', work: 'The Garden of Earthly Delights', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/9/96/The_Garden_of_earthly_delights.jpg/200px-The_Garden_of_earthly_delights.jpg', movement: 'Northern Renaissance', artist_prompt: 'Hieronymus Bosch (Dutch, fantastical imagery)' },
-      { artist: 'Pieter Bruegel the Elder', work: 'The Hunters in the Snow', movement: 'Northern Renaissance', artist_prompt: 'Bruegel the Elder (Flemish, peasant scenes)' },
-      { artist: 'Albrecht Dürer', work: 'Self-Portrait at 28', movement: 'Northern Renaissance', artist_prompt: 'Albrecht Dürer (German Renaissance printmaker)' },
-      { artist: 'Peter Paul Rubens', work: 'The Descent from the Cross', movement: 'Baroque', artist_prompt: 'Peter Paul Rubens (Flemish Baroque)' },
+      { artist: 'Pieter Bruegel the Elder', work: 'The Hunters in the Snow', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/b/b6/Pieter_Bruegel_the_Elder_-_The_Hunters_in_the_Snow_%28Winter%29_-_Google_Art_Project.jpg/320px-Pieter_Bruegel_the_Elder_-_The_Hunters_in_the_Snow_%28Winter%29_-_Google_Art_Project.jpg', movement: 'Northern Renaissance', artist_prompt: 'Bruegel the Elder (Flemish, peasant scenes)' },
+      { artist: 'Albrecht Dürer', work: 'Self-Portrait at 28', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/4/48/Albrecht_D%C3%BCrer_-_1500_self-portrait_%28High_resolution_and_detail%29.jpg/200px-Albrecht_D%C3%BCrer_-_1500_self-portrait_%28High_resolution_and_detail%29.jpg', movement: 'Northern Renaissance', artist_prompt: 'Albrecht Dürer (German Renaissance printmaker)' },
+      { artist: 'Peter Paul Rubens', work: 'The Descent from the Cross', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/5/57/Rubens_The_Descent_from_the_Cross.jpg/200px-Rubens_The_Descent_from_the_Cross.jpg', movement: 'Baroque', artist_prompt: 'Peter Paul Rubens (Flemish Baroque)' },
       { artist: 'Diego Velázquez', work: 'Las Meninas', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/9/99/Las_Meninas_01.jpg/200px-Las_Meninas_01.jpg', movement: 'Baroque', artist_prompt: 'Diego Velázquez (Spanish Baroque court painter)' },
-      { artist: 'Caravaggio', work: 'The Calling of Saint Matthew', movement: 'Baroque', artist_prompt: 'Caravaggio (Italian, dramatic chiaroscuro)' },
-      { artist: 'Jacques-Louis David', work: 'The Death of Marat', movement: 'Neoclassicism', artist_prompt: 'Jacques-Louis David (French Neoclassicist)' },
+      { artist: 'Caravaggio', work: 'The Calling of Saint Matthew', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/4/4b/Caravaggio_-_La_vocazione_di_san_Matteo.jpg/240px-Caravaggio_-_La_vocazione_di_san_Matteo.jpg', movement: 'Baroque', artist_prompt: 'Caravaggio (Italian, dramatic chiaroscuro)' },
+      { artist: 'Jacques-Louis David', work: 'The Death of Marat', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/a/a6/Death_of_Marat_by_David.jpg/200px-Death_of_Marat_by_David.jpg', movement: 'Neoclassicism', artist_prompt: 'Jacques-Louis David (French Neoclassicist)' },
       { artist: 'Caspar David Friedrich', work: 'Wanderer above the Sea of Fog', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/b/b9/Caspar_David_Friedrich_-_Wanderer_above_the_sea_of_fog.jpg/200px-Caspar_David_Friedrich_-_Wanderer_above_the_sea_of_fog.jpg', movement: 'Romanticism', artist_prompt: 'Caspar David Friedrich (German Romantic)' },
       { artist: 'Winslow Homer', work: 'The Gulf Stream', movement: 'Realism', artist_prompt: 'Winslow Homer (American Realist)' },
       { artist: 'Thomas Eakins', work: 'The Gross Clinic', movement: 'Realism', artist_prompt: 'Thomas Eakins (American Realist)' },
       { artist: 'Berthe Morisot', work: 'The Cradle', movement: 'Impressionism', artist_prompt: 'Berthe Morisot (French Impressionist, first woman)' },
       { artist: 'Mary Cassatt', work: "The Child's Bath", movement: 'Impressionism', artist_prompt: 'Mary Cassatt (American Impressionist)' },
       { artist: 'Egon Schiele', work: 'Self-Portrait with Physalis', movement: 'Expressionism', artist_prompt: 'Egon Schiele (Austrian Expressionist)' },
-      { artist: 'Wassily Kandinsky', work: 'Composition VIII', movement: 'Abstract', artist_prompt: 'Wassily Kandinsky (pioneer of abstract art)' },
+      { artist: 'Wassily Kandinsky', work: 'Composition VIII', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/b/bc/Vassily_Kandinsky%2C_1923_-_Composition_8%2C_huile_sur_toile%2C_140_cm_x_201_cm%2C_Muse%CC%81e_Guggenheim%2C_New_York.jpg/320px-Vassily_Kandinsky%2C_1923_-_Composition_8%2C_huile_sur_toile%2C_140_cm_x_201_cm%2C_Muse%CC%81e_Guggenheim%2C_New_York.jpg', movement: 'Abstract', artist_prompt: 'Wassily Kandinsky (pioneer of abstract art)' },
       { artist: 'Piet Mondrian', work: 'Broadway Boogie Woogie', image: 'https://upload.wikimedia.org/wikipedia/commons/thumb/3/30/Piet_Mondriaan%2C_1942_-_Broadway_Boogie-Woogie.jpg/200px-Piet_Mondriaan%2C_1942_-_Broadway_Boogie-Woogie.jpg', movement: 'De Stijl', artist_prompt: 'Piet Mondrian (Dutch, grid paintings)' },
       { artist: "Georgia O'Keeffe", work: 'Jimson Weed/White Flower No. 1', movement: 'Modernism', artist_prompt: "Georgia O'Keeffe (American, flower & desert)" },
       { artist: 'Diego Rivera', work: 'Man at the Crossroads', movement: 'Social Realism', artist_prompt: 'Diego Rivera (Mexican muralist)' },
@@ -2082,7 +2108,7 @@ export const FLASH_DRILLS = {
     desc: 'Composers, works & eras',
     modes: [
       { id: 'work_to_composer', prompt: 'Work → Composer', qField: 'work', aField: 'composer' },
-      { id: 'composer_to_work', prompt: 'Composer → Major Work', qField: 'composer_prompt', aField: 'work' },
+      { id: 'composer_to_era', prompt: 'Composer → Era', qField: 'composer_prompt', aField: 'era' },
     ],
     items: [
       { composer: 'Johann Sebastian Bach', work: 'Brandenburg Concertos', era: 'Baroque', composer_prompt: 'J.S. Bach (German Baroque)' },
@@ -2143,9 +2169,8 @@ export const FLASH_DRILLS = {
     emoji: '🩰',
     desc: 'Ballets, composers & major characters',
     modes: [
-      { id: 'ballet_to_composer', prompt: 'Ballet → Composer', qField: 'ballet', aField: 'composer' },
-      { id: 'composer_to_ballet', prompt: 'Composer → Ballet', qField: 'composer_prompt', aField: 'ballet' },
-      { id: 'ballet_to_chars', prompt: 'Ballet → Major Characters', qField: 'ballet', aField: 'characters' },
+      { id: 'ballet_to_composer', prompt: 'Title → Composer', qField: 'ballet', aField: 'composer' },
+      { id: 'chars_to_title_composer', prompt: 'Characters → Title & Composer', qField: 'characters', aField: 'ballet_and_composer' },
     ],
     items: [
       { ballet: 'Swan Lake', composer: 'Tchaikovsky', characters: 'Odette/Odile, Prince Siegfried, Rothbart', composer_prompt: 'Tchaikovsky (most famous ballet)' },
@@ -2254,7 +2279,8 @@ function FlashDrill({ drillKey, onBack }) {
   const modeConfig = drill.modes.find(m => m.id === selectedMode) || drill.modes[0]
 
   function startQuiz() {
-    const q = order === 'sequential' ? [...drill.items] : [...drill.items].sort(() => Math.random() - 0.5)
+    const allItems = modeConfig.qField === 'image' ? drill.items.filter(it => it.image) : modeConfig.skipIfNoField ? drill.items.filter(it => it[modeConfig.qField]) : drill.items
+    const q = order === 'sequential' ? [...allItems] : [...allItems].sort(() => Math.random() - 0.5)
     setQueue(q)
     setIdx(0)
     setResults([])
@@ -2263,11 +2289,34 @@ function FlashDrill({ drillKey, onBack }) {
     setMode('quiz')
   }
 
+  const [answer2, setAnswer2] = useState('') // second answer field for image_to_both
+
   function checkAnswer(override = false) {
     const item = queue[idx]
     const userAns = override ? '(marked correct)' : answer.trim()
-    const correct = override || fuzzyMatch(userAns, String(item[modeConfig.aField] || ''))
-    setResults(prev => [...prev, { item, userAnswer: userAns, correct, expected: item[modeConfig.aField] }])
+    let correct, expected
+
+    if (modeConfig.aField === 'work_and_artist') {
+      const workCorrect = override || fuzzyMatch(userAns, item.work || '')
+      const artistCorrect = override || fuzzyMatch(answer2.trim(), item.artist || '')
+      correct = workCorrect && artistCorrect
+      expected = `${item.work} · ${item.artist}`
+    } else if (modeConfig.aField === 'ballet_and_composer') {
+      const titleCorrect = override || fuzzyMatch(userAns, item.ballet || '')
+      const composerCorrect = override || fuzzyMatch(answer2.trim(), item.composer || '')
+      correct = titleCorrect && composerCorrect
+      expected = `${item.ballet} · ${item.composer}`
+    } else if (modeConfig.aField === 'work_and_author') {
+      const titleCorrect = override || fuzzyMatch(userAns, item.work || '')
+      const authorCorrect = override || fuzzyMatch(answer2.trim(), item.author || '')
+      correct = titleCorrect && authorCorrect
+      expected = `${item.work} · ${item.author}`
+    } else {
+      correct = override || fuzzyMatch(userAns, String(item[modeConfig.aField] || ''))
+      expected = item[modeConfig.aField]
+    }
+
+    setResults(prev => [...prev, { item, userAnswer: userAns, correct, expected }])
     setRevealed(true)
     setTimeout(() => inputRef.current?.focus(), 50)
   }
@@ -2283,6 +2332,7 @@ function FlashDrill({ drillKey, onBack }) {
     } else {
       setIdx(i => i + 1)
       setAnswer('')
+      setAnswer2('')
       setRevealed(false)
     }
   }
@@ -2380,13 +2430,23 @@ function FlashDrill({ drillKey, onBack }) {
       <div style={S.progress}>{idx+1} / {queue.length} · {score} correct</div>
       <div style={S.card}>
         <div style={{ fontSize:10, color:'#4060a0', letterSpacing:2, marginBottom:8 }}>{modeConfig.prompt.toUpperCase()}</div>
-        <div style={{ fontSize:15, color:'#c0c8e8', lineHeight:1.5, marginBottom:12 }}>{item[modeConfig.qField]}</div>
-        {/* Show artwork image when available */}
-        {item.image && revealed && (
+        {/* Image mode: show image as the question */}
+        {modeConfig.qField === 'image' && item.image ? (
           <img
             src={item.image}
-            alt={item.work || item[modeConfig.qField]}
-            style={{ width:'100%', maxHeight:180, objectFit:'contain', borderRadius:8, marginBottom:10, background:'#060b1a' }}
+            alt="Identify this artwork"
+            style={{ width:'100%', maxHeight:220, objectFit:'contain', borderRadius:8, marginBottom:12, background:'#0a0f2e' }}
+            onError={e => { e.target.style.display='none' }}
+          />
+        ) : (
+          <div style={{ fontSize:15, color:'#c0c8e8', lineHeight:1.5, marginBottom:12 }}>{item[modeConfig.qField]}</div>
+        )}
+        {/* Show image after reveal for non-image modes */}
+        {modeConfig.qField !== 'image' && item.image && revealed && (
+          <img
+            src={item.image}
+            alt={item.work}
+            style={{ width:'100%', maxHeight:160, objectFit:'contain', borderRadius:8, marginBottom:10, background:'#060b1a' }}
             onError={e => { e.target.style.display='none' }}
           />
         )}
@@ -2396,17 +2456,36 @@ function FlashDrill({ drillKey, onBack }) {
           style={{ ...S.input, borderColor:revealed?(results[results.length-1]?.correct?'#4caf7d':'#e57373'):'#1a2460' }}
           value={answer}
           onChange={e => setAnswer(e.target.value)}
-          onKeyDown={e => { if(e.key==='Enter') revealed?next():checkAnswer() }}
-          placeholder="Your answer..."
+          onKeyDown={e => { if(e.key==='Enter' && !revealed) { if(modeConfig.aField === 'work_and_artist' && !answer2) return; checkAnswer() } else if(e.key==='Enter' && revealed) next() }}
+          placeholder={modeConfig.aField === 'work_and_artist' ? 'Work title...' : modeConfig.aField === 'ballet_and_composer' ? 'Ballet title...' : modeConfig.aField === 'work_and_author' ? 'Novel/work title...' : 'Your answer...'}
           disabled={revealed}
         />
+        {(modeConfig.aField === 'work_and_artist' || modeConfig.aField === 'ballet_and_composer' || modeConfig.aField === 'work_and_author') && (
+          <input
+            style={{ ...S.input, marginTop:8, borderColor:revealed?(results[results.length-1]?.correct?'#4caf7d':'#e57373'):'#1a2460' }}
+            value={answer2}
+            onChange={e => setAnswer2(e.target.value)}
+            onKeyDown={e => { if(e.key==='Enter') revealed?next():checkAnswer() }}
+            placeholder={modeConfig.aField === 'ballet_and_composer' ? 'Composer name...' : modeConfig.aField === 'work_and_author' ? 'Author name...' : 'Artist name...'}
+            disabled={revealed}
+          />
+        )}
         {revealed && (
           <div style={{ marginTop:8 }}>
             {results[results.length-1]?.correct
               ? <span style={S.correct}>✓ Correct!</span>
               : (
                 <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
-                  <span style={S.incorrect}>✗ {item[modeConfig.aField]}</span>
+                  <div>
+                    {modeConfig.aField === 'work_and_artist'
+                      ? <><span style={S.incorrect}>✗ {item.work}</span><span style={{ color:'#6070a0', margin:'0 6px' }}>by</span><span style={S.incorrect}>{item.artist}</span></>
+                      : modeConfig.aField === 'ballet_and_composer'
+                      ? <><span style={S.incorrect}>✗ {item.ballet}</span><span style={{ color:'#6070a0', margin:'0 6px' }}>by</span><span style={S.incorrect}>{item.composer}</span></>
+                      : modeConfig.aField === 'work_and_author'
+                      ? <><span style={S.incorrect}>✗ {item.work}</span><span style={{ color:'#6070a0', margin:'0 6px' }}>by</span><span style={S.incorrect}>{item.author}</span></>
+                      : <span style={S.incorrect}>✗ {item[modeConfig.aField]}</span>
+                    }
+                  </div>
                   <button style={{ fontSize:10, color:'#4caf7d', border:'1px solid #2e8c50', borderRadius:6, padding:'2px 8px', background:'#0a1e10', cursor:'pointer' }} onClick={markCorrect}>Mark correct</button>
                 </div>
               )}

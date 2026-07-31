@@ -12,7 +12,7 @@ import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpi
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 import { DrillsView } from './drills.jsx'
 
-const APP_VERSION = '1.7.5'
+const APP_VERSION = '1.7.6'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -759,7 +759,6 @@ export default function App() {
       <div style={{ background: '#060b1a', minHeight: '100dvh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#f5c518', fontFamily: "'Bebas Neue', sans-serif", fontSize: 24, letterSpacing: 4, flexDirection: 'column', gap: 12 }}>
         <div>JEO TRAINER</div>
         <div style={{ fontSize: 12, color: '#4060a0', letterSpacing: 3 }}>LOADING LATEST EPISODE...</div>
-        <style>{`@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&display=swap')`}</style>
       </div>
     )
   }
@@ -1116,10 +1115,10 @@ function Header({ coryatScore, actualScore, correctCount, incorrectCount, passCo
 // ─── Study Tab View ──────────────────────────────────────────────────────────
 function StudyTabView({ cards, setCards, user, dueCount }) {
   const [subTab, setSubTab] = useState('flashcards')
+  const [flashcardView, setFlashcardView] = useState('menu') // menu | study | deck
 
   const subTabs = [
-    { id: 'flashcards', label: `🔁 FLASHCARDS${dueCount > 0 ? ` (${dueCount})` : ''}` },
-    { id: 'deck', label: `🗂 DECK (${cards.length})` },
+    { id: 'flashcards', label: `📖 FLASHCARDS${dueCount > 0 ? ` (${dueCount})` : ''}` },
     { id: 'drills', label: '⚡ DRILLS' },
   ]
 
@@ -1130,7 +1129,7 @@ function StudyTabView({ cards, setCards, user, dueCount }) {
         {subTabs.map(t => (
           <button
             key={t.id}
-            onClick={() => setSubTab(t.id)}
+            onClick={() => { setSubTab(t.id); if (t.id === 'flashcards') setFlashcardView('menu') }}
             style={{
               flex: 1, padding: '6px 4px', borderRadius: 8, border: 'none',
               background: subTab === t.id ? '#1a2460' : 'transparent',
@@ -1145,8 +1144,30 @@ function StudyTabView({ cards, setCards, user, dueCount }) {
       </div>
 
       <div style={{ padding: '12px 0 0 0' }}>
-        {subTab === 'flashcards' && <StudyView cards={cards} setCards={setCards} />}
-        {subTab === 'deck' && <DeckView cards={cards} setCards={setCards} user={user} />}
+        {subTab === 'flashcards' && (
+          <>
+            {flashcardView === 'menu' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '0 0', maxWidth: 480, margin: '0 auto', width: '100%' }}>
+                <button
+                  style={{ background: '#0a0f2e', border: '1px solid #1a2460', borderRadius: 12, padding: '18px 20px', textAlign: 'left', cursor: 'pointer', width: '100%' }}
+                  onClick={() => setFlashcardView('study')}
+                >
+                  <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: '#f5c518', letterSpacing: 2 }}>🔁 STUDY SESSION</div>
+                  <div style={{ fontSize: 11, color: '#4060a0', marginTop: 2 }}>{dueCount > 0 ? `${dueCount} cards due` : 'Review your flashcards'}</div>
+                </button>
+                <button
+                  style={{ background: '#0a0f2e', border: '1px solid #1a2460', borderRadius: 12, padding: '18px 20px', textAlign: 'left', cursor: 'pointer', width: '100%' }}
+                  onClick={() => setFlashcardView('deck')}
+                >
+                  <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: '#f5c518', letterSpacing: 2 }}>🗂 MY DECK</div>
+                  <div style={{ fontSize: 11, color: '#4060a0', marginTop: 2 }}>{cards.length} cards · browse, search & edit</div>
+                </button>
+              </div>
+            )}
+            {flashcardView === 'study' && <StudyView cards={cards} setCards={setCards} onBack={() => setFlashcardView('menu')} />}
+            {flashcardView === 'deck' && <DeckView cards={cards} setCards={setCards} user={user} onBack={() => setFlashcardView('menu')} />}
+          </>
+        )}
         {subTab === 'drills' && <DrillsView />}
       </div>
     </div>
@@ -2326,7 +2347,7 @@ function ClueModal({ clue, category, showAnswer, onReveal, onMark, onClose, isRe
 }
 
 // ─── Study View ───────────────────────────────────────────────────────────────
-function StudyView({ cards, setCards }) {
+function StudyView({ cards, setCards, onBack }) {
   const CHUNK_PRESETS = { quick: 10, standard: 20, long: 40, marathon: 100 }
   const DEFAULT_CHUNK = 'standard'
 
@@ -2423,6 +2444,7 @@ function StudyView({ cards, setCards }) {
   // ── Configure screen ──────────────────────────────────────────────────────
   if (phase === 'configure') return (
     <div style={S.studyLanding}>
+      {onBack && <button style={{ fontSize: 12, color: '#4060a0', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left', marginBottom: 8, display: 'block' }} onClick={onBack}>← Back</button>}
       <div style={S.studyIcon}>🔁</div>
       <div style={S.studyTitle}>STUDY SESSION</div>
 
@@ -2797,7 +2819,7 @@ function MediaStorageInfo() {
 }
 
 // ─── Deck View ────────────────────────────────────────────────────────────────
-function DeckView({ cards, setCards, user }) {
+function DeckView({ cards, setCards, user, onBack }) {
   const [subview, setSubview] = useState('list')
   const [editCard, setEditCard] = useState(null) // card being edited
   const [editFront, setEditFront] = useState('')
@@ -2932,6 +2954,7 @@ function DeckView({ cards, setCards, user }) {
 
   return (
     <div style={S.deckWrap}>
+      {onBack && <button style={{ fontSize: 12, color: '#4060a0', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left', padding: '0 0 4px 0' }} onClick={onBack}>← Back</button>}
       <div style={S.deckActions}>
         <div style={{ display: 'flex', gap: 8, width: '100%' }}>
           <button style={{ ...S.actionBtn, ...(subview === 'add' ? S.actionBtnActive : {}), flex: 1 }} onClick={() => setSubview(subview === 'add' ? 'list' : 'add')}>{subview === 'add' ? '✕ Cancel' : '+ Add Card'}</button>

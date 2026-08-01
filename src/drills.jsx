@@ -788,7 +788,7 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids }) {
     const bothCorrect = countryCorrect && capitalCorrect
     setResult({ countryCorrect, capitalCorrect, country })
     setAttempted(prev => new Set([...prev, selected]))
-    setAttemptResults(prev => ({ ...prev, [selected]: { correct: bothCorrect, country } }))
+    setAttemptResults(prev => ({ ...prev, [selected]: { correct: bothCorrect, countryCorrect, capitalCorrect, country } }))
     setScore(prev => ({ correct: prev.correct + (bothCorrect ? 1 : 0), total: prev.total + 1 }))
   }
 
@@ -797,19 +797,13 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids }) {
     const updated = { ...result, [field + 'Correct']: true }
     setResult(updated)
     const nowBoth = updated.countryCorrect && updated.capitalCorrect
-    if (nowBoth) {
-      setAttemptResults(prev => ({ ...prev, [selected]: { ...prev[selected], correct: true } }))
-      setScore(prev => ({ ...prev, correct: prev.correct + 1 }))
-    }
+    setAttemptResults(prev => ({ ...prev, [selected]: { ...prev[selected], [field + 'Correct']: true, correct: nowBoth } }))
+    if (nowBoth) setScore(prev => ({ ...prev, correct: prev.correct + 1 }))
   }
 
   function getColor(id) {
     if (id === selected) return '#f5c518'
-    if (attempted.has(id)) {
-      const country = COUNTRY_MAP[id]
-      if (!country) return '#1a2460'
-      return '#4caf7d'
-    }
+    if (attempted.has(id)) return '#e0e0e0'
     return '#1a3070'
   }
 
@@ -893,8 +887,8 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids }) {
             if (!res || !c) return null
             return (
               <g key={`lbl-${p.id}`} style={{ pointerEvents: 'none' }}>
-                <text x={c.x} y={c.y - 4/zoom} textAnchor="middle" fontSize={7/zoom} fill={res.correct ? '#ffffff' : '#ff8a80'} fontWeight="bold" fontFamily="sans-serif">{res.country.name}</text>
-                <text x={c.x} y={c.y + 5/zoom} textAnchor="middle" fontSize={6/zoom} fill={res.correct ? '#f5c518' : '#ffcdd2'} fontFamily="sans-serif">{res.country.capital}</text>
+                <text x={c.x} y={c.y - 4/zoom} textAnchor="middle" fontSize={7/zoom} fill={res.countryCorrect ? '#4caf7d' : '#e53935'} fontWeight="bold" fontFamily="sans-serif">{res.country.name}</text>
+                <text x={c.x} y={c.y + 5/zoom} textAnchor="middle" fontSize={6/zoom} fill={res.capitalCorrect ? '#4caf7d' : '#e53935'} fontFamily="sans-serif">{res.country.capital}</text>
               </g>
             )
           })}
@@ -1327,15 +1321,19 @@ function SubnationalMapDrill({ config, onBack }) {
         setCentroids(newCentroids)
         setLoading(false)
         // Auto-fit: center and zoom to fill
-        const cs = Object.values(newCentroids)
-        if (cs.length) {
-          const xs = cs.map(c => c.x), ys = cs.map(c => c.y)
+        // Exclude outlier centroids (beyond viewport) from fit calculation
+        const vw2 = config.width || 960, vh2 = config.height || 500
+        const allCs = Object.values(newCentroids)
+        if (allCs.length) {
+          // Filter to centroids within 120% of viewport to exclude outliers like AK/HI
+          const cs = allCs.filter(c => c.x >= -vw2*0.2 && c.x <= vw2*1.2 && c.y >= -vh2*0.2 && c.y <= vh2*1.2)
+          const usableCs = cs.length > 3 ? cs : allCs
+          const xs = usableCs.map(c => c.x), ys = usableCs.map(c => c.y)
           const cx = (Math.min(...xs) + Math.max(...xs)) / 2
           const cy = (Math.min(...ys) + Math.max(...ys)) / 2
           const spanX = Math.max(...xs) - Math.min(...xs)
           const spanY = Math.max(...ys) - Math.min(...ys)
-          const vw2 = config.width || 960, vh2 = config.height || 500
-          const newZoom = Math.min(Math.max(Math.min(vw2 * 0.9 / (spanX||1), vh2 * 0.9 / (spanY||1)), 1), 8)
+          const newZoom = Math.min(Math.max(Math.min(vw2 * 0.85 / (spanX||1), vh2 * 0.85 / (spanY||1)), 1), 8)
           setZoom(newZoom)
           setMinZoom(newZoom)
           setPan({ x: vw2/2 - cx * newZoom, y: vh2/2 - cy * newZoom })
@@ -1364,7 +1362,7 @@ function SubnationalMapDrill({ config, onBack }) {
     const both = regionCorrect && capitalCorrect
     setResult({ regionCorrect, capitalCorrect, data })
     setAttempted(prev => new Set([...prev, selected]))
-    setAttemptResults(prev => ({ ...prev, [selected]: { correct: both, data } }))
+    setAttemptResults(prev => ({ ...prev, [selected]: { correct: both, regionCorrect, capitalCorrect, data } }))
     setScore(prev => ({ correct: prev.correct + (both ? 1 : 0), total: prev.total + 1 }))
   }
 
@@ -1372,10 +1370,8 @@ function SubnationalMapDrill({ config, onBack }) {
     if (!result) return
     const updated = { ...result, [field + 'Correct']: true }
     setResult(updated)
-    if (updated.regionCorrect && updated.capitalCorrect) {
-      setAttemptResults(prev => ({ ...prev, [selected]: { ...prev[selected], correct: true } }))
-      setScore(prev => ({ ...prev, correct: prev.correct + 1 }))
-    }
+    setAttemptResults(prev => ({ ...prev, [selected]: { ...prev[selected], [field + 'Correct']: true, correct: !!(updated.regionCorrect && updated.capitalCorrect) } }))
+    if (updated.regionCorrect && updated.capitalCorrect) setScore(prev => ({ ...prev, correct: prev.correct + 1 }))
   }
 
   function autoSelectNext() {
@@ -1524,7 +1520,7 @@ function SubnationalMapDrill({ config, onBack }) {
               const isAttempted = attempted.has(p.name)
               return (
                 <path key={p.name} d={p.d}
-                  fill={p.name===selected?'#f5c518':isAttempted?'#4caf7d':data?'#1a3070':'#0d1a3a'}
+                  fill={p.name===selected?'#f5c518':isAttempted?'#e0e0e0':data?'#1a3070':'#0d1a3a'}
                   stroke="#0a0f2e" strokeWidth={0.5/zoom}
                   onClick={e => { if(!dragging){e.stopPropagation();handleClick(p.name)} }}
                   style={{ cursor:data&&!isAttempted?'pointer':'default', transition:'fill 0.15s' }}
@@ -1538,8 +1534,8 @@ function SubnationalMapDrill({ config, onBack }) {
             if (!res || !c) return null
             return (
               <g key={`lbl-${p.name}`} style={{ pointerEvents: 'none' }}>
-                <text x={c.x} y={c.y - 4/zoom} textAnchor="middle" fontSize={8/zoom} fill={res.correct ? '#ffffff' : '#ff8a80'} fontWeight="bold" fontFamily="sans-serif">{p.name}</text>
-                <text x={c.x} y={c.y + 6/zoom} textAnchor="middle" fontSize={7/zoom} fill={res.correct ? '#f5c518' : '#ffcdd2'} fontFamily="sans-serif">{res.data.capital}</text>
+                <text x={c.x} y={c.y - 4/zoom} textAnchor="middle" fontSize={8/zoom} fill={res.regionCorrect ? '#4caf7d' : '#e53935'} fontWeight="bold" fontFamily="sans-serif">{p.name}</text>
+                <text x={c.x} y={c.y + 6/zoom} textAnchor="middle" fontSize={7/zoom} fill={res.capitalCorrect ? '#4caf7d' : '#e53935'} fontFamily="sans-serif">{res.data.capital}</text>
               </g>
             )
           })}
@@ -1645,17 +1641,15 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids }) {
     const both = countryCorrect && capitalCorrect
     setResult({ countryCorrect, capitalCorrect, country })
     setAttempted(prev => new Set([...prev, selected]))
-    setAttemptResults(prev => ({ ...prev, [selected]: { correct: both, country } }))
+    setAttemptResults(prev => ({ ...prev, [selected]: { correct: both, countryCorrect, capitalCorrect, country } }))
     setScore(prev => ({ correct: prev.correct + (both ? 1 : 0), total: prev.total + 1 }))
   }
 
   function markItemCorrect(field) {
     const updated = result ? { ...result, [field + 'Correct']: true } : null
     setResult(updated)
-    if (updated?.countryCorrect && updated?.capitalCorrect) {
-      setAttemptResults(prev => ({ ...prev, [selected]: { ...prev[selected], correct: true } }))
-      setScore(prev => ({ ...prev, correct: prev.correct + 1 }))
-    }
+    setAttemptResults(prev => ({ ...prev, [selected]: { ...prev[selected], [field + 'Correct']: true, correct: !!(updated?.countryCorrect && updated?.capitalCorrect) } }))
+    if (updated?.countryCorrect && updated?.capitalCorrect) setScore(prev => ({ ...prev, correct: prev.correct + 1 }))
   }
 
   function autoSelectNext() {
@@ -1784,7 +1778,7 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids }) {
           <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
             {regionPaths.map(p => (
               <path key={p.id} d={p.d}
-                fill={p.id===selected?'#f5c518':attempted.has(p.id)?'#4caf7d':'#1a3070'}
+                fill={p.id===selected?'#f5c518':attempted.has(p.id)?'#e0e0e0':'#1a3070'}
                 stroke="#0a0f2e" strokeWidth={0.5/zoom}
                 onClick={e => { if(!dragging){e.stopPropagation();handleClick(p.id)} }}
                 style={{ cursor:COUNTRY_MAP[p.id]&&!attempted.has(p.id)?'pointer':'default', transition:'fill 0.15s' }}
@@ -1797,8 +1791,8 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids }) {
               if (!res || !c) return null
               return (
                 <g key={`lbl-${p.id}`} style={{ pointerEvents:'none' }}>
-                  <text x={c.x} y={c.y-4/zoom} textAnchor="middle" fontSize={7/zoom} fill={res.correct?'#ffffff':'#ff8a80'} fontWeight="bold" fontFamily="sans-serif">{res.country.name}</text>
-                  <text x={c.x} y={c.y+5/zoom} textAnchor="middle" fontSize={6/zoom} fill={res.correct?'#f5c518':'#ffcdd2'} fontFamily="sans-serif">{res.country.capital}</text>
+                  <text x={c.x} y={c.y-4/zoom} textAnchor="middle" fontSize={7/zoom} fill={res.countryCorrect?'#4caf7d':'#e53935'} fontWeight="bold" fontFamily="sans-serif">{res.country.name}</text>
+                  <text x={c.x} y={c.y+5/zoom} textAnchor="middle" fontSize={6/zoom} fill={res.capitalCorrect?'#4caf7d':'#e53935'} fontFamily="sans-serif">{res.country.capital}</text>
                 </g>
               )
             })}

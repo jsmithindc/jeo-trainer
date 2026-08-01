@@ -12,7 +12,7 @@ import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpi
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 import { DrillsView } from './drills.jsx'
 
-const APP_VERSION = '1.7.8'
+const APP_VERSION = '1.7.9'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -2363,6 +2363,7 @@ function StudyView({ cards, setCards, onBack }) {
   const [customChunk, setCustomChunk] = useState('')
   const [showCustom, setShowCustom] = useState(false)
   const [editingCard, setEditingCard] = useState(null) // card being edited in-session
+  const [confirmDeleteStudy, setConfirmDeleteStudy] = useState(null) // card id pending delete
   const [editFront, setEditFront] = useState('')
   const [editBack, setEditBack] = useState('')
 
@@ -2722,20 +2723,30 @@ function StudyView({ cards, setCards, onBack }) {
             </button>
             <button
               style={{ fontSize: 11, color: '#4060a0', letterSpacing: 1 }}
-              onClick={() => {
-                setCards(prev => prev.filter(c => c.id !== card.id))
-                const nextCard = cardIdx + 1
-                if (nextCard >= currentChunk.length) {
-                  setPhase('chunkdone')
-                } else {
-                  setCardIdx(nextCard)
-                  setFlipped(false)
-                }
-              }}
+              onClick={() => setConfirmDeleteStudy(card.id)}
             >
               🗑 Delete card
             </button>
           </div>
+
+          {/* Delete confirmation */}
+          {confirmDeleteStudy && (
+            <div style={S.overlay} onClick={() => setConfirmDeleteStudy(null)}>
+              <div style={{ ...S.modal, maxWidth: 300 }} onClick={e => e.stopPropagation()}>
+                <div style={{ fontSize: 14, color: '#c0c8e8', marginBottom: 16, textAlign: 'center' }}>Delete this card?</div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button style={{ ...S.markBtn, background: '#5c1a1a', color: '#e07070', border: '1px solid #8c2e2e', flex: 1 }} onClick={() => {
+                    setCards(prev => prev.filter(c => c.id !== confirmDeleteStudy))
+                    setConfirmDeleteStudy(null)
+                    const nextCard = cardIdx + 1
+                    if (nextCard >= currentChunk.length) setPhase('chunkdone')
+                    else { setCardIdx(nextCard); setFlipped(false) }
+                  }}>Delete</button>
+                  <button style={{ ...S.markBtn, background: '#1e2456', color: '#8890d0', border: '1px solid #2e3476', flex: 1 }} onClick={() => setConfirmDeleteStudy(null)}>Cancel</button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Inline edit modal */}
           {editingCard?.id === card.id && (

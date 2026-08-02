@@ -8,11 +8,11 @@ import { supabase, signIn, signUp, resetPassword, signOut, loadRemoteData, saveR
 import { buildCategoryHeatMap, buildValueBreakdown, predictCoryat, exportToApkg, getMetaCategory, META_CATEGORY_NAMES } from './analytics.js'
 import { CardContent, cardIsHtml } from './CardContent.jsx'
 import { getMediaStats, clearAllMedia, getMedia } from './mediaStore.js'
-import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpisodeToCache, getEpisodeFromCache, pinEpisode, unpinEpisode, removeEpisodeFromCache, getCacheStats } from './storage.js'
+import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpisodeToCache, getEpisodeFromCache, pinEpisode, unpinEpisode, removeEpisodeFromCache, getCacheStats, getDailyStats, incrementDailyCards, addToTrash, getTrash, restoreFromTrash } from './storage.js'
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 import { DrillsView } from './drills.jsx'
 
-const APP_VERSION = '1.7.9'
+const APP_VERSION = '1.8.0'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -642,7 +642,8 @@ export default function App() {
   const correctCount = Object.values(clueStates).filter(s => s === CLUE_STATES.CORRECT).length
   const incorrectCount = Object.values(clueStates).filter(s => s === CLUE_STATES.INCORRECT).length
   const passCount = Object.values(clueStates).filter(s => s === CLUE_STATES.PASS).length
-  const dueCount = cards.filter(c => c.dueAt <= Date.now()).length
+  const todayStart = new Date().setHours(0, 0, 0, 0) // midnight today
+  const dueCount = cards.filter(c => c.dueAt <= todayStart + 86400000).length // due by end of today
 
   // ── Save game ─────────────────────────────────────────────────────────────
   function saveGame(fjResult, finalActualScore = null) {
@@ -2364,6 +2365,7 @@ function StudyView({ cards, setCards, onBack }) {
   const [showCustom, setShowCustom] = useState(false)
   const [editingCard, setEditingCard] = useState(null) // card being edited in-session
   const [confirmDeleteStudy, setConfirmDeleteStudy] = useState(null) // card id pending delete
+  const [dailyCards, setDailyCards] = useState(() => getDailyStats().cardsReviewed)
   const [editFront, setEditFront] = useState('')
   const [editBack, setEditBack] = useState('')
 
@@ -2382,7 +2384,8 @@ function StudyView({ cards, setCards, onBack }) {
 
   function getFilteredCards() {
     let filtered = [...cards]
-    if (dueOnly) filtered = filtered.filter(c => c.dueAt <= now)
+    const todayEnd = new Date().setHours(23, 59, 59, 999)
+    if (dueOnly) filtered = filtered.filter(c => c.dueAt <= todayEnd)
     if (strugglingOnly === true) filtered = filtered.filter(c => c.repetitions === 0 || (c.lapses || 0) > 0)
     if (strugglingOnly === 'hard') filtered = filtered.filter(c => c.easeFactor < 2.0 && c.repetitions > 0)
     if (sourceFilter !== 'all') filtered = filtered.filter(c => c.source === sourceFilter)
@@ -2391,7 +2394,8 @@ function StudyView({ cards, setCards, onBack }) {
   }
 
   const matchingCards = getFilteredCards()
-  const dueCount = cards.filter(c => c.dueAt <= now).length
+  const todayEnd = new Date().setHours(23, 59, 59, 999)
+  const dueCount = cards.filter(c => c.dueAt <= todayEnd).length
 
   function getChunkSize() {
     if (showCustom && customChunk) return Math.max(1, parseInt(customChunk) || 20)
@@ -2429,6 +2433,7 @@ function StudyView({ cards, setCards, onBack }) {
     setSessionStats(prev => ({ ...prev, [label]: prev[label] + 1 }))
     setChunkStats(prev => ({ ...prev, [label]: prev[label] + 1 }))
     const nextCard = cardIdx + 1
+    setDailyCards(incrementDailyCards(1))
     if (nextCard >= currentChunk.length) {
       setPhase('chunkdone')
     } else {
@@ -2650,10 +2655,15 @@ function StudyView({ cards, setCards, onBack }) {
     <div style={S.studyWrap}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', maxWidth: 480 }}>
         <button style={{ fontSize: 11, color: '#4060a0', letterSpacing: 1 }} onClick={() => setPhase('configure')}>← Exit</button>
-        <div style={{ fontSize: 11, color: '#8890c0', letterSpacing: 1 }}>
+        <div style={{ fontSize: 11, color: '#8890c0', letterSpacing: 1, textAlign: 'center' }}>
           Session {chunkIdx + 1}/{totalChunks} · Card {cardIdx + 1}/{currentChunk.length}
+          <div style={{ fontSize: 9, color: '#4060a0', letterSpacing: 2, marginTop: 1 }}>TODAY: {dailyCards} REVIEWED</div>
         </div>
-        <div style={{ width: 40 }} />
+        <button
+          style={{ fontSize: 11, color: cardIdx > 0 ? '#4060a0' : '#2a3460', letterSpacing: 1, cursor: cardIdx > 0 ? 'pointer' : 'default' }}
+          onClick={() => { if (cardIdx > 0) { setCardIdx(cardIdx - 1); setFlipped(false) } }}
+          disabled={cardIdx === 0}
+        >Prev ↩</button>
       </div>
       <div style={S.progressOuter}><div style={{ ...S.progressInner, width: `${(cardIdx / currentChunk.length) * 100}%` }} /></div>
       <div style={S.flashCard} onClick={() => setFlipped(!flipped)}>
@@ -2688,7 +2698,7 @@ function StudyView({ cards, setCards, onBack }) {
               <span style={{ fontSize: 9, letterSpacing: 2, color: card.source === 'missed' ? '#e57373' : card.source === 'anki' ? '#4dd0e1' : '#81c784' }}>
                 {card.source === 'missed' ? 'MISSED' : card.source === 'anki' ? 'ANKI' : 'MANUAL'}
               </span>
-              {card.dueAt > now && <span style={{ fontSize: 9, color: '#4060a0', letterSpacing: 1 }}>EARLY</span>}
+              {card.dueAt > new Date().setHours(23, 59, 59, 999) && <span style={{ fontSize: 9, color: '#4060a0', letterSpacing: 1 }}>EARLY</span>}
             </div>
           </div>
         )}
@@ -2736,6 +2746,8 @@ function StudyView({ cards, setCards, onBack }) {
                 <div style={{ fontSize: 14, color: '#c0c8e8', marginBottom: 16, textAlign: 'center' }}>Delete this card?</div>
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button style={{ ...S.markBtn, background: '#5c1a1a', color: '#e07070', border: '1px solid #8c2e2e', flex: 1 }} onClick={() => {
+                    const cardToDelete = cards.find(c => c.id === confirmDeleteStudy)
+                    if (cardToDelete) addToTrash(cardToDelete)
                     setCards(prev => prev.filter(c => c.id !== confirmDeleteStudy))
                     setConfirmDeleteStudy(null)
                     const nextCard = cardIdx + 1
@@ -2845,6 +2857,8 @@ function DeckView({ cards, setCards, user, onBack }) {
   const [newCat, setNewCat] = useState('')
   const [filter, setFilter] = useState('all')
   const [confirmDelete, setConfirmDelete] = useState(null)
+  const [trash, setTrash] = useState(() => getTrash().cards)
+  const [showTrash, setShowTrash] = useState(false)
   const [importing, setImporting] = useState(false)
   const [importResult, setImportResult] = useState(null)
   const [importError, setImportError] = useState(null)
@@ -2856,7 +2870,21 @@ function DeckView({ cards, setCards, user, onBack }) {
     setCards(prev => [...prev, newCard(newFront.trim(), newBack.trim(), newCat.trim())])
     setNewFront(''); setNewBack(''); setNewCat(''); setSubview('list')
   }
-  function deleteCard(id) { setCards(prev => prev.filter(c => c.id !== id)); setConfirmDelete(null) }
+  function deleteCard(id) {
+    const card = cards.find(c => c.id === id)
+    if (card) { addToTrash(card); setTrash(getTrash().cards) }
+    setCards(prev => prev.filter(c => c.id !== id))
+    setConfirmDelete(null)
+  }
+
+  function restoreCard(id) {
+    const card = restoreFromTrash(id)
+    if (card) {
+      const { deletedAt, ...restored } = card
+      setCards(prev => [restored, ...prev])
+      setTrash(getTrash().cards)
+    }
+  }
   function resetCard(id) { setCards(prev => prev.map(c => c.id === id ? { ...c, interval: 0, easeFactor: 2.5, repetitions: 0, dueAt: Date.now(), lastReviewed: null } : c)) }
 
   function startEdit(card) {
@@ -2953,7 +2981,7 @@ function DeckView({ cards, setCards, user, onBack }) {
   const leeches = cards.filter(c => (c.lapses || 0) >= 4)
   const counts = { all: cards.length, due: cards.filter(c => c.dueAt <= now).length, leeches: leeches.length, missed: cards.filter(c => c.source === 'missed').length, manual: cards.filter(c => c.source === 'manual').length, anki: cards.filter(c => c.source === 'anki').length }
   const filtered = cards.filter(c => {
-    if (filter === 'due') { if (!(c.dueAt <= now)) return false }
+    if (filter === 'due') { if (!(c.dueAt <= new Date().setHours(23, 59, 59, 999))) return false }
     else if (filter === 'leeches') { if (!((c.lapses || 0) >= 4)) return false }
     else if (filter === 'missed' || filter === 'manual' || filter === 'anki') { if (c.source !== filter) return false }
     if (searchQuery.trim()) {
@@ -2970,6 +2998,9 @@ function DeckView({ cards, setCards, user, onBack }) {
         <div style={{ display: 'flex', gap: 8, width: '100%' }}>
           <button style={{ ...S.actionBtn, ...(subview === 'add' ? S.actionBtnActive : {}), flex: 1 }} onClick={() => setSubview(subview === 'add' ? 'list' : 'add')}>{subview === 'add' ? '✕ Cancel' : '+ Add Card'}</button>
           <button style={{ ...S.actionBtn, ...(subview === 'import' ? S.actionBtnActive : {}), flex: 1 }} onClick={() => setSubview(subview === 'import' ? 'list' : 'import')}>{subview === 'import' ? '✕ Cancel' : '⬆ Import .apkg'}</button>
+          <button style={{ ...S.actionBtn, ...(showTrash ? S.actionBtnActive : {}), position: 'relative' }} onClick={() => setShowTrash(t => !t)}>
+            🗑{trash.length > 0 && <span style={{ position: 'absolute', top: 2, right: 2, background: '#e57373', borderRadius: '50%', width: 14, height: 14, fontSize: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>{trash.length}</span>}
+          </button>
         </div>
         <div style={{ position: 'relative', width: '100%' }}>
           <input style={{ ...S.input, width: '100%', boxSizing: 'border-box', paddingLeft: 32, paddingRight: searchQuery ? 28 : 12, fontSize: 13 }} type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Search cards..." />
@@ -3052,7 +3083,7 @@ function DeckView({ cards, setCards, user, onBack }) {
         ? <div style={S.emptyDeck}><div style={{ fontSize: 32, marginBottom: 8 }}>🗂</div><div style={{ color: '#6070a0', fontSize: 14, textAlign: 'center' }}>{filter === 'all' ? 'No cards yet.' : `No ${filter} cards.`}</div></div>
         : <div style={S.cardList}>
           {filtered.map(card => {
-            const isDue = card.dueAt <= now
+            const isDue = card.dueAt <= new Date().setHours(23, 59, 59, 999)
             const sc = card.source === 'missed' ? '#e57373' : card.source === 'anki' ? '#4dd0e1' : '#81c784'
             return (
               <div key={card.id} style={{ ...S.cardRow, ...(bulkMode && selectedIds.has(card.id) ? { borderColor: '#f5c518', background: 'rgba(245,197,24,0.05)' } : {}) }} onClick={bulkMode ? () => toggleSelect(card.id) : undefined}>
@@ -3087,6 +3118,30 @@ function DeckView({ cards, setCards, user, onBack }) {
           })}
         </div>
       }
+
+      {showTrash && (
+        <div style={{ background: '#0a0f2e', border: '1px solid #1a2460', borderRadius: 12, padding: 14, marginTop: 8 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <div style={{ fontSize: 10, color: '#4060a0', letterSpacing: 3 }}>RECENTLY DELETED</div>
+            <div style={{ fontSize: 9, color: '#2a3460' }}>Empties at midnight</div>
+          </div>
+          {trash.length === 0
+            ? <div style={{ fontSize: 12, color: '#2a3460', textAlign: 'center', padding: '12px 0' }}>Trash is empty</div>
+            : trash.map(card => (
+              <div key={card.id} style={{ display: 'flex', alignItems: 'center', gap: 8, borderBottom: '1px solid #0d1235', padding: '8px 0' }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12, color: '#c0c8e8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{card.front}</div>
+                  <div style={{ fontSize: 10, color: '#4060a0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{card.back}</div>
+                </div>
+                <button
+                  style={{ fontSize: 11, color: '#4caf7d', border: '1px solid #2e8c50', borderRadius: 6, padding: '3px 10px', background: '#0a1e10', cursor: 'pointer', flexShrink: 0 }}
+                  onClick={() => restoreCard(card.id)}
+                >Restore</button>
+              </div>
+            ))
+          }
+        </div>
+      )}
 
       {confirmDelete && (
         <div style={S.overlay} onClick={() => setConfirmDelete(null)}>

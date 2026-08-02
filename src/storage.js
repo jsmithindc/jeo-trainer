@@ -77,3 +77,53 @@ export function getCacheStats() {
     })).sort((a, b) => b.cachedAt - a.cachedAt),
   }
 }
+
+// ── Daily study stats ─────────────────────────────────────────────────────────
+const DAILY_STATS_KEY = 'jeo-daily-stats'
+
+export function getDailyStats() {
+  try {
+    const data = JSON.parse(localStorage.getItem(DAILY_STATS_KEY) || '{}')
+    const today = new Date().toISOString().slice(0, 10)
+    if (data.date !== today) return { date: today, cardsReviewed: 0 }
+    return data
+  } catch { return { date: new Date().toISOString().slice(0, 10), cardsReviewed: 0 } }
+}
+
+export function incrementDailyCards(n = 1) {
+  const stats = getDailyStats()
+  stats.cardsReviewed = (stats.cardsReviewed || 0) + n
+  localStorage.setItem(DAILY_STATS_KEY, JSON.stringify(stats))
+  return stats.cardsReviewed
+}
+
+// ── Trash bin (deleted cards, emptied daily) ──────────────────────────────────
+const TRASH_KEY = 'jeo-trash'
+
+export function getTrash() {
+  try {
+    const data = JSON.parse(localStorage.getItem(TRASH_KEY) || '{}')
+    const today = new Date().toISOString().slice(0, 10)
+    if (data.date !== today) return { date: today, cards: [] }
+    return data
+  } catch { return { date: new Date().toISOString().slice(0, 10), cards: [] } }
+}
+
+export function addToTrash(card) {
+  const trash = getTrash()
+  trash.cards = [{ ...card, deletedAt: Date.now() }, ...trash.cards].slice(0, 100)
+  localStorage.setItem(TRASH_KEY, JSON.stringify(trash))
+}
+
+export function restoreFromTrash(cardId) {
+  const trash = getTrash()
+  const card = trash.cards.find(c => c.id === cardId)
+  trash.cards = trash.cards.filter(c => c.id !== cardId)
+  localStorage.setItem(TRASH_KEY, JSON.stringify(trash))
+  return card
+}
+
+export function clearTrash() {
+  const today = new Date().toISOString().slice(0, 10)
+  localStorage.setItem(TRASH_KEY, JSON.stringify({ date: today, cards: [] }))
+}

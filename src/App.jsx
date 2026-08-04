@@ -12,7 +12,7 @@ import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpi
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 import { DrillsView } from './drills.jsx'
 
-const APP_VERSION = '1.8.3'
+const APP_VERSION = '1.8.4'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -2500,7 +2500,10 @@ function StudyView({ cards, setCards, onBack }) {
 
       {/* 3-day forecast */}
       {cards.length > 0 && (() => {
+        const todayStart = new Date().setHours(0, 0, 0, 0)
         const todayEnd = new Date().setHours(23, 59, 59, 999)
+        const overdueCount = cards.filter(c => c.dueAt < todayStart).length
+        const dueTodayCount = cards.filter(c => c.dueAt >= todayStart && c.dueAt <= todayEnd).length
         const days = [0, 1, 2].map(offset => {
           const d = new Date()
           d.setDate(d.getDate() + offset)

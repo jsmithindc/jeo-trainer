@@ -12,7 +12,7 @@ import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpi
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 import { DrillsView } from './drills.jsx'
 
-const APP_VERSION = '1.8.2'
+const APP_VERSION = '1.8.3'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -778,6 +778,8 @@ export default function App() {
   return (
     <div style={{ ...S.app, fontSize: largeFont && fontSettings.size ? 17 : undefined, fontWeight: largeFont && fontSettings.weight ? 500 : undefined, lineHeight: largeFont && fontSettings.lineHeight ? 1.5 : undefined }}>
       <Header
+        largeFont={largeFont}
+        onToggleFontPanel={() => setShowFontPanel(p => !p)}
         coryatScore={coryatScore}
         actualScore={actualScore}
         correctCount={correctCount}
@@ -1109,7 +1111,7 @@ export default function App() {
 }
 
 // ─── Header ───────────────────────────────────────────────────────────────────
-function Header({ coryatScore, actualScore, correctCount, incorrectCount, passCount, answeredCount, totalClues, episodeMeta, user, syncing, syncError, onAuthClick }) {
+function Header({ coryatScore, actualScore, correctCount, incorrectCount, passCount, answeredCount, totalClues, episodeMeta, user, syncing, syncError, onAuthClick, largeFont, onToggleFontPanel }) {
   const color = coryatScore >= 0 ? '#f5c518' : '#e74c3c'
   const showActual = actualScore !== 0 || coryatScore !== actualScore
   return (
@@ -1122,7 +1124,7 @@ function Header({ coryatScore, actualScore, correctCount, incorrectCount, passCo
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <div style={{ fontSize: 11, color: '#5060a0', letterSpacing: 1 }}>v{APP_VERSION}</div>
           <button
-            onClick={() => setShowFontPanel(p => !p)}
+            onClick={onToggleFontPanel}
             style={{ fontSize: 9, color: largeFont ? '#f5c518' : '#4060a0', background: 'none', border: `1px solid ${largeFont ? '#f5c518' : '#2a3460'}`, borderRadius: 4, padding: '2px 6px', cursor: 'pointer', letterSpacing: 1 }}
             title="Font settings"
           >Aa</button>

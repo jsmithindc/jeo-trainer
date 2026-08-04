@@ -12,7 +12,7 @@ import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpi
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 import { DrillsView } from './drills.jsx'
 
-const APP_VERSION = '1.8.4'
+const APP_VERSION = '1.8.6'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -2518,33 +2518,26 @@ function StudyView({ cards, setCards, onBack }) {
           const label = offset === 0 ? 'Today' : offset === 1 ? 'Tomorrow' : d.toLocaleDateString('en-US', { weekday: 'short' })
           return { label, count, isToday: offset === 0 }
         })
-        const max = Math.max(...days.map(d => d.count), overdueCount, 1)
+        const totalToday = dueTodayCount + overdueCount
+        const max = Math.max(...days.map(d => d.count), totalToday, 1)
         return (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%', marginBottom: 16 }}>
-            {overdueCount > 0 && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: '#1a0a0a', border: '1px solid #5c1a1a', borderRadius: 10, padding: '8px 12px' }}>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 9, color: '#e57373', letterSpacing: 2 }}>OVERDUE</div>
-                  <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 24, color: '#e57373', lineHeight: 1 }}>{overdueCount}</div>
-                  <div style={{ fontSize: 9, color: '#8c3a3a' }}>card{overdueCount !== 1 ? 's' : ''} past due</div>
-                </div>
-                <div style={{ width: 80, height: 8, background: '#2a1010', borderRadius: 99, overflow: 'hidden' }}>
-                  <div style={{ height: '100%', width: `${overdueCount / max * 100}%`, background: '#e57373', borderRadius: 99 }} />
-                </div>
-              </div>
-            )}
-            <div style={{ display: 'flex', gap: 8, width: '100%' }}>
-              {days.map(({ label, count, isToday }) => (
+          <div style={{ display: 'flex', gap: 8, width: '100%', maxWidth: 480, marginBottom: 16 }}>
+            {days.map(({ label, count, isToday }) => {
+              const displayCount = isToday ? totalToday : count
+              return (
                 <div key={label} style={{ flex: 1, background: '#0a0f2e', border: `1px solid ${isToday ? '#f5c518' : '#1a2460'}`, borderRadius: 10, padding: '10px 8px', textAlign: 'center' }}>
                   <div style={{ fontSize: 9, color: isToday ? '#f5c518' : '#4060a0', letterSpacing: 2, marginBottom: 6 }}>{label.toUpperCase()}</div>
                   <div style={{ height: 36, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', marginBottom: 6 }}>
-                    <div style={{ width: '60%', background: isToday ? '#f5c518' : '#1a3070', borderRadius: 3, height: `${Math.max(count / max * 100, 4)}%`, minHeight: 3 }} />
+                    <div style={{ width: '60%', background: isToday ? '#f5c518' : '#1a3070', borderRadius: 3, height: `${Math.max(displayCount / max * 100, 4)}%`, minHeight: 3 }} />
                   </div>
-                  <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: isToday ? '#f5c518' : '#c0c8e8' }}>{count}</div>
-                  <div style={{ fontSize: 9, color: '#4060a0' }}>card{count !== 1 ? 's' : ''}</div>
+                  <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: isToday ? '#f5c518' : '#c0c8e8' }}>{displayCount}</div>
+                  {isToday && overdueCount > 0
+                    ? <div style={{ fontSize: 9, color: '#e57373' }}>{dueTodayCount} today + {overdueCount} overdue</div>
+                    : <div style={{ fontSize: 9, color: '#4060a0' }}>card{displayCount !== 1 ? 's' : ''}</div>
+                  }
                 </div>
-              ))}
-            </div>
+              )
+            })}
           </div>
         )
       })()}
@@ -3773,8 +3766,8 @@ function ScoreSparkline({ games }) {
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 const S = {
-  app: { fontFamily: "'Barlow Condensed', sans-serif", background: '#060b1a', minHeight: '100dvh', color: '#e8e8f0' },
-  header: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', paddingTop: 'calc(12px + env(safe-area-inset-top))', background: 'linear-gradient(135deg, #0a0f2e 0%, #0f1e6e 100%)', borderBottom: '3px solid #f5c518', boxShadow: '0 4px 20px rgba(245,197,24,0.2)' },
+  app: { fontFamily: "'Barlow Condensed', sans-serif", background: '#060b1a', minHeight: '100dvh', color: '#e8e8f0', display: 'flex', flexDirection: 'column', alignItems: 'center' },
+  header: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', paddingTop: 'calc(12px + env(safe-area-inset-top))', background: 'linear-gradient(135deg, #0a0f2e 0%, #0f1e6e 100%)', borderBottom: '3px solid #f5c518', boxShadow: '0 4px 20px rgba(245,197,24,0.2)', width: '100%', boxSizing: 'border-box' },
   logoMain: { fontFamily: "'Bebas Neue', sans-serif", fontSize: 26, color: '#f5c518', letterSpacing: 4 },
   logoSub: { fontSize: 9, letterSpacing: 3, color: '#8890c0', marginTop: -4 },
   scoreBox: { textAlign: 'center' },
@@ -3788,7 +3781,7 @@ const S = {
   navBtn: { padding: '11px 12px', fontSize: 11, letterSpacing: 1.5, color: '#5060a0', fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 700, borderBottom: '3px solid transparent', whiteSpace: 'nowrap', flex: 1 },
   navActive: { color: '#f5c518', borderBottomColor: '#f5c518' },
 
-  main: { padding: '14px', paddingBottom: 'calc(32px + env(safe-area-inset-bottom))' },
+  main: { padding: '14px', paddingBottom: 'calc(32px + env(safe-area-inset-bottom))', width: '100%', maxWidth: 600, margin: '0 auto', boxSizing: 'border-box' },
 
   board: { display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 3 },
   catHeader: { background: '#0f1e6e', color: '#f5c518', fontFamily: "'Bebas Neue', sans-serif", fontSize: 12, textAlign: 'center', padding: '10px 4px', borderRadius: 4, border: '1px solid #1a2e9e', lineHeight: 1.2 },

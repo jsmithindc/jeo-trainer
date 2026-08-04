@@ -21,7 +21,11 @@ function fuzzyMatch(input, target) {
   const a = normalize(input)
   const b = normalize(target)
   if (a === b) return true
-  // Allow up to 2 edits for strings longer than 5 chars, 1 edit for shorter
+  // Accept if input exactly matches any significant word in target (e.g. last name only)
+  const bWords = b.split(' ').filter(w => w.length >= 4)
+  if (bWords.some(w => w === a)) return true
+  // Require input to be at least 40% the length of target to avoid trivial matches
+  if (a.length < 3 || a.length < b.length * 0.4) return false
   const maxDist = b.length > 8 ? 2 : b.length > 4 ? 1 : 0
   return levenshtein(a, b) <= maxDist
 }
@@ -493,7 +497,7 @@ export function PresidentsDrill({ onBack }) {
         )}
       </div>
       {!revealed
-        ? <button style={S.btn} onClick={checkAnswer}>CHECK</button>
+        ? <button style={S.btn} onClick={() => checkAnswer()}>CHECK</button>
         : <button style={S.btn} onClick={next}>{idx + 1 >= queue.length ? 'SEE RESULTS' : 'NEXT →'}</button>}
     </div>
   )
@@ -938,7 +942,7 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids }) {
                 onKeyDown={e => { if (e.key === 'Enter') checkAnswer() }}
                 placeholder="Capital city..."
               />
-              <button style={S.btn} onClick={checkAnswer}>CHECK</button>
+              <button style={S.btn} onClick={() => checkAnswer()}>CHECK</button>
             </div>
           )}
         </div>
@@ -1562,7 +1566,7 @@ function SubnationalMapDrill({ config, onBack }) {
               <div style={S.subtitle}>IDENTIFY THIS {config.regionLabel.toUpperCase()}</div>
               <input ref={inputRef} style={{ ...S.input, marginTop:8, marginBottom:8 }} value={answer.region} onChange={e => setAnswer(a=>({...a,region:e.target.value}))} placeholder={`${config.regionLabel} name...`} />
               <input style={{ ...S.input, marginBottom:10 }} value={answer.capital} onChange={e => setAnswer(a=>({...a,capital:e.target.value}))} onKeyDown={e => { if(e.key==='Enter') checkAnswer() }} placeholder="Capital city..." />
-              <button style={S.btn} onClick={checkAnswer}>CHECK</button>
+              <button style={S.btn} onClick={() => checkAnswer()}>CHECK</button>
             </div>
           )}
         </div>
@@ -1818,7 +1822,7 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids }) {
               <div style={S.subtitle}>IDENTIFY THIS COUNTRY</div>
               <input ref={inputRef} style={{ ...S.input, marginTop:8, marginBottom:8 }} value={answer.country} onChange={e => setAnswer(a=>({...a,country:e.target.value}))} placeholder="Country name..." />
               <input style={{ ...S.input, marginBottom:10 }} value={answer.capital} onChange={e => setAnswer(a=>({...a,capital:e.target.value}))} onKeyDown={e => { if(e.key==='Enter') checkAnswer() }} placeholder="Capital city..." />
-              <button style={S.btn} onClick={checkAnswer}>CHECK</button>
+              <button style={S.btn} onClick={() => checkAnswer()}>CHECK</button>
             </div>
           )}
         </div>

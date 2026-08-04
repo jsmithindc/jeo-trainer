@@ -1121,11 +1121,6 @@ function Header({ coryatScore, actualScore, correctCount, incorrectCount, passCo
           : <div style={S.logoSub}>CORYAT & FLASHCARDS</div>}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <div style={{ fontSize: 11, color: '#5060a0', letterSpacing: 1 }}>v{APP_VERSION}</div>
-          <button
-            onClick={() => { const v = !largeFont; setLargeFont(v); localStorage.setItem('jeo-large-font', v) }}
-            style={{ fontSize: 9, color: largeFont ? '#f5c518' : '#4060a0', background: 'none', border: `1px solid ${largeFont ? '#f5c518' : '#2a3460'}`, borderRadius: 4, padding: '2px 6px', cursor: 'pointer', letterSpacing: 1 }}
-            title="Toggle large font"
-          >Aa</button>
         </div>
       </div>
       <div style={S.scoreBox}>

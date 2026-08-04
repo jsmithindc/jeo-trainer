@@ -12,7 +12,7 @@ import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpi
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 import { DrillsView } from './drills.jsx'
 
-const APP_VERSION = '1.8.0'
+const APP_VERSION = '1.8.1'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -98,6 +98,17 @@ export default function App() {
   const [resumePrompt, setResumePrompt] = useState(null) // saved game state to restore
   const [pendingOpponentPick, setPendingOpponentPick] = useState(null)
   const [predictionBaseDate, setPredictionBaseDate] = useState(() => localStorage.getItem('jeo-prediction-base') || null)
+  const [fontSettings, setFontSettings] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('jeo-font-settings') || 'null') || { enabled: false, size: true, weight: true, lineHeight: true } }
+    catch { return { enabled: false, size: true, weight: true, lineHeight: true } }
+  })
+  const [showFontPanel, setShowFontPanel] = useState(false)
+  const largeFont = fontSettings.enabled
+  function updateFontSettings(key, val) {
+    const next = { ...fontSettings, [key]: val }
+    setFontSettings(next)
+    localStorage.setItem('jeo-font-settings', JSON.stringify(next))
+  }
   const [showCache, setShowCache] = useState(false)
   const [showCategorySearch, setShowCategorySearch] = useState(false)
 
@@ -765,7 +776,7 @@ export default function App() {
   }
 
   return (
-    <div style={S.app}>
+    <div style={{ ...S.app, fontSize: largeFont && fontSettings.size ? 17 : undefined, fontWeight: largeFont && fontSettings.weight ? 500 : undefined, lineHeight: largeFont && fontSettings.lineHeight ? 1.5 : undefined }}>
       <Header
         coryatScore={coryatScore}
         actualScore={actualScore}
@@ -781,6 +792,26 @@ export default function App() {
         onAuthClick={() => setShowAuth(true)}
       />
       <NavBar view={view} setView={setView} dueCount={dueCount} />
+      {showFontPanel && (
+        <div style={{ background: '#0a0f2e', borderBottom: '1px solid #1a2460', padding: '10px 16px', display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ fontSize: 9, color: '#4060a0', letterSpacing: 2, flexShrink: 0 }}>FONT</div>
+          {[
+            { key: 'enabled', label: 'Large' },
+            { key: 'size', label: 'Size' },
+            { key: 'weight', label: 'Weight' },
+            { key: 'lineHeight', label: 'Spacing' },
+          ].map(({ key, label }) => {
+            const active = key === 'enabled' ? fontSettings.enabled : (fontSettings.enabled && fontSettings[key])
+            const disabled = key !== 'enabled' && !fontSettings.enabled
+            return (
+              <button key={key} onClick={() => updateFontSettings(key, !fontSettings[key])}
+                style={{ fontSize: 10, padding: '3px 10px', borderRadius: 6, border: `1px solid ${active ? '#f5c518' : '#2a3460'}`, background: active ? 'rgba(245,197,24,0.1)' : 'transparent', color: disabled ? '#2a3460' : active ? '#f5c518' : '#6070a0', cursor: disabled ? 'default' : 'pointer', letterSpacing: 1 }}
+              >{label}</button>
+            )
+          })}
+          <button onClick={() => setShowFontPanel(false)} style={{ marginLeft: 'auto', fontSize: 10, color: '#2a3460', background: 'none', border: 'none', cursor: 'pointer' }}>✕</button>
+        </div>
+      )}
 
       <main style={S.main}>
         {view === 'board' && board && (
@@ -812,6 +843,7 @@ export default function App() {
             onToggleTimedMode={() => setTimedMode(m => !m)}
             autoMode={autoMode}
             onToggleAutoMode={() => setAutoMode(m => !m)}
+            largeFont={largeFont}
             tournamentMode={tournamentMode}
             tournamentState={tournamentState}
             boardControl={boardControl}
@@ -1087,7 +1119,14 @@ function Header({ coryatScore, actualScore, correctCount, incorrectCount, passCo
         {episodeMeta
           ? <div style={S.logoSub}>#{episodeMeta.episodeNumber} · {episodeMeta.airDate}</div>
           : <div style={S.logoSub}>CORYAT & FLASHCARDS</div>}
-        <div style={{ fontSize: 11, color: '#5060a0', letterSpacing: 1, marginTop: 2 }}>v{APP_VERSION}</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ fontSize: 11, color: '#5060a0', letterSpacing: 1 }}>v{APP_VERSION}</div>
+          <button
+            onClick={() => { const v = !largeFont; setLargeFont(v); localStorage.setItem('jeo-large-font', v) }}
+            style={{ fontSize: 9, color: largeFont ? '#f5c518' : '#4060a0', background: 'none', border: `1px solid ${largeFont ? '#f5c518' : '#2a3460'}`, borderRadius: 4, padding: '2px 6px', cursor: 'pointer', letterSpacing: 1 }}
+            title="Toggle large font"
+          >Aa</button>
+        </div>
       </div>
       <div style={S.scoreBox}>
         <div style={S.scoreLbl}>CORYAT</div>
@@ -1329,7 +1368,7 @@ function AuthModal({ user, syncError, onClose, onSignOut }) {
 }
 
 // ─── Board View ───────────────────────────────────────────────────────────────
-function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round, hasDouble, onSwitchRound, onBrowse, singleCoryat, doubleCoryat, fjAnswered, onShowFJ, boardLoading, boardError, onLoadEpisode, canGoPrev, canGoNext, onPrev, onNext, timedMode, onToggleTimedMode, autoMode, onToggleAutoMode, tournamentMode, tournamentState, boardControl, coryatScore, onToggleTournament, onShowCache, onShowCategorySearch, gameStarted, previousGame, onShowStartScreen }) {
+function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round, hasDouble, onSwitchRound, onBrowse, singleCoryat, doubleCoryat, fjAnswered, onShowFJ, boardLoading, boardError, onLoadEpisode, canGoPrev, canGoNext, onPrev, onNext, timedMode, onToggleTimedMode, autoMode, onToggleAutoMode, tournamentMode, tournamentState, boardControl, coryatScore, onToggleTournament, onShowCache, onShowCategorySearch, gameStarted, previousGame, onShowStartScreen, largeFont, fontSettings }) {
   const tileBg = { unanswered: '#0f1e6e', correct: '#1a5c2e', incorrect: '#5c1a1a', pass: '#2a2a4a' }
 
   return (
@@ -1454,7 +1493,7 @@ function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round,
 
       <div style={S.board}>
         {board.categories.map((cat, ci) => (
-          <div key={ci} style={S.catHeader}>{cat.name}</div>
+          <div key={ci} style={{ ...S.catHeader, fontSize: largeFont && fontSettings?.size ? 13 : undefined, fontWeight: largeFont && fontSettings?.weight ? 700 : undefined }}>{cat.name}</div>
         ))}
         {board.categories.length < 6 && Array.from({ length: 6 - board.categories.length }).map((_, i) => (
           <div key={`missing-${i}`} style={{ ...S.catHeader, color: '#2a3460', fontStyle: 'italic' }}>UNAVAILABLE</div>
@@ -1476,7 +1515,7 @@ function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round,
               <div key={key} onClick={() => onOpen(ci, ri)} style={{ ...S.tile, background: tileBg[state], cursor: 'pointer', opacity: state !== 'unanswered' ? 0.65 : 1 }}>
                 {state !== 'unanswered'
                   ? <span style={S.tileIcon}>{state === 'correct' ? '✓' : state === 'incorrect' ? '✗' : '—'}</span>
-                  : <span style={S.tileVal}>{clue.isDailyDouble && !tournamentMode && <span style={S.ddTag}>DD</span>}${clue.value.toLocaleString()}</span>}
+                  : <span style={{ ...S.tileVal, fontSize: largeFont && fontSettings?.size ? 18 : undefined, fontWeight: largeFont && fontSettings?.weight ? 600 : undefined }}>{clue.isDailyDouble && !tournamentMode && <span style={S.ddTag}>DD</span>}${clue.value.toLocaleString()}</span>}
               </div>
             )
           })
@@ -2165,7 +2204,7 @@ function TimedClueModal({ clue, category, onMark, onClose }) {
         {clue.isDailyDouble && <div style={S.ddBadge}>⭐ DAILY DOUBLE</div>}
 
         {/* Clue text */}
-        <ClueText text={clue.answer} style={S.modalText} />
+        <ClueText text={clue.answer} style={{ ...S.modalText, fontSize: largeFont && fontSettings?.size ? 22 : undefined, fontWeight: largeFont && fontSettings?.weight ? 600 : undefined, lineHeight: largeFont && fontSettings?.lineHeight ? 1.5 : undefined }} />
 
         {/* Phase-specific controls */}
         {phase === 'reading' && (
@@ -2294,7 +2333,7 @@ function TimedClueModal({ clue, category, onMark, onClose }) {
 }
 
 // ─── Clue Modal ───────────────────────────────────────────────────────────────
-function ClueModal({ clue, category, showAnswer, onReveal, onMark, onClose, isReanswer, previousResult }) {
+function ClueModal({ clue, category, showAnswer, onReveal, onMark, onClose, isReanswer, previousResult, largeFont, fontSettings }) {
   const [skipDeck, setSkipDeck] = useState(false)
   const prevColors = { correct: '#4caf7d', incorrect: '#e57373', pass: '#7986cb' }
   const prevLabels = { correct: '✓ Correct', incorrect: '✗ Wrong', pass: '— Pass' }
@@ -2310,11 +2349,11 @@ function ClueModal({ clue, category, showAnswer, onReveal, onMark, onClose, isRe
             Previously: {prevLabels[previousResult]} — change answer?
           </div>
         )}
-        <ClueText text={clue.answer} style={S.modalText} />
+        <ClueText text={clue.answer} style={{ ...S.modalText, fontSize: largeFont && fontSettings?.size ? 22 : undefined, fontWeight: largeFont && fontSettings?.weight ? 600 : undefined, lineHeight: largeFont && fontSettings?.lineHeight ? 1.5 : undefined }} />
         {!showAnswer
           ? <button style={S.revealBtn} onClick={onReveal}>Reveal Answer</button>
           : <>
-              <div style={S.modalQ}>{clue.question}</div>
+              <div style={{ ...S.modalQ, fontSize: largeFont && fontSettings?.size ? 20 : undefined, fontWeight: largeFont && fontSettings?.weight ? 600 : undefined }}>{clue.question}</div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'center', marginBottom: 8 }}>
                 <button
                   onClick={() => setSkipDeck(s => !s)}
@@ -2453,6 +2492,34 @@ function StudyView({ cards, setCards, onBack }) {
       {onBack && <button style={{ fontSize: 12, color: '#4060a0', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left', marginBottom: 8, display: 'block' }} onClick={onBack}>← Back</button>}
       <div style={S.studyIcon}>🔁</div>
       <div style={S.studyTitle}>STUDY SESSION</div>
+
+      {/* 3-day forecast */}
+      {cards.length > 0 && (() => {
+        const days = [0, 1, 2].map(offset => {
+          const d = new Date()
+          d.setDate(d.getDate() + offset)
+          const start = new Date(d).setHours(0, 0, 0, 0)
+          const end = new Date(d).setHours(23, 59, 59, 999)
+          const count = cards.filter(c => c.dueAt >= start && c.dueAt <= end).length
+          const label = offset === 0 ? 'Today' : offset === 1 ? 'Tomorrow' : d.toLocaleDateString('en-US', { weekday: 'short' })
+          return { label, count, isToday: offset === 0 }
+        })
+        const max = Math.max(...days.map(d => d.count), 1)
+        return (
+          <div style={{ display: 'flex', gap: 8, width: '100%', marginBottom: 16 }}>
+            {days.map(({ label, count, isToday }) => (
+              <div key={label} style={{ flex: 1, background: '#0a0f2e', border: `1px solid ${isToday ? '#f5c518' : '#1a2460'}`, borderRadius: 10, padding: '10px 8px', textAlign: 'center' }}>
+                <div style={{ fontSize: 9, color: isToday ? '#f5c518' : '#4060a0', letterSpacing: 2, marginBottom: 6 }}>{label.toUpperCase()}</div>
+                <div style={{ height: 40, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', marginBottom: 6 }}>
+                  <div style={{ width: '60%', background: isToday ? '#f5c518' : '#1a3070', borderRadius: 3, height: `${Math.max(count / max * 100, 4)}%`, minHeight: 3, transition: 'height 0.3s' }} />
+                </div>
+                <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 22, color: isToday ? '#f5c518' : '#c0c8e8' }}>{count}</div>
+                <div style={{ fontSize: 9, color: '#4060a0' }}>card{count !== 1 ? 's' : ''}</div>
+              </div>
+            ))}
+          </div>
+        )
+      })()}
 
       {cards.length === 0 ? (
         <>

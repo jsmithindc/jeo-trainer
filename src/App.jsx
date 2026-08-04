@@ -12,7 +12,7 @@ import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpi
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 import { DrillsView } from './drills.jsx'
 
-const APP_VERSION = '1.8.1'
+const APP_VERSION = '1.8.2'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -1121,6 +1121,11 @@ function Header({ coryatScore, actualScore, correctCount, incorrectCount, passCo
           : <div style={S.logoSub}>CORYAT & FLASHCARDS</div>}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <div style={{ fontSize: 11, color: '#5060a0', letterSpacing: 1 }}>v{APP_VERSION}</div>
+          <button
+            onClick={() => setShowFontPanel(p => !p)}
+            style={{ fontSize: 9, color: largeFont ? '#f5c518' : '#4060a0', background: 'none', border: `1px solid ${largeFont ? '#f5c518' : '#2a3460'}`, borderRadius: 4, padding: '2px 6px', cursor: 'pointer', letterSpacing: 1 }}
+            title="Font settings"
+          >Aa</button>
         </div>
       </div>
       <div style={S.scoreBox}>
@@ -2404,7 +2409,7 @@ function StudyView({ cards, setCards, onBack }) {
   const [editBack, setEditBack] = useState('')
 
   // Filter state
-  const [dueOnly, setDueOnly] = useState(true)
+  const [dueFilter, setDueFilter] = useState('due') // 'all' | 'due' | 'today' | 'overdue'
   const [sourceFilter, setSourceFilter] = useState('all')
   const [categoryFilter, setCategoryFilter] = useState('all')
   const [strugglingOnly, setStrugglingOnly] = useState(false)
@@ -2418,8 +2423,11 @@ function StudyView({ cards, setCards, onBack }) {
 
   function getFilteredCards() {
     let filtered = [...cards]
-    const todayEnd = new Date().setHours(23, 59, 59, 999)
-    if (dueOnly) filtered = filtered.filter(c => c.dueAt <= todayEnd)
+    const todayStartF = new Date().setHours(0, 0, 0, 0)
+    const todayEndF = new Date().setHours(23, 59, 59, 999)
+    if (dueFilter === 'due') filtered = filtered.filter(c => c.dueAt <= todayEndF)
+    else if (dueFilter === 'today') filtered = filtered.filter(c => c.dueAt >= todayStartF && c.dueAt <= todayEndF)
+    else if (dueFilter === 'overdue') filtered = filtered.filter(c => c.dueAt < todayStartF)
     if (strugglingOnly === true) filtered = filtered.filter(c => c.repetitions === 0 || (c.lapses || 0) > 0)
     if (strugglingOnly === 'hard') filtered = filtered.filter(c => c.easeFactor < 2.0 && c.repetitions > 0)
     if (sourceFilter !== 'all') filtered = filtered.filter(c => c.source === sourceFilter)
@@ -2428,8 +2436,8 @@ function StudyView({ cards, setCards, onBack }) {
   }
 
   const matchingCards = getFilteredCards()
-  const todayEnd = new Date().setHours(23, 59, 59, 999)
-  const dueCount = cards.filter(c => c.dueAt <= todayEnd).length
+  const todayEndSv = new Date().setHours(23, 59, 59, 999)
+  const dueCount = cards.filter(c => c.dueAt <= todayEndSv).length
 
   function getChunkSize() {
     if (showCustom && customChunk) return Math.max(1, parseInt(customChunk) || 20)
@@ -2490,28 +2498,48 @@ function StudyView({ cards, setCards, onBack }) {
 
       {/* 3-day forecast */}
       {cards.length > 0 && (() => {
+        const todayEnd = new Date().setHours(23, 59, 59, 999)
         const days = [0, 1, 2].map(offset => {
           const d = new Date()
           d.setDate(d.getDate() + offset)
-          const start = new Date(d).setHours(0, 0, 0, 0)
           const end = new Date(d).setHours(23, 59, 59, 999)
-          const count = cards.filter(c => c.dueAt >= start && c.dueAt <= end).length
+          // Today includes all overdue cards; future days only count cards due that specific day
+          const count = offset === 0
+            ? cards.filter(c => c.dueAt <= todayEnd).length
+            : cards.filter(c => {
+                const dayStart = new Date(d).setHours(0, 0, 0, 0)
+                return c.dueAt >= dayStart && c.dueAt <= end
+              }).length
           const label = offset === 0 ? 'Today' : offset === 1 ? 'Tomorrow' : d.toLocaleDateString('en-US', { weekday: 'short' })
           return { label, count, isToday: offset === 0 }
         })
-        const max = Math.max(...days.map(d => d.count), 1)
+        const max = Math.max(...days.map(d => d.count), overdueCount, 1)
         return (
-          <div style={{ display: 'flex', gap: 8, width: '100%', marginBottom: 16 }}>
-            {days.map(({ label, count, isToday }) => (
-              <div key={label} style={{ flex: 1, background: '#0a0f2e', border: `1px solid ${isToday ? '#f5c518' : '#1a2460'}`, borderRadius: 10, padding: '10px 8px', textAlign: 'center' }}>
-                <div style={{ fontSize: 9, color: isToday ? '#f5c518' : '#4060a0', letterSpacing: 2, marginBottom: 6 }}>{label.toUpperCase()}</div>
-                <div style={{ height: 40, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', marginBottom: 6 }}>
-                  <div style={{ width: '60%', background: isToday ? '#f5c518' : '#1a3070', borderRadius: 3, height: `${Math.max(count / max * 100, 4)}%`, minHeight: 3, transition: 'height 0.3s' }} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%', marginBottom: 16 }}>
+            {overdueCount > 0 && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: '#1a0a0a', border: '1px solid #5c1a1a', borderRadius: 10, padding: '8px 12px' }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 9, color: '#e57373', letterSpacing: 2 }}>OVERDUE</div>
+                  <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 24, color: '#e57373', lineHeight: 1 }}>{overdueCount}</div>
+                  <div style={{ fontSize: 9, color: '#8c3a3a' }}>card{overdueCount !== 1 ? 's' : ''} past due</div>
                 </div>
-                <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 22, color: isToday ? '#f5c518' : '#c0c8e8' }}>{count}</div>
-                <div style={{ fontSize: 9, color: '#4060a0' }}>card{count !== 1 ? 's' : ''}</div>
+                <div style={{ width: 80, height: 8, background: '#2a1010', borderRadius: 99, overflow: 'hidden' }}>
+                  <div style={{ height: '100%', width: `${overdueCount / max * 100}%`, background: '#e57373', borderRadius: 99 }} />
+                </div>
               </div>
-            ))}
+            )}
+            <div style={{ display: 'flex', gap: 8, width: '100%' }}>
+              {days.map(({ label, count, isToday }) => (
+                <div key={label} style={{ flex: 1, background: '#0a0f2e', border: `1px solid ${isToday ? '#f5c518' : '#1a2460'}`, borderRadius: 10, padding: '10px 8px', textAlign: 'center' }}>
+                  <div style={{ fontSize: 9, color: isToday ? '#f5c518' : '#4060a0', letterSpacing: 2, marginBottom: 6 }}>{label.toUpperCase()}</div>
+                  <div style={{ height: 36, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', marginBottom: 6 }}>
+                    <div style={{ width: '60%', background: isToday ? '#f5c518' : '#1a3070', borderRadius: 3, height: `${Math.max(count / max * 100, 4)}%`, minHeight: 3 }} />
+                  </div>
+                  <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: isToday ? '#f5c518' : '#c0c8e8' }}>{count}</div>
+                  <div style={{ fontSize: 9, color: '#4060a0' }}>card{count !== 1 ? 's' : ''}</div>
+                </div>
+              ))}
+            </div>
           </div>
         )
       })()}
@@ -2560,8 +2588,14 @@ function StudyView({ cards, setCards, onBack }) {
           <div style={S.configRow}>
             <span style={S.configLabel}>CARDS TO INCLUDE</span>
             <div style={S.toggleGroup}>
-              <button style={{ ...S.toggleBtn, ...(dueOnly ? S.toggleActive : {}) }} onClick={() => setDueOnly(true)}>Due Only ({dueCount})</button>
-              <button style={{ ...S.toggleBtn, ...(!dueOnly ? S.toggleActive : {}) }} onClick={() => setDueOnly(false)}>All Cards ({cards.length})</button>
+              {[
+                ['all', `All (${cards.length})`],
+                ['due', `All Due (${dueCount})`],
+                ['today', `Today (${cards.filter(c => { const s=new Date().setHours(0,0,0,0); const e=new Date().setHours(23,59,59,999); return c.dueAt>=s&&c.dueAt<=e }).length})`],
+                ['overdue', `Overdue (${cards.filter(c => c.dueAt < new Date().setHours(0,0,0,0)).length})`],
+              ].map(([v,l]) => (
+                <button key={v} style={{ ...S.toggleBtn, ...(dueFilter === v ? S.toggleActive : {}) }} onClick={() => setDueFilter(v)}>{l}</button>
+              ))}
             </div>
           </div>
           <div style={S.configRow}>
@@ -2612,7 +2646,7 @@ function StudyView({ cards, setCards, onBack }) {
 
           {/* Match count + daily goal + start */}
           <div style={S.configFooter}>
-            {dueOnly && dueCount === 0 && (
+            {dueFilter !== 'all' && dueCount === 0 && (
               <div style={S.nextDueBox}>
                 <div style={S.nextDueLbl}>NEXT CARD DUE</div>
                 <div style={S.nextDueVal}>{formatRelative(Math.min(...cards.map(c => c.dueAt)))}</div>

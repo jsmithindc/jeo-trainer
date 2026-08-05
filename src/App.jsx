@@ -12,7 +12,7 @@ import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpi
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 import { DrillsView } from './drills.jsx'
 
-const APP_VERSION = '1.9.1'
+const APP_VERSION = '1.9.2'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -2800,7 +2800,7 @@ function StudyView({ cards, setCards, onBack }) {
           ? <div style={S.flashInner}>
               <div style={S.flashSide}>CLUE</div>
               {card.image && <img src={card.image} alt="map" style={{ width: '100%', maxHeight: 160, objectFit: 'contain', borderRadius: 8, marginBottom: 8 }} />}
-              <CardContent content={card.front.replace(/^\[Map\] /, '')} isHtml={card.hasMedia || cardIsHtml(card.front)} style={S.flashFrontText} />
+              {!card.image && <CardContent content={card.front.replace(/^\[Map\] /, '')} isHtml={card.hasMedia || cardIsHtml(card.front)} style={S.flashFrontText} />}
               <div style={S.flashHint}>tap to reveal</div>
             </div>
           : <div style={S.flashInner}>
@@ -3191,7 +3191,7 @@ function DeckView({ cards, setCards, user, onBack }) {
                   <CardContent content={card.back} isHtml={card.hasMedia || cardIsHtml(card.back)} style={S.cardRowBack} />
                   <div style={S.cardRowMeta}>
                     {card.category && <span style={S.metaTag}>{card.category}</span>}
-                    <span style={{ ...S.metaTag, color: sc }}>{card.source.toUpperCase()}</span>
+                    <span style={{ ...S.metaTag, color: sc }}>{(card.source || 'drill').toUpperCase()}</span>
                     <span style={{ ...S.metaTag, color: isDue ? '#f5c518' : '#4060a0' }}>{isDue ? 'DUE NOW' : `Due ${formatRelative(card.dueAt)}`}</span>
                     {card.repetitions > 0 && <span style={S.metaTag}>Rep {card.repetitions} · EF {card.easeFactor.toFixed(2)}</span>}
                     {isLeech(card) && <span style={{ ...S.metaTag, color: '#e57373' }}>LEECH ({card.lapses} lapses)</span>}

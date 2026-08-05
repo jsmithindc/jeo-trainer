@@ -1245,6 +1245,7 @@ function GeographyHub({ onBack, onSelect, stats, worldLoading }) {
     { id: 'region-africa', emoji: '🌍', label: 'AFRICA', desc: `${REGIONS.africa.ids.size} countries` },
     { id: 'region-south_america', emoji: '🌎', label: 'SOUTH AMERICA', desc: `${REGIONS.south_america.ids.size} countries` },
     { id: 'region-oceania', emoji: '🌊', label: 'OCEANIA', desc: `${REGIONS.oceania.ids.size} countries` },
+    { id: 'region-central_america', emoji: '🌴', label: 'CENTRAL AMERICA & CARIBBEAN', desc: `${REGIONS.central_america.ids.size} countries` },
     { id: null, isHeader: true, label: '── SUBNATIONAL ──' },
     { id: 'us-states', emoji: '🗺', label: 'US STATES', desc: '50 states & capitals' },
     { id: 'canada', emoji: '🍁', label: 'CANADA', desc: '13 provinces & territories' },
@@ -1312,6 +1313,15 @@ const REGIONS = {
   oceania: {
     label: 'Oceania',
     ids: new Set(['AUS','FJI','KIR','MHL','FSM','NRU','NZL','PLW','PNG','WSM','SLB','TON','TUV','VUT']),
+  },
+  central_america: {
+    label: 'Central America & Caribbean',
+    ids: new Set([
+      // Central America
+      'BLZ','GTM','HND','SLV','NIC','CRI','PAN','MEX',
+      // Caribbean
+      'CUB','JAM','HTI','DOM','PRI','TTO','BRB','LCA','VCT','GRD','ATG','DMA','KNA','BHS',
+    ]),
   },
 }
 

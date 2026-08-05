@@ -12,7 +12,7 @@ import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpi
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 import { DrillsView } from './drills.jsx'
 
-const APP_VERSION = '1.8.6'
+const APP_VERSION = '1.8.8'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -1210,7 +1210,7 @@ function StudyTabView({ cards, setCards, user, dueCount }) {
             {flashcardView === 'deck' && <DeckView cards={cards} setCards={setCards} user={user} onBack={() => setFlashcardView('menu')} />}
           </>
         )}
-        {subTab === 'drills' && <DrillsView />}
+        {subTab === 'drills' && <DrillsView cards={cards} setCards={setCards} />}
       </div>
     </div>
   )
@@ -2799,7 +2799,8 @@ function StudyView({ cards, setCards, onBack }) {
         {!flipped
           ? <div style={S.flashInner}>
               <div style={S.flashSide}>CLUE</div>
-              <CardContent content={card.front} isHtml={card.hasMedia || cardIsHtml(card.front)} style={S.flashFrontText} />
+              {card.image && <img src={card.image} alt="map" style={{ width: '100%', maxHeight: 160, objectFit: 'contain', borderRadius: 8, marginBottom: 8 }} />}
+              <CardContent content={card.front.replace(/^\[Map\] /, '')} isHtml={card.hasMedia || cardIsHtml(card.front)} style={S.flashFrontText} />
               <div style={S.flashHint}>tap to reveal</div>
             </div>
           : <div style={S.flashInner}>
@@ -3766,8 +3767,8 @@ function ScoreSparkline({ games }) {
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 const S = {
-  app: { fontFamily: "'Barlow Condensed', sans-serif", background: '#060b1a', minHeight: '100dvh', color: '#e8e8f0', display: 'flex', flexDirection: 'column', alignItems: 'center' },
-  header: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', paddingTop: 'calc(12px + env(safe-area-inset-top))', background: 'linear-gradient(135deg, #0a0f2e 0%, #0f1e6e 100%)', borderBottom: '3px solid #f5c518', boxShadow: '0 4px 20px rgba(245,197,24,0.2)', width: '100%', boxSizing: 'border-box' },
+  app: { fontFamily: "'Barlow Condensed', sans-serif", background: '#060b1a', minHeight: '100dvh', color: '#e8e8f0' },
+  header: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', paddingTop: 'calc(12px + env(safe-area-inset-top))', background: 'linear-gradient(135deg, #0a0f2e 0%, #0f1e6e 100%)', borderBottom: '3px solid #f5c518', boxShadow: '0 4px 20px rgba(245,197,24,0.2)' },
   logoMain: { fontFamily: "'Bebas Neue', sans-serif", fontSize: 26, color: '#f5c518', letterSpacing: 4 },
   logoSub: { fontSize: 9, letterSpacing: 3, color: '#8890c0', marginTop: -4 },
   scoreBox: { textAlign: 'center' },
@@ -3781,7 +3782,7 @@ const S = {
   navBtn: { padding: '11px 12px', fontSize: 11, letterSpacing: 1.5, color: '#5060a0', fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 700, borderBottom: '3px solid transparent', whiteSpace: 'nowrap', flex: 1 },
   navActive: { color: '#f5c518', borderBottomColor: '#f5c518' },
 
-  main: { padding: '14px', paddingBottom: 'calc(32px + env(safe-area-inset-bottom))', width: '100%', maxWidth: 600, margin: '0 auto', boxSizing: 'border-box' },
+  main: { padding: '14px', paddingBottom: 'calc(32px + env(safe-area-inset-bottom))' },
 
   board: { display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 3 },
   catHeader: { background: '#0f1e6e', color: '#f5c518', fontFamily: "'Bebas Neue', sans-serif", fontSize: 12, textAlign: 'center', padding: '10px 4px', borderRadius: 4, border: '1px solid #1a2e9e', lineHeight: 1.2 },

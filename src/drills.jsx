@@ -1,4 +1,40 @@
 import { useState, useEffect, useRef } from 'react'
+import { saveCards } from './storage.js'
+
+// ─── Generate SVG snapshot of a map region ───────────────────────────────────
+function makeMapSnapshot(targetPath, allPaths, viewPad = 20) {
+  if (!targetPath) return null
+  // Parse path to get bounding box
+  const coords = [...targetPath.d.matchAll(/[ML]([\d.]+),([\d.]+)/g)].map(m => [+m[1], +m[2]])
+  if (!coords.length) return null
+  const xs = coords.map(c => c[0]), ys = coords.map(c => c[1])
+  const minX = Math.min(...xs) - viewPad, maxX = Math.max(...xs) + viewPad
+  const minY = Math.min(...ys) - viewPad, maxY = Math.max(...ys) + viewPad
+  const w = maxX - minX, h = maxY - minY
+  const svgPaths = allPaths.map(p => {
+    const isTarget = p.id === targetPath.id || p.name === targetPath.name
+    return `<path d="${p.d}" fill="${isTarget ? '#4dd0e1' : '#1a3070'}" stroke="#0a0f2e" stroke-width="0.5"/>`
+  }).join('')
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${minX} ${minY} ${w} ${h}" width="300" height="${Math.round(300 * h / w)}"><rect width="960" height="500" fill="#060b1a"/>${svgPaths}</svg>`
+  return 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svg)))
+}
+
+// ─── Make flashcard from missed drill item ───────────────────────────────────
+function makeFlashCard(front, back, category = 'Drill') {
+  return {
+    id: `drill-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    front,
+    back,
+    category,
+    dueAt: Date.now(),
+    interval: 1,
+    easeFactor: 2.5,
+    repetitions: 0,
+    lapses: 0,
+    lastReviewed: null,
+    createdAt: Date.now(),
+  }
+}
 
 // ─── Fuzzy Match ─────────────────────────────────────────────────────────────
 function normalize(s) {
@@ -313,7 +349,7 @@ const S = {
 }
 
 // ─── Presidents Drill ─────────────────────────────────────────────────────────
-export function PresidentsDrill({ onBack }) {
+export function PresidentsDrill({ onBack, cards = [], setCards = () => {} }) {
   const [mode, setMode] = useState('setup') // setup | quiz | results
   const [order, setOrder] = useState('sequential')
   const [prompt, setPrompt] = useState('number') // number → name, or name → number
@@ -448,6 +484,19 @@ export function PresidentsDrill({ onBack }) {
           ))}
         </div>
       </div>
+      {results.some(r => !r.correct) && (
+        <button style={{ ...S.btnSecondary, color: '#4caf7d', borderColor: '#2e8c50' }} onClick={() => {
+          const missed = results.filter(r => !r.correct).map(r => makeFlashCard(
+            `#${r.president.num} · ${r.president.years} · ${r.president.party}`,
+            `#${r.president.num} ${r.president.name} (${r.president.years})`,
+            'US Presidents'
+          ))
+          const existing = new Set(cards.map(c => c.front))
+          const newCards = missed.filter(c => !existing.has(c.front))
+          if (newCards.length) { const updated = [...cards, ...newCards]; setCards(updated); saveCards(updated) }
+          alert(`Added ${newCards.length} card${newCards.length !== 1 ? 's' : ''} to your deck${missed.length - newCards.length > 0 ? ` (${missed.length - newCards.length} already existed)` : ''}`)
+        }}>+ Add missed to deck ({results.filter(r => !r.correct).length})</button>
+      )}
       <button style={S.btn} onClick={() => { setMode('setup') }}>Try Again</button>
       <button style={S.btnSecondary} onClick={onBack}>← Back</button>
     </div>
@@ -478,7 +527,7 @@ export function PresidentsDrill({ onBack }) {
           onChange={e => setAnswer(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') revealed ? next() : checkAnswer() }}
           placeholder={prompt === 'number' ? 'Type president name...' : 'Type number...'}
-          disabled={revealed}
+          readOnly={revealed}
         />
         {revealed && (
           <div style={{ marginTop: 8 }}>
@@ -652,7 +701,7 @@ function LabeledMapReference({ onBack, paths, pathCentroids }) {
 }
 
 // ─── World Map Drill ──────────────────────────────────────────────────────────
-export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids }) {
+export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids, cards = [], setCards = () => {} }) {
   const [geoData, setGeoData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState(null)
@@ -844,6 +893,21 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids }) {
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
           <button style={{ fontSize: 11, color: '#4dd0e1', background: 'none', border: 'none', cursor: 'pointer' }} onClick={() => setShowReference(true)}>📋 Reference</button>
           <div style={{ fontSize: 11, color: '#4060a0', letterSpacing: 2 }}>{score.correct}/{score.total} · {remaining} left</div>
+          {remaining === 0 && Object.entries(attemptResults).some(([,r]) => !r.correct) && (
+            <button style={{ fontSize: 10, color: '#4caf7d', border: '1px solid #2e8c50', borderRadius: 6, padding: '2px 8px', background: '#0a1e10', cursor: 'pointer' }} onClick={() => {
+              const missed = Object.entries(attemptResults).filter(([,r]) => !r.correct).map(([id, r]) => {
+                const p = paths.find(p => p.id === id)
+                const img = p ? makeMapSnapshot(p, paths) : null
+                const card = makeFlashCard(img ? `[Map] ${r.country.name}` : r.country.name, `${r.country.name} · Capital: ${r.country.capital}`, 'Geography')
+                if (img) card.image = img
+                return card
+              })
+              const existing = new Set(cards.map(c => c.front))
+              const newCards = missed.filter(c => !existing.has(c.front))
+              if (newCards.length) { const updated = [...cards, ...newCards]; setCards(updated); saveCards(updated) }
+              alert(`Added ${newCards.length} card${newCards.length !== 1 ? 's' : ''} to your deck`)
+            }}>+ Add missed ({Object.entries(attemptResults).filter(([,r]) => !r.correct).length})</button>
+          )}
         </div>
       </div>
 
@@ -958,7 +1022,7 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids }) {
 }
 
 // ─── Drills Hub ───────────────────────────────────────────────────────────────
-export function DrillsView() {
+export function DrillsView({ cards = [], setCards = () => {} }) {
   const [drill, setDrill] = useState(null)
   const [stats, setStats] = useState(loadDrillStats())
   // Share world map data across world/regional drills to avoid re-fetching
@@ -1005,8 +1069,8 @@ export function DrillsView() {
   }, [])
 
   if (drill === 'knowledge') return <KnowledgeHub onBack={handleBack} onSelect={setDrill} stats={stats} />
-  if (drill === 'presidents') return <PresidentsDrill onBack={() => setDrill('knowledge')} />
-  if (drill && FLASH_DRILLS[drill]) return <FlashDrill drillKey={drill} onBack={() => setDrill('knowledge')} />
+  if (drill === 'presidents') return <PresidentsDrill onBack={() => setDrill('knowledge')} cards={cards} setCards={setCards} />
+  if (drill && FLASH_DRILLS[drill]) return <FlashDrill drillKey={drill} onBack={() => setDrill('knowledge')} cards={cards} setCards={setCards} />
   if (drill === 'geography') return (
     <GeographyHub
       onBack={handleBack}
@@ -1017,9 +1081,9 @@ export function DrillsView() {
   )
   if (drill === 'worldmap') return <WorldMapDrill onBack={() => setDrill('geography')} preloadedPaths={worldPaths} preloadedCentroids={worldCentroids} />
   if (drill?.startsWith('region-')) return <RegionalMapDrill regionKey={drill.replace('region-','')} onBack={() => setDrill('geography')} worldPaths={worldPaths} worldCentroids={worldCentroids} />
-  if (drill === 'us-states') return <SubnationalMapDrill onBack={() => setDrill('geography')} config={{ geojsonUrl:'https://raw.githubusercontent.com/PublicaMundi/MappingAPI/master/data/geojson/us-states.json', data:US_STATES, regionLabel:'State', bounds:[-125,-66,24,50], width:960, height:560 }} />
-  if (drill === 'canada') return <SubnationalMapDrill onBack={() => setDrill('geography')} config={{ geojsonUrl:'https://raw.githubusercontent.com/codeforamerica/click_that_hood/master/public/data/canada.geojson', data:CANADA_PROVINCES, regionLabel:'Province', bounds:[-141,-52,41,84], width:960, height:640 }} />
-  if (drill === 'mexico') return <SubnationalMapDrill onBack={() => setDrill('geography')} config={{ geojsonUrl:'https://raw.githubusercontent.com/codeforamerica/click_that_hood/master/public/data/mexico.geojson', data:MEXICO_STATES, regionLabel:'State', bounds:[-118,-86,14,33], width:960, height:500 }} />
+  if (drill === 'us-states') return <SubnationalMapDrill onBack={() => setDrill('geography')} config={{ geojsonUrl:'https://raw.githubusercontent.com/PublicaMundi/MappingAPI/master/data/geojson/us-states.json', data:US_STATES, regionLabel:'State', bounds:[-125,-66,24,50], width:960, height:560 }} cards={cards} setCards={setCards} />
+  if (drill === 'canada') return <SubnationalMapDrill onBack={() => setDrill('geography')} config={{ geojsonUrl:'https://raw.githubusercontent.com/codeforamerica/click_that_hood/master/public/data/canada.geojson', data:CANADA_PROVINCES, regionLabel:'Province', bounds:[-141,-52,41,84], width:960, height:640 }} cards={cards} setCards={setCards} />
+  if (drill === 'mexico') return <SubnationalMapDrill onBack={() => setDrill('geography')} config={{ geojsonUrl:'https://raw.githubusercontent.com/codeforamerica/click_that_hood/master/public/data/mexico.geojson', data:MEXICO_STATES, regionLabel:'State', bounds:[-118,-86,14,33], width:960, height:500 }} cards={cards} setCards={setCards} />
 
   // Top-level hub
   return (
@@ -1250,7 +1314,7 @@ const MEXICO_STATES = [
 ]
 
 // ─── Generic Sub-national Map ─────────────────────────────────────────────────
-function SubnationalMapDrill({ config, onBack }) {
+function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }) {
   const [paths, setPaths] = useState([])
   const [centroids, setCentroids] = useState({})
   const [loading, setLoading] = useState(true)
@@ -1497,6 +1561,21 @@ function SubnationalMapDrill({ config, onBack }) {
         <div style={{ display:'flex', gap:10, alignItems:'center' }}>
           <button style={{ fontSize:11, color:'#4dd0e1', background:'none', border:'none', cursor:'pointer' }} onClick={() => setShowReference(true)}>📋 Reference</button>
           <div style={{ fontSize:11, color:'#4060a0', letterSpacing:2 }}>{score.correct}/{score.total} · {remaining} left</div>
+          {remaining === 0 && Object.entries(attemptResults).some(([,r]) => !r.correct) && (
+            <button style={{ fontSize:10, color:'#4caf7d', border:'1px solid #2e8c50', borderRadius:6, padding:'2px 8px', background:'#0a1e10', cursor:'pointer' }} onClick={() => {
+              const missed = Object.entries(attemptResults).filter(([,r]) => !r.correct).map(([name, r]) => {
+                const p = paths.find(p => p.name === name)
+                const img = p ? makeMapSnapshot(p, paths) : null
+                const card = makeFlashCard(img ? `[Map] ${name}` : name, `${name} · Capital: ${r.data.capital}`, config.regionLabel === 'State' ? 'US States' : 'Geography')
+                if (img) card.image = img
+                return card
+              })
+              const existing = new Set(cards.map(c => c.front))
+              const newCards = missed.filter(c => !existing.has(c.front))
+              if (newCards.length) { const updated = [...cards, ...newCards]; setCards(updated); saveCards(updated) }
+              alert(`Added ${newCards.length} card${newCards.length !== 1 ? 's' : ''} to your deck`)
+            }}>+ Add missed ({Object.entries(attemptResults).filter(([,r]) => !r.correct).length})</button>
+          )}
         </div>
       </div>
 
@@ -1577,7 +1656,7 @@ function SubnationalMapDrill({ config, onBack }) {
 }
 
 // ─── Regional World Map ───────────────────────────────────────────────────────
-function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids }) {
+function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards = [], setCards = () => {} }) {
   const region = REGIONS[regionKey]
   const [revealed, setRevealed] = useState(new Set())
   const [selected, setSelected] = useState(null)
@@ -1760,6 +1839,21 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids }) {
         <div style={{ display:'flex', gap:10, alignItems:'center' }}>
           <button style={{ fontSize:11, color:'#4dd0e1', background:'none', border:'none', cursor:'pointer' }} onClick={() => setShowReference(true)}>📋 Reference</button>
           <div style={{ fontSize:11, color:'#4060a0', letterSpacing:2 }}>{score.correct}/{score.total} · {remaining} left</div>
+          {remaining === 0 && Object.entries(attemptResults).some(([,r]) => !r.correct) && (
+            <button style={{ fontSize:10, color:'#4caf7d', border:'1px solid #2e8c50', borderRadius:6, padding:'2px 8px', background:'#0a1e10', cursor:'pointer' }} onClick={() => {
+              const missed = Object.entries(attemptResults).filter(([,r]) => !r.correct).map(([id, r]) => {
+                const p = regionPaths.find(p => p.id === id)
+                const img = p ? makeMapSnapshot(p, regionPaths) : null
+                const card = makeFlashCard(img ? `[Map] ${r.country.name}` : r.country.name, `${r.country.name} · Capital: ${r.country.capital}`, 'Geography')
+                if (img) card.image = img
+                return card
+              })
+              const existing = new Set(cards.map(c => c.front))
+              const newCards = missed.filter(c => !existing.has(c.front))
+              if (newCards.length) { const updated = [...cards, ...newCards]; setCards(updated); saveCards(updated) }
+              alert(`Added ${newCards.length} card${newCards.length !== 1 ? 's' : ''} to your deck`)
+            }}>+ Add missed ({Object.entries(attemptResults).filter(([,r]) => !r.correct).length})</button>
+          )}
         </div>
       </div>
       <div style={{ display:'flex', gap:6 }}>
@@ -2326,7 +2420,7 @@ export const FLASH_DRILLS = {
 }
 
 // ─── Flash Drill Component ────────────────────────────────────────────────────
-function FlashDrill({ drillKey, onBack }) {
+function FlashDrill({ drillKey, onBack, cards = [], setCards = () => {} }) {
   const drill = FLASH_DRILLS[drillKey]
   const [mode, setMode] = useState('setup')
   const [selectedMode, setSelectedMode] = useState(drill.modes[0].id)
@@ -2483,6 +2577,21 @@ function FlashDrill({ drillKey, onBack }) {
           ))}
         </div>
       </div>
+      {results.some(r => !r.correct) && (
+        <button style={{ ...S.btnSecondary, color: '#4caf7d', borderColor: '#2e8c50' }} onClick={() => {
+          const missed = results.filter(r => !r.correct).map(r => {
+            const front = r.item[modeConfig.qField] === r.item.image
+              ? `[Image] ${r.item.work || r.item[modeConfig.qField]}`
+              : String(r.item[modeConfig.qField])
+            const back = String(r.expected || r.item[modeConfig.aField] || '')
+            return makeFlashCard(front, back, drill.label)
+          })
+          const existing = new Set(cards.map(c => c.front))
+          const newCards = missed.filter(c => !existing.has(c.front))
+          if (newCards.length) { const updated = [...cards, ...newCards]; setCards(updated); saveCards(updated) }
+          alert(`Added ${newCards.length} card${newCards.length !== 1 ? 's' : ''} to your deck${missed.length - newCards.length > 0 ? ` (${missed.length - newCards.length} already existed)` : ''}`)
+        }}>+ Add missed to deck ({results.filter(r => !r.correct).length})</button>
+      )}
       <button style={S.btn} onClick={() => setMode('setup')}>Try Again</button>
       <button style={S.btnSecondary} onClick={onBack}>← Back</button>
     </div>
@@ -2522,7 +2631,7 @@ function FlashDrill({ drillKey, onBack }) {
           onChange={e => setAnswer(e.target.value)}
           onKeyDown={e => { if(e.key==='Enter' && !revealed) { if(modeConfig.aField === 'work_and_artist' && !answer2) return; checkAnswer() } else if(e.key==='Enter' && revealed) next() }}
           placeholder={modeConfig.aField === 'work_and_artist' ? 'Work title...' : modeConfig.aField === 'ballet_and_composer' ? 'Ballet title...' : modeConfig.aField === 'work_and_author' ? 'Novel/work title...' : 'Your answer...'}
-          disabled={revealed}
+          readOnly={revealed}
         />
         {(modeConfig.aField === 'work_and_artist' || modeConfig.aField === 'ballet_and_composer' || modeConfig.aField === 'work_and_author') && (
           <input
@@ -2531,7 +2640,7 @@ function FlashDrill({ drillKey, onBack }) {
             onChange={e => setAnswer2(e.target.value)}
             onKeyDown={e => { if(e.key==='Enter') revealed?next():checkAnswer() }}
             placeholder={modeConfig.aField === 'ballet_and_composer' ? 'Composer name...' : modeConfig.aField === 'work_and_author' ? 'Author name...' : 'Artist name...'}
-            disabled={revealed}
+            readOnly={revealed}
           />
         )}
         {revealed && (

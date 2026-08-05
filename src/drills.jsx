@@ -2,21 +2,30 @@ import { useState, useEffect, useRef } from 'react'
 import { saveCards } from './storage.js'
 
 // ─── Generate SVG snapshot of a map region ───────────────────────────────────
-function makeMapSnapshot(targetPath, allPaths, viewPad = 20) {
+function makeMapSnapshot(targetPath, allPaths, viewPad = 30) {
   if (!targetPath) return null
-  // Parse path to get bounding box
+  // Get bounding box of target path
   const coords = [...targetPath.d.matchAll(/[ML]([\d.]+),([\d.]+)/g)].map(m => [+m[1], +m[2]])
   if (!coords.length) return null
   const xs = coords.map(c => c[0]), ys = coords.map(c => c[1])
   const minX = Math.min(...xs) - viewPad, maxX = Math.max(...xs) + viewPad
   const minY = Math.min(...ys) - viewPad, maxY = Math.max(...ys) + viewPad
   const w = maxX - minX, h = maxY - minY
-  const svgPaths = allPaths.map(p => {
+  // Only include paths that overlap the viewport (keeps SVG small)
+  const visiblePaths = allPaths.filter(p => {
+    const pCoords = [...p.d.matchAll(/[ML]([\d.]+),([\d.]+)/g)].map(m => [+m[1], +m[2]])
+    if (!pCoords.length) return false
+    const pxs = pCoords.map(c => c[0]), pys = pCoords.map(c => c[1])
+    return Math.min(...pxs) < maxX && Math.max(...pxs) > minX &&
+           Math.min(...pys) < maxY && Math.max(...pys) > minY
+  })
+  const svgPaths = visiblePaths.map(p => {
     const isTarget = p.id === targetPath.id || p.name === targetPath.name
     return `<path d="${p.d}" fill="${isTarget ? '#4dd0e1' : '#1a3070'}" stroke="#0a0f2e" stroke-width="0.5"/>`
   }).join('')
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${minX} ${minY} ${w} ${h}" width="300" height="${Math.round(300 * h / w)}"><rect width="960" height="500" fill="#060b1a"/>${svgPaths}</svg>`
-  return 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svg)))
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${minX} ${minY} ${w} ${h}" width="240" height="${Math.round(240 * h / w)}"><rect width="960" height="500" fill="#060b1a"/>${svgPaths}</svg>`
+  try { return 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svg))) }
+  catch { return null }
 }
 
 // ─── Make flashcard from missed drill item ───────────────────────────────────
@@ -77,8 +86,34 @@ function saveDrillSession(drillId, score, total) {
   const stats = loadDrillStats()
   if (!stats[drillId]) stats[drillId] = []
   stats[drillId].unshift({ score, total, pct: Math.round(score / total * 100), date: new Date().toLocaleDateString() })
-  stats[drillId] = stats[drillId].slice(0, 20) // keep last 20
+  stats[drillId] = stats[drillId].slice(0, 20)
   localStorage.setItem(DRILL_STATS_KEY, JSON.stringify(stats))
+}
+
+const DRILL_MISSES_KEY = 'jeo-drill-misses'
+
+function loadDrillMisses() {
+  try { return JSON.parse(localStorage.getItem(DRILL_MISSES_KEY) || '{}') } catch { return {} }
+}
+
+function saveDrillMisses(drillId, missedKeys) {
+  // Store last 3 quiz miss sets per drill: [{keys: Set→Array, date}]
+  const all = loadDrillMisses()
+  if (!all[drillId]) all[drillId] = []
+  all[drillId].unshift({ keys: missedKeys, date: new Date().toLocaleDateString() })
+  all[drillId] = all[drillId].slice(0, 3)
+  localStorage.setItem(DRILL_MISSES_KEY, JSON.stringify(all))
+}
+
+function getDrillMissCounts(drillId) {
+  // Returns map of key → number of recent quizzes missed (1-3)
+  const all = loadDrillMisses()
+  const sessions = all[drillId] || []
+  const counts = {}
+  sessions.forEach(s => {
+    s.keys.forEach(k => { counts[k] = (counts[k] || 0) + 1 })
+  })
+  return counts
 }
 
 // ─── Presidents Data ──────────────────────────────────────────────────────────
@@ -351,6 +386,7 @@ const S = {
 // ─── Presidents Drill ─────────────────────────────────────────────────────────
 export function PresidentsDrill({ onBack, cards = [], setCards = () => {} }) {
   const [mode, setMode] = useState('setup') // setup | quiz | results
+  const [missCounts, setMissCounts] = useState(() => getDrillMissCounts('presidents'))
   const [order, setOrder] = useState('sequential')
   const [prompt, setPrompt] = useState('number') // number → name, or name → number
   const [queue, setQueue] = useState([])
@@ -401,6 +437,8 @@ export function PresidentsDrill({ onBack, cards = [], setCards = () => {} }) {
     if (idx + 1 >= queue.length) {
       const finalResults = [...results, { correct: results.length < queue.length }]
       saveDrillSession('presidents', results.filter(r => r.correct).length, queue.length)
+      saveDrillMisses('presidents', results.filter(r => !r.correct).map(r => String(r.president.num)))
+      setMissCounts(getDrillMissCounts('presidents'))
       setMode('results')
     } else {
       setIdx(i => i + 1)
@@ -423,7 +461,14 @@ export function PresidentsDrill({ onBack, cards = [], setCards = () => {} }) {
           <div key={p.num} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', borderBottom: i < PRESIDENTS.length - 1 ? '1px solid #0d1235' : 'none', background: i % 2 === 0 ? 'transparent' : '#060b1a' }}>
             <span style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 16, color: '#f5c518', minWidth: 28, textAlign: 'right' }}>{p.num}</span>
             <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 13, color: '#c0c8e8' }}>{p.name}</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <div style={{ fontSize: 13, color: missCounts[String(p.num)] > 0 ? '#ffb3b3' : '#c0c8e8' }}>{p.name}</div>
+                {missCounts[String(p.num)] > 0 && (
+                  <div style={{ display: 'flex', gap: 2 }}>
+                    {[0,1,2].map(i => <div key={i} style={{ width: 6, height: 6, borderRadius: '50%', background: i < missCounts[String(p.num)] ? '#e57373' : '#1a2460' }} />)}
+                  </div>
+                )}
+              </div>
               <div style={{ fontSize: 10, color: '#4060a0' }}>{p.years} · {p.party}</div>
             </div>
           </div>
@@ -493,8 +538,11 @@ export function PresidentsDrill({ onBack, cards = [], setCards = () => {} }) {
           ))
           const existing = new Set(cards.map(c => c.front))
           const newCards = missed.filter(c => !existing.has(c.front))
-          if (newCards.length) { const updated = [...cards, ...newCards]; setCards(updated); saveCards(updated) }
-          alert(`Added ${newCards.length} card${newCards.length !== 1 ? 's' : ''} to your deck${missed.length - newCards.length > 0 ? ` (${missed.length - newCards.length} already existed)` : ''}`)
+          if (newCards.length) {
+            const updated = [...cards, ...newCards]
+            saveCards(updated); setCards(updated)
+            alert(`Added ${newCards.length} card${newCards.length !== 1 ? 's' : ''} to your deck${missed.length - newCards.length > 0 ? ` (${missed.length - newCards.length} already existed)` : ''}`)
+          } else { alert('All missed items already in your deck') }
         }}>+ Add missed to deck ({results.filter(r => !r.correct).length})</button>
       )}
       <button style={S.btn} onClick={() => { setMode('setup') }}>Try Again</button>
@@ -904,8 +952,20 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids, card
               })
               const existing = new Set(cards.map(c => c.front))
               const newCards = missed.filter(c => !existing.has(c.front))
-              if (newCards.length) { const updated = [...cards, ...newCards]; setCards(updated); saveCards(updated) }
-              alert(`Added ${newCards.length} card${newCards.length !== 1 ? 's' : ''} to your deck`)
+              if (newCards.length) {
+                const updated = [...cards, ...newCards]
+                try {
+                  saveCards(updated)
+                  setCards(updated)
+                  alert(`Added ${newCards.length} card${newCards.length !== 1 ? 's' : ''} to your deck`)
+                } catch {
+                  // Try without images if storage quota exceeded
+                  const stripped = newCards.map(c => { const {image, ...rest} = c; return rest })
+                  const updated2 = [...cards, ...stripped]
+                  saveCards(updated2); setCards(updated2)
+                  alert(`Added ${newCards.length} card${newCards.length !== 1 ? 's' : ''} to your deck (without map images - storage full)`)
+                }
+              } else { alert('No new cards to add') }
             }}>+ Add missed ({Object.entries(attemptResults).filter(([,r]) => !r.correct).length})</button>
           )}
         </div>
@@ -1572,8 +1632,20 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
               })
               const existing = new Set(cards.map(c => c.front))
               const newCards = missed.filter(c => !existing.has(c.front))
-              if (newCards.length) { const updated = [...cards, ...newCards]; setCards(updated); saveCards(updated) }
-              alert(`Added ${newCards.length} card${newCards.length !== 1 ? 's' : ''} to your deck`)
+              if (newCards.length) {
+                const updated = [...cards, ...newCards]
+                try {
+                  saveCards(updated)
+                  setCards(updated)
+                  alert(`Added ${newCards.length} card${newCards.length !== 1 ? 's' : ''} to your deck`)
+                } catch {
+                  // Try without images if storage quota exceeded
+                  const stripped = newCards.map(c => { const {image, ...rest} = c; return rest })
+                  const updated2 = [...cards, ...stripped]
+                  saveCards(updated2); setCards(updated2)
+                  alert(`Added ${newCards.length} card${newCards.length !== 1 ? 's' : ''} to your deck (without map images - storage full)`)
+                }
+              } else { alert('No new cards to add') }
             }}>+ Add missed ({Object.entries(attemptResults).filter(([,r]) => !r.correct).length})</button>
           )}
         </div>
@@ -1850,8 +1922,20 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
               })
               const existing = new Set(cards.map(c => c.front))
               const newCards = missed.filter(c => !existing.has(c.front))
-              if (newCards.length) { const updated = [...cards, ...newCards]; setCards(updated); saveCards(updated) }
-              alert(`Added ${newCards.length} card${newCards.length !== 1 ? 's' : ''} to your deck`)
+              if (newCards.length) {
+                const updated = [...cards, ...newCards]
+                try {
+                  saveCards(updated)
+                  setCards(updated)
+                  alert(`Added ${newCards.length} card${newCards.length !== 1 ? 's' : ''} to your deck`)
+                } catch {
+                  // Try without images if storage quota exceeded
+                  const stripped = newCards.map(c => { const {image, ...rest} = c; return rest })
+                  const updated2 = [...cards, ...stripped]
+                  saveCards(updated2); setCards(updated2)
+                  alert(`Added ${newCards.length} card${newCards.length !== 1 ? 's' : ''} to your deck (without map images - storage full)`)
+                }
+              } else { alert('No new cards to add') }
             }}>+ Add missed ({Object.entries(attemptResults).filter(([,r]) => !r.correct).length})</button>
           )}
         </div>
@@ -2448,6 +2532,7 @@ function FlashDrill({ drillKey, onBack, cards = [], setCards = () => {} }) {
   }
 
   const [answer2, setAnswer2] = useState('') // second answer field for image_to_both
+  const [missCounts, setMissCounts] = useState(() => getDrillMissCounts(drillKey))
 
   function checkAnswer(override = false) {
     const item = queue[idx]
@@ -2486,6 +2571,8 @@ function FlashDrill({ drillKey, onBack, cards = [], setCards = () => {} }) {
   function next() {
     if (idx + 1 >= queue.length) {
       saveDrillSession(drillKey, results.filter(r => r.correct).length, queue.length)
+      saveDrillMisses(drillKey, results.filter(r => !r.correct).map(r => String(r.item[modeConfig.qField])))
+      setMissCounts(getDrillMissCounts(drillKey))
       setMode('results')
     } else {
       setIdx(i => i + 1)
@@ -2510,24 +2597,33 @@ function FlashDrill({ drillKey, onBack, cards = [], setCards = () => {} }) {
       </div>
       <input style={S.input} value={listSearch} onChange={e => setListSearch(e.target.value)} placeholder="Search..." />
       <div style={{ ...S.card, padding:0, overflow:'hidden', maxHeight:600, overflowY:'auto' }}>
-        {filteredItems.map((it, i) => (
-          <div key={i} style={{ padding:'8px 14px', borderBottom:i<filteredItems.length-1?'1px solid #0d1235':'none', background:i%2===0?'transparent':'#060b1a', display:'flex', gap:10 }}>
-            {it.image && (
-              <img src={it.image} alt={it.work} style={{ width:64, height:64, objectFit:'contain', borderRadius:6, flexShrink:0, background:'#060b1a' }} onError={e => { e.target.style.display='none' }} />
-            )}
-            <div style={{ flex:1 }}>
-              {Object.entries(it)
-                .filter(([k]) => !k.includes('_prompt') && !k.includes('numStr') && k !== 'image')
-                .map(([k, v]) => (
-                  <div key={k} style={{ display:'flex', gap:8, fontSize:12, marginBottom:2 }}>
-                    <span style={{ color:'#4060a0', minWidth:80, fontSize:10, letterSpacing:1 }}>{k.toUpperCase()}</span>
-                    <span style={{ color:'#c0c8e8' }}>{String(v)}</span>
+        {filteredItems.map((it, i) => {
+          const missKey = String(it[modeConfig.qField])
+          const missCount = missCounts[missKey] || 0
+          return (
+            <div key={i} style={{ padding:'8px 14px', borderBottom:i<filteredItems.length-1?'1px solid #0d1235':'none', background:missCount>0?'rgba(229,115,115,0.06)':i%2===0?'transparent':'#060b1a', display:'flex', gap:10 }}>
+              {it.image && (
+                <img src={it.image} alt={it.work} style={{ width:64, height:64, objectFit:'contain', borderRadius:6, flexShrink:0, background:'#060b1a' }} onError={e => { e.target.style.display='none' }} />
+              )}
+              <div style={{ flex:1 }}>
+                {missCount > 0 && (
+                  <div style={{ display:'flex', gap:2, marginBottom:4 }}>
+                    {[0,1,2].map(j => <div key={j} style={{ width:6, height:6, borderRadius:'50%', background:j<missCount?'#e57373':'#1a2460' }} />)}
                   </div>
-                ))
-              }
+                )}
+                {Object.entries(it)
+                  .filter(([k]) => !k.includes('_prompt') && !k.includes('numStr') && k !== 'image')
+                  .map(([k, v]) => (
+                    <div key={k} style={{ display:'flex', gap:8, fontSize:12, marginBottom:2 }}>
+                      <span style={{ color:'#4060a0', minWidth:80, fontSize:10, letterSpacing:1 }}>{k.toUpperCase()}</span>
+                      <span style={{ color:missCount>0?'#ffb3b3':'#c0c8e8' }}>{String(v)}</span>
+                    </div>
+                  ))
+                }
+              </div>
             </div>
-          </div>
-        ))}
+          )
+        })}
       </div>
     </div>
   )
@@ -2588,8 +2684,11 @@ function FlashDrill({ drillKey, onBack, cards = [], setCards = () => {} }) {
           })
           const existing = new Set(cards.map(c => c.front))
           const newCards = missed.filter(c => !existing.has(c.front))
-          if (newCards.length) { const updated = [...cards, ...newCards]; setCards(updated); saveCards(updated) }
-          alert(`Added ${newCards.length} card${newCards.length !== 1 ? 's' : ''} to your deck${missed.length - newCards.length > 0 ? ` (${missed.length - newCards.length} already existed)` : ''}`)
+          if (newCards.length) {
+            const updated = [...cards, ...newCards]
+            saveCards(updated); setCards(updated)
+            alert(`Added ${newCards.length} card${newCards.length !== 1 ? 's' : ''} to your deck${missed.length - newCards.length > 0 ? ` (${missed.length - newCards.length} already existed)` : ''}`)
+          } else { alert('All missed items already in your deck') }
         }}>+ Add missed to deck ({results.filter(r => !r.correct).length})</button>
       )}
       <button style={S.btn} onClick={() => setMode('setup')}>Try Again</button>

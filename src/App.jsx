@@ -12,7 +12,7 @@ import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpi
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 import { DrillsView } from './drills.jsx'
 
-const APP_VERSION = '1.8.8'
+const APP_VERSION = '1.9.1'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -3074,9 +3074,10 @@ function DeckView({ cards, setCards, user, onBack }) {
   }
 
   const leeches = cards.filter(c => (c.lapses || 0) >= 4)
-  const counts = { all: cards.length, due: cards.filter(c => c.dueAt <= now).length, leeches: leeches.length, missed: cards.filter(c => c.source === 'missed').length, manual: cards.filter(c => c.source === 'manual').length, anki: cards.filter(c => c.source === 'anki').length }
+  const counts = { all: cards.length, due: cards.filter(c => c.dueAt <= now).length, leeches: leeches.length, drills: cards.filter(c => c.id?.startsWith('drill-')).length, missed: cards.filter(c => c.source === 'missed').length, manual: cards.filter(c => c.source === 'manual').length, anki: cards.filter(c => c.source === 'anki').length }
   const filtered = cards.filter(c => {
     if (filter === 'due') { if (!(c.dueAt <= new Date().setHours(23, 59, 59, 999))) return false }
+    if (filter === 'drills') { if (!c.id?.startsWith('drill-')) return false }
     else if (filter === 'leeches') { if (!((c.lapses || 0) >= 4)) return false }
     else if (filter === 'missed' || filter === 'manual' || filter === 'anki') { if (c.source !== filter) return false }
     if (searchQuery.trim()) {
@@ -3158,7 +3159,7 @@ function DeckView({ cards, setCards, user, onBack }) {
       {/* Filter tabs */}
       <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
         <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', flex: 1 }}>
-          {['all','due','leeches','missed','manual','anki'].map(f => (
+          {['all','due','leeches','drills','missed','manual','anki'].map(f => (
             <button key={f} style={{ ...S.filterTab, ...(filter === f ? S.filterTabActive : {}), ...(f === 'leeches' && counts.leeches > 0 ? { color: '#e57373' } : {}) }} onClick={() => setFilter(f)}>
               {f === 'leeches' ? '🐛' : ''}{f.toUpperCase()} ({counts[f]})
             </button>

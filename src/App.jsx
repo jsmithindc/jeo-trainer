@@ -8,11 +8,11 @@ import { supabase, signIn, signUp, resetPassword, signOut, loadRemoteData, saveR
 import { buildCategoryHeatMap, buildValueBreakdown, predictCoryat, exportToApkg, getMetaCategory, META_CATEGORY_NAMES } from './analytics.js'
 import { CardContent, cardIsHtml } from './CardContent.jsx'
 import { getMediaStats, clearAllMedia, getMedia } from './mediaStore.js'
-import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpisodeToCache, getEpisodeFromCache, pinEpisode, unpinEpisode, removeEpisodeFromCache, getCacheStats, getDailyStats, incrementDailyCards, addToTrash, getTrash, restoreFromTrash } from './storage.js'
+import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpisodeToCache, getEpisodeFromCache, pinEpisode, unpinEpisode, removeEpisodeFromCache, getCacheStats, getDailyStats, incrementDailyCards, addToTrash, getTrash, restoreFromTrash, saveDeckSnapshot, getDeckSnapshots, restoreSnapshot } from './storage.js'
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 import { DrillsView } from './drills.jsx'
 
-const APP_VERSION = '1.9.4'
+const APP_VERSION = '1.9.5'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -266,6 +266,7 @@ export default function App() {
   useEffect(() => {
     if (!storageReady) return
     saveCards(cards)
+    if (cards.length > 10) saveDeckSnapshot(cards)
     saveGameHistory(gameHistory)
     if (user) {
       clearTimeout(syncTimeout.current)
@@ -2445,6 +2446,9 @@ function StudyView({ cards, setCards, onBack }) {
   const [editingCard, setEditingCard] = useState(null) // card being edited in-session
   const [confirmDeleteStudy, setConfirmDeleteStudy] = useState(null) // card id pending delete
   const [dailyCards, setDailyCards] = useState(() => getDailyStats().cardsReviewed)
+  // Re-check daily count on each render in case midnight passed
+  const _todayCheck = new Date().toDateString()
+  useEffect(() => { setDailyCards(getDailyStats().cardsReviewed) }, [_todayCheck])
   const [editFront, setEditFront] = useState('')
   const [editBack, setEditBack] = useState('')
 
@@ -2468,7 +2472,8 @@ function StudyView({ cards, setCards, onBack }) {
     if (dueFilter === 'due') filtered = filtered.filter(c => c.dueAt <= todayEndF)
     else if (dueFilter === 'today') filtered = filtered.filter(c => c.dueAt >= todayStartF && c.dueAt <= todayEndF)
     else if (dueFilter === 'overdue') filtered = filtered.filter(c => c.dueAt < todayStartF)
-    if (sourceFilter === 'drills') filtered = filtered.filter(c => c.id?.startsWith('drill-'))
+    const DRILL_CATS = ['US Presidents','US States','Geography','Astronomy','Shakespeare','Famous Authors','Famous Painters','Classical Composers','Famous Ballets','Greek & Latin Roots','US Vice Presidents']
+    if (sourceFilter === 'drills') filtered = filtered.filter(c => c.id?.startsWith('drill-') || DRILL_CATS.some(cat => c.category?.includes(cat)))
     else if (sourceFilter === 'board') filtered = filtered.filter(c => !c.id?.startsWith('drill-') && c.source !== 'manual' && c.source !== 'anki')
     if (strugglingOnly === true) filtered = filtered.filter(c => c.repetitions === 0 || (c.lapses || 0) > 0)
     if (strugglingOnly === 'hard') filtered = filtered.filter(c => c.easeFactor < 2.0 && c.repetitions > 0)
@@ -3064,6 +3069,36 @@ function DeckView({ cards, setCards, user, onBack }) {
     clearSelection()
   }
 
+  function handleJsonExport() {
+    const json = JSON.stringify(cards, null, 2)
+    const blob = new Blob([json], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `jeo-deck-backup-${new Date().toISOString().slice(0,10)}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  function handleJsonImport(e) {
+    const file = e.target.files[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = ev => {
+      try {
+        const imported = JSON.parse(ev.target.result)
+        if (!Array.isArray(imported)) { alert('Invalid backup file'); return }
+        const freshCards = loadCards()
+        const existingIds = new Set(freshCards.map(c => c.id))
+        const newCards = imported.filter(c => !existingIds.has(c.id))
+        const updated = [...freshCards, ...newCards]
+        saveCards(updated); setCards(updated)
+        alert(`Restored ${newCards.length} cards (${imported.length - newCards.length} already existed)`)
+      } catch { alert('Failed to parse backup file') }
+    }
+    reader.readAsText(file)
+  }
+
   async function handleExport() {
     setExporting(true)
     try {
@@ -3139,6 +3174,10 @@ function DeckView({ cards, setCards, user, onBack }) {
           <button style={{ ...S.actionBtn, ...(showTrash ? S.actionBtnActive : {}), position: 'relative' }} onClick={() => setShowTrash(t => !t)}>
             🗑{trash.length > 0 && <span style={{ position: 'absolute', top: 2, right: 2, background: '#e57373', borderRadius: '50%', width: 14, height: 14, fontSize: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>{trash.length}</span>}
           </button>
+          <button style={S.actionBtn} onClick={handleJsonExport} title="Export full deck as JSON backup">💾</button>
+          <label style={{ ...S.actionBtn, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }} title="Restore from JSON backup">
+            📂<input type="file" accept=".json" style={{ display: 'none' }} onChange={handleJsonImport} />
+          </label>
         </div>
         <div style={{ position: 'relative', width: '100%' }}>
           <input style={{ ...S.input, width: '100%', boxSizing: 'border-box', paddingLeft: 32, paddingRight: searchQuery ? 28 : 12, fontSize: 13 }} type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Search cards..." />
@@ -3256,6 +3295,31 @@ function DeckView({ cards, setCards, user, onBack }) {
           })}
         </div>
       }
+
+      {/* Snapshot restore */}
+      {(() => {
+        const snaps = getDeckSnapshots()
+        if (!snaps.length) return null
+        return (
+          <div style={{ background: '#0a0f2e', border: '1px solid #1a2460', borderRadius: 12, padding: '10px 14px', marginTop: 4 }}>
+            <div style={{ fontSize: 9, color: '#4060a0', letterSpacing: 3, marginBottom: 8 }}>DECK SNAPSHOTS</div>
+            {snaps.map((s, i) => (
+              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', borderBottom: i < snaps.length-1 ? '1px solid #0d1235' : 'none' }}>
+                <div>
+                  <div style={{ fontSize: 12, color: '#c0c8e8' }}>{s.date}</div>
+                  <div style={{ fontSize: 10, color: '#4060a0' }}>{s.count} cards</div>
+                </div>
+                <button style={{ fontSize: 11, color: '#f5c518', border: '1px solid #3a3010', borderRadius: 6, padding: '3px 10px', background: '#1a1500', cursor: 'pointer' }}
+                  onClick={() => {
+                    if (!confirm(`Restore ${s.count} cards from ${s.date}? This will overwrite your current deck.`)) return
+                    const restored = restoreSnapshot(i)
+                    if (restored) { setCards(restored); alert(`Restored ${restored.length} cards`) }
+                  }}>Restore</button>
+              </div>
+            ))}
+          </div>
+        )
+      })()}
 
       {showTrash && (
         <div style={{ background: '#0a0f2e', border: '1px solid #1a2460', borderRadius: 12, padding: 14, marginTop: 8 }}>
@@ -3811,10 +3875,10 @@ function ScoreSparkline({ games }) {
 // ─── Styles ───────────────────────────────────────────────────────────────────
 const S = {
   app: { fontFamily: "'Barlow Condensed', sans-serif", background: '#060b1a', minHeight: '100dvh', color: '#e8e8f0' },
-  header: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', paddingTop: 'calc(12px + env(safe-area-inset-top))', background: 'linear-gradient(135deg, #0a0f2e 0%, #0f1e6e 100%)', borderBottom: '3px solid #f5c518', boxShadow: '0 4px 20px rgba(245,197,24,0.2)' },
+  header: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', paddingTop: 'calc(12px + env(safe-area-inset-top))', background: 'linear-gradient(135deg, #0a0f2e 0%, #0f1e6e 100%)', borderBottom: '3px solid #f5c518', boxShadow: '0 4px 20px rgba(245,197,24,0.2)', position: 'relative' },
   logoMain: { fontFamily: "'Bebas Neue', sans-serif", fontSize: 26, color: '#f5c518', letterSpacing: 4 },
   logoSub: { fontSize: 9, letterSpacing: 3, color: '#8890c0', marginTop: -4 },
-  scoreBox: { textAlign: 'center' },
+  scoreBox: { textAlign: 'center', position: 'absolute', left: '50%', transform: 'translateX(-50%)' },
   scoreLbl: { fontSize: 10, letterSpacing: 3, color: '#8890c0' },
   scoreVal: { fontFamily: "'Bebas Neue', sans-serif", fontSize: 38, lineHeight: 1.1 },
   headerStats: { display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 },

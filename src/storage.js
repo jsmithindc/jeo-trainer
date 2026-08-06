@@ -84,7 +84,7 @@ const DAILY_STATS_KEY = 'jeo-daily-stats'
 export function getDailyStats() {
   try {
     const data = JSON.parse(localStorage.getItem(DAILY_STATS_KEY) || '{}')
-    const today = new Date().toISOString().slice(0, 10)
+    const d = new Date(); const today = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
     if (data.date !== today) return { date: today, cardsReviewed: 0 }
     return data
   } catch { return { date: new Date().toISOString().slice(0, 10), cardsReviewed: 0 } }
@@ -103,7 +103,7 @@ const TRASH_KEY = 'jeo-trash'
 export function getTrash() {
   try {
     const data = JSON.parse(localStorage.getItem(TRASH_KEY) || '{}')
-    const today = new Date().toISOString().slice(0, 10)
+    const d = new Date(); const today = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
     if (data.date !== today) return { date: today, cards: [] }
     return data
   } catch { return { date: new Date().toISOString().slice(0, 10), cards: [] } }
@@ -126,4 +126,41 @@ export function restoreFromTrash(cardId) {
 export function clearTrash() {
   const today = new Date().toISOString().slice(0, 10)
   localStorage.setItem(TRASH_KEY, JSON.stringify({ date: today, cards: [] }))
+}
+
+// ── Daily deck snapshot (backup before midnight wipe risk) ───────────────────
+const SNAPSHOT_KEY = 'jeo-deck-snapshot'
+
+export function saveDeckSnapshot(cards) {
+  try {
+    const d = new Date()
+    const date = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+    const existing = JSON.parse(localStorage.getItem(SNAPSHOT_KEY) || '{}')
+    // Keep last 3 daily snapshots
+    const snapshots = existing.snapshots || []
+    // Only save if we don't already have one for today
+    if (snapshots.length && snapshots[0].date === date) {
+      // Update today's snapshot if card count changed significantly
+      if (Math.abs(snapshots[0].count - cards.length) < 5) return
+      snapshots[0] = { date, count: cards.length, cards }
+    } else {
+      snapshots.unshift({ date, count: cards.length, cards })
+    }
+    localStorage.setItem(SNAPSHOT_KEY, JSON.stringify({ snapshots: snapshots.slice(0, 3) }))
+  } catch (e) {
+    console.warn('Snapshot failed:', e.message)
+  }
+}
+
+export function getDeckSnapshots() {
+  try { return JSON.parse(localStorage.getItem(SNAPSHOT_KEY) || '{}').snapshots || [] }
+  catch { return [] }
+}
+
+export function restoreSnapshot(snapshotIndex = 0) {
+  const snapshots = getDeckSnapshots()
+  if (!snapshots[snapshotIndex]) return null
+  const cards = snapshots[snapshotIndex].cards
+  saveCards(cards)
+  return cards
 }

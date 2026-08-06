@@ -597,6 +597,17 @@ export function PresidentsDrill({ onBack, cards = [], setCards = () => {} }) {
       {!revealed
         ? <button style={S.btn} onClick={() => checkAnswer()}>CHECK</button>
         : <button style={S.btn} onClick={next}>{idx + 1 >= queue.length ? 'SEE RESULTS' : 'NEXT →'}</button>}
+      <button style={{ ...S.btnSecondary, fontSize:10, padding:'4px 0', color:'#4caf7d', borderColor:'#2e8c50' }} onClick={() => {
+        const pres = queue[idx]
+        const front = `#${pres.num} · ${pres.years} · ${pres.party}`
+        const back = `#${pres.num} ${pres.name} (${pres.years})`
+        const freshCards = loadCards()
+        if (freshCards.some(c => c.front === front)) { alert('Already in deck'); return }
+        const card = makeFlashCard(front, back, 'US Presidents')
+        const updated = [...freshCards, card]
+        saveCards(updated); setCards(updated)
+        alert(`Added ${pres.name} to deck`)
+      }}>＋ Add this card to deck</button>
     </div>
   )
 }
@@ -2614,7 +2625,7 @@ function FlashDrill({ drillKey, onBack, cards = [], setCards = () => {} }) {
           return (
             <div key={i} style={{ padding:'8px 14px', borderBottom:i<filteredItems.length-1?'1px solid #0d1235':'none', background:missCount>0?'rgba(229,115,115,0.06)':i%2===0?'transparent':'#060b1a', display:'flex', gap:10 }}>
               {it.image && (
-                <img src={it.image} alt={it.work} referrerPolicy="no-referrer" crossOrigin="anonymous" style={{ width:64, height:64, objectFit:'contain', borderRadius:6, flexShrink:0, background:'#060b1a' }} onError={e => { e.target.style.display='none' }} />
+                <img src={it.image} alt={it.work} referrerPolicy="no-referrer" style={{ width:64, height:64, objectFit:'contain', borderRadius:6, flexShrink:0, background:'#060b1a' }} onError={e => { e.target.style.display='none' }} />
               )}
               <div style={{ flex:1 }}>
                 {missCount > 0 && (
@@ -2720,7 +2731,6 @@ function FlashDrill({ drillKey, onBack, cards = [], setCards = () => {} }) {
             src={item.image}
             alt="Identify this artwork"
             referrerPolicy="no-referrer"
-            crossOrigin="anonymous"
             style={{ width:'100%', maxHeight:220, objectFit:'contain', borderRadius:8, marginBottom:12, background:'#0a0f2e' }}
             onError={e => { e.target.style.display='none' }}
           />
@@ -2733,7 +2743,6 @@ function FlashDrill({ drillKey, onBack, cards = [], setCards = () => {} }) {
             src={item.image}
             alt={item.work}
             referrerPolicy="no-referrer"
-            crossOrigin="anonymous"
             style={{ width:'100%', maxHeight:160, objectFit:'contain', borderRadius:8, marginBottom:10, background:'#060b1a' }}
             onError={e => { e.target.style.display='none' }}
           />
@@ -2783,6 +2792,16 @@ function FlashDrill({ drillKey, onBack, cards = [], setCards = () => {} }) {
       {!revealed
         ? <button style={S.btn} onClick={() => checkAnswer()}>CHECK</button>
         : <button style={S.btn} onClick={next}>{idx+1>=queue.length?'SEE RESULTS':'NEXT →'}</button>}
+      <button style={{ ...S.btnSecondary, fontSize:10, padding:'4px 0', color:'#4caf7d', borderColor:'#2e8c50' }} onClick={() => {
+        const front = modeConfig.qField === 'image' ? `[Map] ${item.work || item[modeConfig.qField]}` : String(item[modeConfig.qField])
+        const back = String(item[modeConfig.aField] || item.work_and_artist || '')
+        const freshCards = loadCards()
+        if (freshCards.some(c => c.front === front)) { alert('Already in deck'); return }
+        const card = makeFlashCard(front, back, drill.label)
+        const updated = [...freshCards, card]
+        saveCards(updated); setCards(updated)
+        alert('Added to deck')
+      }}>＋ Add this card to deck</button>
       <button style={S.btnSecondary} onClick={() => setMode('setup')}>← Setup</button>
     </div>
   )

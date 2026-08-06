@@ -1,34 +1,32 @@
-// Image proxy - uses Wikipedia API with fallback search
 export const handler = async (event) => {
   const title = event.queryStringParameters?.title
-  if (!title) return { statusCode: 400, body: 'Missing title' }
+  const directUrl = event.queryStringParameters?.url
+  if (!title && !directUrl) return { statusCode: 400, body: 'Missing title or url' }
 
   const headers = {
     'Access-Control-Allow-Origin': '*',
     'Cache-Control': 'public, max-age=604800',
   }
-
   const ua = 'JeoTrainer/1.0 (jsmithindc@gmail.com)'
 
   try {
-    // Try exact title first
-    let imgUrl = await getWikiImage(title, ua)
+    let imgUrl = directUrl || null
 
-    // If not found, try search
-    if (!imgUrl) {
-      const searchUrl = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(title.replace(/_/g,' '))}&srlimit=1&format=json`
-      const searchRes = await fetch(searchUrl, { headers: { 'User-Agent': ua } })
-      const searchData = await searchRes.json()
-      const firstResult = searchData.query?.search?.[0]?.title
-      if (firstResult) {
-        imgUrl = await getWikiImage(firstResult.replace(/ /g, '_'), ua)
+    if (!imgUrl && title) {
+      imgUrl = await getWikiImage(title, ua)
+      if (!imgUrl) {
+        const searchUrl = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(title.replace(/_/g,' '))}&srlimit=1&format=json`
+        const searchRes = await fetch(searchUrl, { headers: { 'User-Agent': ua } })
+        const searchData = await searchRes.json()
+        const firstResult = searchData.query?.search?.[0]?.title
+        if (firstResult) imgUrl = await getWikiImage(firstResult.replace(/ /g, '_'), ua)
       }
     }
 
-    if (!imgUrl) return { statusCode: 404, headers, body: 'No image found for: ' + title }
+    if (!imgUrl) return { statusCode: 404, headers, body: 'No image found' }
 
     const imgRes = await fetch(imgUrl, { headers: { 'User-Agent': ua } })
-    if (!imgRes.ok) return { statusCode: imgRes.status, headers, body: 'Image fetch failed' }
+    if (!imgRes.ok) return { statusCode: imgRes.status, headers, body: 'Fetch failed: ' + imgRes.status }
 
     const buffer = await imgRes.arrayBuffer()
     const base64 = Buffer.from(buffer).toString('base64')

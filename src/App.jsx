@@ -12,7 +12,7 @@ import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpi
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 import { DrillsView } from './drills.jsx'
 
-const APP_VERSION = '1.9.6'
+const APP_VERSION = '1.9.7'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -3001,6 +3001,8 @@ function DeckView({ cards, setCards, user, onBack }) {
   const [confirmDelete, setConfirmDelete] = useState(null)
   const [trash, setTrash] = useState(() => getTrash().cards)
   const [showTrash, setShowTrash] = useState(false)
+  const [snapshots, setSnapshots] = useState(() => getDeckSnapshots())
+  useEffect(() => { setSnapshots(getDeckSnapshots()) }, [cards.length])
   const [importing, setImporting] = useState(false)
   const [importResult, setImportResult] = useState(null)
   const [importError, setImportError] = useState(null)
@@ -3298,7 +3300,7 @@ function DeckView({ cards, setCards, user, onBack }) {
 
       {/* Snapshot restore */}
       {(() => {
-        const snaps = getDeckSnapshots()
+        const snaps = snapshots
         if (!snaps.length) return null
         return (
           <div style={{ background: '#0a0f2e', border: '1px solid #1a2460', borderRadius: 12, padding: '10px 14px', marginTop: 4 }}>

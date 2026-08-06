@@ -1058,6 +1058,19 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids, card
                 )}
               </div>
               <button style={{ ...S.btn, marginTop: 12, fontSize: 14 }} onClick={() => setSelected(null)}>
+              <button style={{ fontSize:10, color:'#4dd0e1', border:'1px solid #1a4060', borderRadius:6, padding:'3px 10px', background:'#0a1e20', cursor:'pointer', marginTop:6 }} onClick={() => {
+                const country = COUNTRY_MAP[selected]
+                if (!country) return
+                const freshCards = loadCards()
+                const p = paths.find(p2 => p2.id === selected)
+                const img = p ? makeMapSnapshot(p, paths) : null
+                const front = img ? `[Map] ${country.name}` : country.name
+                if (freshCards.some(c => c.front === front)) { alert('Already in deck'); return }
+                const card = makeFlashCard(front, `${country.name} · Capital: ${country.capital}`, 'Geography · World Map')
+                if (img) card.image = img
+                const updated = [...freshCards, card]; saveCards(updated); setCards(updated)
+                alert(`Added ${country.name} to deck`)
+              }}>＋ Add to deck</button>
                 TAP ANOTHER COUNTRY
               </button>
             </div>
@@ -1732,6 +1745,19 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
                 <span style={result.capitalCorrect?S.correct:S.incorrect}>{result.capitalCorrect?'✓':'✗'} Capital: {result.data.capital}</span>
                 {!result.capitalCorrect && <button style={{ fontSize:10, color:'#4caf7d', border:'1px solid #2e8c50', borderRadius:6, padding:'2px 8px', background:'#0a1e10', cursor:'pointer' }} onClick={() => markItemCorrect('capital')}>Mark correct</button>}
               </div>
+              <button style={{ fontSize:10, color:'#4dd0e1', border:'1px solid #1a4060', borderRadius:6, padding:'3px 10px', background:'#0a1e20', cursor:'pointer', marginTop:6 }} onClick={() => {
+                const data = getRegionData(selected)
+                if (!data) return
+                const freshCards = loadCards()
+                const p = paths.find(p2 => p2.name === selected)
+                const img = p ? makeMapSnapshot(p, paths) : null
+                const front = img ? `[Map] ${selected}` : selected
+                if (freshCards.some(c => c.front === front)) { alert('Already in deck'); return }
+                const card = makeFlashCard(front, `${selected} · Capital: ${data.capital}`, config.regionLabel === 'State' ? 'US States' : 'Geography')
+                if (img) card.image = img
+                const updated = [...freshCards, card]; saveCards(updated); setCards(updated)
+                alert(`Added ${selected} to deck`)
+              }}>＋ Add to deck</button>
               <button style={{ ...S.btn, marginTop:12, fontSize:14 }} onClick={() => setSelected(null)}>TAP ANOTHER</button>
             </div>
           ) : (
@@ -2015,6 +2041,19 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
                 <span style={result.capitalCorrect?S.correct:S.incorrect}>{result.capitalCorrect?'✓':'✗'} Capital: {result.country.capital}</span>
                 {!result.capitalCorrect && <button style={{ fontSize:10, color:'#4caf7d', border:'1px solid #2e8c50', borderRadius:6, padding:'2px 8px', background:'#0a1e10', cursor:'pointer' }} onClick={() => markItemCorrect('capital')}>Mark correct</button>}
               </div>
+              <button style={{ fontSize:10, color:'#4dd0e1', border:'1px solid #1a4060', borderRadius:6, padding:'3px 10px', background:'#0a1e20', cursor:'pointer', marginTop:6 }} onClick={() => {
+                const country = COUNTRY_MAP[selected]
+                if (!country) return
+                const freshCards = loadCards()
+                const p = regionPaths.find(p2 => p2.id === selected)
+                const img = p ? makeMapSnapshot(p, regionPaths) : null
+                const front = img ? `[Map] ${country.name}` : country.name
+                if (freshCards.some(c => c.front === front)) { alert('Already in deck'); return }
+                const card = makeFlashCard(front, `${country.name} · Capital: ${country.capital}`, `Geography · ${region.label}`)
+                if (img) card.image = img
+                const updated = [...freshCards, card]; saveCards(updated); setCards(updated)
+                alert(`Added ${country.name} to deck`)
+              }}>＋ Add to deck</button>
               <button style={{ ...S.btn, marginTop:12, fontSize:14 }} onClick={() => setSelected(null)}>TAP ANOTHER</button>
             </div>
           ) : (
@@ -2725,6 +2764,7 @@ function FlashDrill({ drillKey, onBack, cards = [], setCards = () => {} }) {
       <div style={S.progress}>{idx+1} / {queue.length} · {score} correct</div>
       <div style={S.card}>
         <div style={{ fontSize:10, color:'#4060a0', letterSpacing:2, marginBottom:8 }}>{modeConfig.prompt.toUpperCase()}</div>
+        <div style={{ fontSize:9, color:'#e57373', marginBottom:4 }}>qField={modeConfig.qField} hasImage={String(!!item.image)} imgLen={item.image?.length||0}</div>
         {/* Image mode: show image as the question */}
         {modeConfig.qField === 'image' && item.image ? (
           <img
@@ -2732,7 +2772,7 @@ function FlashDrill({ drillKey, onBack, cards = [], setCards = () => {} }) {
             alt="Identify this artwork"
             referrerPolicy="no-referrer"
             style={{ width:'100%', maxHeight:220, objectFit:'contain', borderRadius:8, marginBottom:12, background:'#0a0f2e' }}
-            onError={e => { e.target.style.display='none' }}
+            onError={e => { e.target.alt='⚠ Image failed to load: ' + item.image.slice(0,60); e.target.style.fontSize='10px'; e.target.style.color='#e57373'; e.target.style.background='#1a0a0a'; e.target.style.padding='8px'; e.target.style.display='block'; e.target.style.wordBreak='break-all' }}
           />
         ) : (
           <div style={{ fontSize:15, color:'#c0c8e8', lineHeight:1.5, marginBottom:12 }}>{item[modeConfig.qField]}</div>

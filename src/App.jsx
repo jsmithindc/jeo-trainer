@@ -12,7 +12,7 @@ import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpi
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 import { DrillsView } from './drills.jsx'
 
-const APP_VERSION = '1.9.5'
+const APP_VERSION = '1.9.6'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -2475,9 +2475,9 @@ function StudyView({ cards, setCards, onBack }) {
     const DRILL_CATS = ['US Presidents','US States','Geography','Astronomy','Shakespeare','Famous Authors','Famous Painters','Classical Composers','Famous Ballets','Greek & Latin Roots','US Vice Presidents']
     if (sourceFilter === 'drills') filtered = filtered.filter(c => c.id?.startsWith('drill-') || DRILL_CATS.some(cat => c.category?.includes(cat)))
     else if (sourceFilter === 'board') filtered = filtered.filter(c => !c.id?.startsWith('drill-') && c.source !== 'manual' && c.source !== 'anki')
+    else if (sourceFilter !== 'all') filtered = filtered.filter(c => c.source === sourceFilter)
     if (strugglingOnly === true) filtered = filtered.filter(c => c.repetitions === 0 || (c.lapses || 0) > 0)
     if (strugglingOnly === 'hard') filtered = filtered.filter(c => c.easeFactor < 2.0 && c.repetitions > 0)
-    if (sourceFilter !== 'all') filtered = filtered.filter(c => c.source === sourceFilter)
     if (categoryFilter !== 'all') filtered = filtered.filter(c => getMetaCategory(c.category?.split(' · ')[0] || c.category || '') === categoryFilter)
     return filtered
   }

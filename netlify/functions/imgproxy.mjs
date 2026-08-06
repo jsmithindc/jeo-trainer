@@ -5,12 +5,12 @@ export const handler = async (event) => {
   }
   try {
     const res = await fetch(target, {
-      headers: { 'User-Agent': 'JeoTrainer/1.0 (https://jeotrainer.netlify.app)' }
+      headers: { 'User-Agent': 'JeoTrainer/1.0 (https://jeotrainer.netlify.app; jsmithindc@gmail.com)' }
     })
     const buffer = await res.arrayBuffer()
     const base64 = Buffer.from(buffer).toString('base64')
     return {
-      statusCode: 200,
+      statusCode: res.status,
       isBase64Encoded: true,
       headers: {
         'Content-Type': res.headers.get('content-type') || 'image/jpeg',

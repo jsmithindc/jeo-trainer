@@ -12,7 +12,7 @@ import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpi
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 import { DrillsView } from './drills.jsx'
 
-const APP_VERSION = '1.9.3'
+const APP_VERSION = '1.9.4'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -318,12 +318,34 @@ export default function App() {
     if (user) saveGameStateRemote(state).catch(console.error)
   }
 
-  function loadRandomUnplayed() {
+  async function loadRandomUnplayed() {
     const playedIds = new Set(gameHistory.map(g => String(g.gameId)).filter(Boolean))
-    const unplayed = episodeList.filter(ep => !playedIds.has(String(ep.gameId)))
-    const pool = unplayed.length > 0 ? unplayed : episodeList // fallback to all if all played
-    const pick = pool[Math.floor(Math.random() * pool.length)]
-    if (pick) loadEpisode(pick.gameId)
+    try {
+      // Fetch all seasons to pick from the full archive
+      const res = await fetch('/.netlify/functions/episodes')
+      const data = await res.json()
+      const allSeasons = data.seasons || []
+      if (!allSeasons.length) {
+        // Fallback to current episodeList
+        const pool = episodeList.filter(ep => !playedIds.has(String(ep.gameId)))
+        const pick = (pool.length ? pool : episodeList)[Math.floor(Math.random() * (pool.length || episodeList.length))]
+        if (pick) loadEpisode(pick.gameId)
+        return
+      }
+      // Pick a random season, then a random episode from it
+      const randomSeason = allSeasons[Math.floor(Math.random() * allSeasons.length)]
+      const res2 = await fetch(`/.netlify/functions/episodes?season=${randomSeason.id}`)
+      const data2 = await res2.json()
+      const eps = data2.episodes || []
+      const unplayed = eps.filter(ep => !playedIds.has(String(ep.gameId)))
+      const pool = unplayed.length > 0 ? unplayed : eps
+      const pick = pool[Math.floor(Math.random() * pool.length)]
+      if (pick) loadEpisode(pick.gameId)
+    } catch {
+      // Fallback to episodeList
+      const pick = episodeList[Math.floor(Math.random() * episodeList.length)]
+      if (pick) loadEpisode(pick.gameId)
+    }
   }
 
   async function loadEpisode(gameId, silent = false) {

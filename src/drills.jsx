@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { saveCards } from './storage.js'
+import { saveCards, loadCards } from './storage.js'
 
 // ─── Generate SVG snapshot of a map region ───────────────────────────────────
 function makeMapSnapshot(targetPath, allPaths, viewPad = 30) {
@@ -536,10 +536,11 @@ export function PresidentsDrill({ onBack, cards = [], setCards = () => {} }) {
             `#${r.president.num} ${r.president.name} (${r.president.years})`,
             'US Presidents'
           ))
-          const existing = new Set(cards.map(c => c.front))
+          const freshCards = loadCards()
+          const existing = new Set(freshCards.map(c => c.front))
           const newCards = missed.filter(c => !existing.has(c.front))
           if (newCards.length) {
-            const updated = [...cards, ...newCards]
+            const updated = [...freshCards, ...newCards]
             saveCards(updated); setCards(updated)
             alert(`Added ${newCards.length} card${newCards.length !== 1 ? 's' : ''} to your deck${missed.length - newCards.length > 0 ? ` (${missed.length - newCards.length} already existed)` : ''}`)
           } else { alert('All missed items already in your deck') }
@@ -950,18 +951,18 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids, card
                 if (img) card.image = img
                 return card
               })
-              const existing = new Set(cards.map(c => c.front))
+              const freshCards = loadCards()
+              const existing = new Set(freshCards.map(c => c.front))
               const newCards = missed.filter(c => !existing.has(c.front))
               if (newCards.length) {
-                const updated = [...cards, ...newCards]
+                const updated = [...freshCards, ...newCards]
                 try {
                   saveCards(updated)
                   setCards(updated)
                   alert(`Added ${newCards.length} card${newCards.length !== 1 ? 's' : ''} to your deck`)
                 } catch {
-                  // Try without images if storage quota exceeded
                   const stripped = newCards.map(c => { const {image, ...rest} = c; return rest })
-                  const updated2 = [...cards, ...stripped]
+                  const updated2 = [...freshCards, ...stripped]
                   saveCards(updated2); setCards(updated2)
                   alert(`Added ${newCards.length} card${newCards.length !== 1 ? 's' : ''} to your deck (without map images - storage full)`)
                 }
@@ -1640,18 +1641,18 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
                 if (img) card.image = img
                 return card
               })
-              const existing = new Set(cards.map(c => c.front))
+              const freshCards = loadCards()
+              const existing = new Set(freshCards.map(c => c.front))
               const newCards = missed.filter(c => !existing.has(c.front))
               if (newCards.length) {
-                const updated = [...cards, ...newCards]
+                const updated = [...freshCards, ...newCards]
                 try {
                   saveCards(updated)
                   setCards(updated)
                   alert(`Added ${newCards.length} card${newCards.length !== 1 ? 's' : ''} to your deck`)
                 } catch {
-                  // Try without images if storage quota exceeded
                   const stripped = newCards.map(c => { const {image, ...rest} = c; return rest })
-                  const updated2 = [...cards, ...stripped]
+                  const updated2 = [...freshCards, ...stripped]
                   saveCards(updated2); setCards(updated2)
                   alert(`Added ${newCards.length} card${newCards.length !== 1 ? 's' : ''} to your deck (without map images - storage full)`)
                 }
@@ -1930,18 +1931,18 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
                 if (img) card.image = img
                 return card
               })
-              const existing = new Set(cards.map(c => c.front))
+              const freshCards = loadCards()
+              const existing = new Set(freshCards.map(c => c.front))
               const newCards = missed.filter(c => !existing.has(c.front))
               if (newCards.length) {
-                const updated = [...cards, ...newCards]
+                const updated = [...freshCards, ...newCards]
                 try {
                   saveCards(updated)
                   setCards(updated)
                   alert(`Added ${newCards.length} card${newCards.length !== 1 ? 's' : ''} to your deck`)
                 } catch {
-                  // Try without images if storage quota exceeded
                   const stripped = newCards.map(c => { const {image, ...rest} = c; return rest })
-                  const updated2 = [...cards, ...stripped]
+                  const updated2 = [...freshCards, ...stripped]
                   saveCards(updated2); setCards(updated2)
                   alert(`Added ${newCards.length} card${newCards.length !== 1 ? 's' : ''} to your deck (without map images - storage full)`)
                 }
@@ -2692,10 +2693,11 @@ function FlashDrill({ drillKey, onBack, cards = [], setCards = () => {} }) {
             const back = String(r.expected || r.item[modeConfig.aField] || '')
             return makeFlashCard(front, back, drill.label)
           })
-          const existing = new Set(cards.map(c => c.front))
+          const freshCards = loadCards()
+          const existing = new Set(freshCards.map(c => c.front))
           const newCards = missed.filter(c => !existing.has(c.front))
           if (newCards.length) {
-            const updated = [...cards, ...newCards]
+            const updated = [...freshCards, ...newCards]
             saveCards(updated); setCards(updated)
             alert(`Added ${newCards.length} card${newCards.length !== 1 ? 's' : ''} to your deck${missed.length - newCards.length > 0 ? ` (${missed.length - newCards.length} already existed)` : ''}`)
           } else { alert('All missed items already in your deck') }

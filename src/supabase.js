@@ -77,13 +77,22 @@ export async function saveRemoteData(cards, gameHistory) {
 
 export function mergeData(local, remote, remoteUpdatedAt = null) {
   // Strategy: remote is authoritative for deletions.
-  // We only add local cards that were created AFTER the last remote sync,
-  // meaning they haven't been pushed yet. Cards deleted remotely stay deleted.
+  // Exception: if local has significantly more cards than remote, local wins outright
+  // (handles the case where remote was accidentally wiped)
+  if (local.cards.length > remote.cards.length * 2 && local.cards.length > remote.cards.length + 50) {
+    // Local has way more cards — treat local as authoritative, just merge in any remote-only cards
+    const localIds = new Set(local.cards.map(c => c.id))
+    const remoteOnlyCards = remote.cards.filter(c => !localIds.has(c.id))
+    const cards = [...local.cards, ...remoteOnlyCards]
+    const remoteGameIds = new Set(remote.gameHistory.map(g => g.id))
+    const localGameIds = new Set(local.gameHistory.map(g => g.id))
+    const gameHistory = [...local.gameHistory, ...remote.gameHistory.filter(g => !localGameIds.has(g.id))]
+      .sort((a, b) => new Date(b.playedAt) - new Date(a.playedAt))
+    return { cards, gameHistory }
+  }
 
   const remoteCardIds = new Set(remote.cards.map(c => c.id))
 
-  // Only add local cards that don't exist remotely AND were created after
-  // the last remote sync (so they're genuinely new, not just deleted remotely)
   const syncCutoff = remoteUpdatedAt ? new Date(remoteUpdatedAt).getTime() : 0
   const localOnlyCards = local.cards.filter(c =>
     !remoteCardIds.has(c.id) &&

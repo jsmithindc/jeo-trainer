@@ -946,7 +946,7 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids, card
               const missed = Object.entries(attemptResults).filter(([,r]) => !r.correct).map(([id, r]) => {
                 const p = paths.find(p => p.id === id)
                 const img = p ? makeMapSnapshot(p, paths) : null
-                const card = makeFlashCard(img ? `[Map] ${r.country.name}` : r.country.name, `${r.country.name} · Capital: ${r.country.capital}`, 'Geography')
+                const card = makeFlashCard(img ? `[Map] ${r.country.name}` : r.country.name, `${r.country.name} · Capital: ${r.country.capital}`, 'Geography · World Map')
                 if (img) card.image = img
                 return card
               })
@@ -1636,7 +1636,7 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
               const missed = Object.entries(attemptResults).filter(([,r]) => !r.correct).map(([name, r]) => {
                 const p = paths.find(p => p.name === name)
                 const img = p ? makeMapSnapshot(p, paths) : null
-                const card = makeFlashCard(img ? `[Map] ${name}` : name, `${name} · Capital: ${r.data.capital}`, config.regionLabel === 'State' ? 'US States' : 'Geography')
+                const card = makeFlashCard(img ? `[Map] ${name}` : name, `${name} · Capital: ${r.data.capital}`, config.regionLabel === 'State' ? 'US States' : `Geography · ${config.regionLabel}`)
                 if (img) card.image = img
                 return card
               })
@@ -1926,7 +1926,7 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
               const missed = Object.entries(attemptResults).filter(([,r]) => !r.correct).map(([id, r]) => {
                 const p = regionPaths.find(p => p.id === id)
                 const img = p ? makeMapSnapshot(p, regionPaths) : null
-                const card = makeFlashCard(img ? `[Map] ${r.country.name}` : r.country.name, `${r.country.name} · Capital: ${r.country.capital}`, 'Geography')
+                const card = makeFlashCard(img ? `[Map] ${r.country.name}` : r.country.name, `${r.country.name} · Capital: ${r.country.capital}`, `Geography · ${region.label}`)
                 if (img) card.image = img
                 return card
               })
@@ -2613,7 +2613,7 @@ function FlashDrill({ drillKey, onBack, cards = [], setCards = () => {} }) {
           return (
             <div key={i} style={{ padding:'8px 14px', borderBottom:i<filteredItems.length-1?'1px solid #0d1235':'none', background:missCount>0?'rgba(229,115,115,0.06)':i%2===0?'transparent':'#060b1a', display:'flex', gap:10 }}>
               {it.image && (
-                <img src={it.image} alt={it.work} style={{ width:64, height:64, objectFit:'contain', borderRadius:6, flexShrink:0, background:'#060b1a' }} onError={e => { e.target.style.display='none' }} />
+                <img src={it.image} alt={it.work} referrerPolicy="no-referrer" crossOrigin="anonymous" style={{ width:64, height:64, objectFit:'contain', borderRadius:6, flexShrink:0, background:'#060b1a' }} onError={e => { e.target.style.display='none' }} />
               )}
               <div style={{ flex:1 }}>
                 {missCount > 0 && (
@@ -2717,6 +2717,8 @@ function FlashDrill({ drillKey, onBack, cards = [], setCards = () => {} }) {
           <img
             src={item.image}
             alt="Identify this artwork"
+            referrerPolicy="no-referrer"
+            crossOrigin="anonymous"
             style={{ width:'100%', maxHeight:220, objectFit:'contain', borderRadius:8, marginBottom:12, background:'#0a0f2e' }}
             onError={e => { e.target.style.display='none' }}
           />
@@ -2728,6 +2730,8 @@ function FlashDrill({ drillKey, onBack, cards = [], setCards = () => {} }) {
           <img
             src={item.image}
             alt={item.work}
+            referrerPolicy="no-referrer"
+            crossOrigin="anonymous"
             style={{ width:'100%', maxHeight:160, objectFit:'contain', borderRadius:8, marginBottom:10, background:'#060b1a' }}
             onError={e => { e.target.style.display='none' }}
           />

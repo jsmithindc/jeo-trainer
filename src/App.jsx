@@ -12,7 +12,7 @@ import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpi
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 import { DrillsView } from './drills.jsx'
 
-const APP_VERSION = '1.9.2'
+const APP_VERSION = '1.9.3'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -71,6 +71,12 @@ export default function App() {
   const [buzzTimeRef] = useState({ start: null }) // for tracking buzz times
 
   const [cards, setCards] = useState([])
+  // Re-sync cards from storage when window regains focus (catches drill updates)
+  useEffect(() => {
+    const sync = () => setCards(loadCards())
+    window.addEventListener('focus', sync)
+    return () => window.removeEventListener('focus', sync)
+  }, [])
   const [gameHistory, setGameHistory] = useState([])
   const [storageReady, setStorageReady] = useState(false)
   const [showBrowser, setShowBrowser] = useState(false)
@@ -310,6 +316,14 @@ export default function App() {
     }
     saveGameState(state)
     if (user) saveGameStateRemote(state).catch(console.error)
+  }
+
+  function loadRandomUnplayed() {
+    const playedIds = new Set(gameHistory.map(g => String(g.gameId)).filter(Boolean))
+    const unplayed = episodeList.filter(ep => !playedIds.has(String(ep.gameId)))
+    const pool = unplayed.length > 0 ? unplayed : episodeList // fallback to all if all played
+    const pick = pool[Math.floor(Math.random() * pool.length)]
+    if (pick) loadEpisode(pick.gameId)
   }
 
   async function loadEpisode(gameId, silent = false) {
@@ -837,6 +851,7 @@ export default function App() {
             boardLoading={boardLoading}
             boardError={boardError}
             onLoadEpisode={loadEpisode}
+            onRandomGame={loadRandomUnplayed}
             canGoPrev={currentEpIndex < episodeList.length - 1}
             canGoNext={currentEpIndex > 0}
             onPrev={() => navigateEpisode(1)}
@@ -1116,7 +1131,7 @@ function Header({ coryatScore, actualScore, correctCount, incorrectCount, passCo
   const showActual = actualScore !== 0 || coryatScore !== actualScore
   return (
     <header style={S.header}>
-      <div>
+      <div style={{ minWidth: 100 }}>
         <div style={S.logoMain}>JEO TRAINER</div>
         {episodeMeta
           ? <div style={S.logoSub}>#{episodeMeta.episodeNumber} · {episodeMeta.airDate}</div>
@@ -1142,7 +1157,7 @@ function Header({ coryatScore, actualScore, correctCount, incorrectCount, passCo
           </div>
         )}
       </div>
-      <div style={S.headerStats}>
+      <div style={{ ...S.headerStats, minWidth: 100, justifyContent: 'flex-end' }}>
         <div style={S.pill}>{correctCount}✓ {incorrectCount}✗ {passCount}—</div>
         <div style={S.pill}>{answeredCount}/{totalClues}</div>
         <button style={{ ...S.authBtn, color: syncError ? '#e57373' : user ? '#7cd992' : '#8890c0' }} onClick={onAuthClick} title={syncError ? `Sync error: ${syncError}` : user ? 'Synced' : 'Sign in to sync'}>
@@ -1370,7 +1385,7 @@ function AuthModal({ user, syncError, onClose, onSignOut }) {
 }
 
 // ─── Board View ───────────────────────────────────────────────────────────────
-function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round, hasDouble, onSwitchRound, onBrowse, singleCoryat, doubleCoryat, fjAnswered, onShowFJ, boardLoading, boardError, onLoadEpisode, canGoPrev, canGoNext, onPrev, onNext, timedMode, onToggleTimedMode, autoMode, onToggleAutoMode, tournamentMode, tournamentState, boardControl, coryatScore, onToggleTournament, onShowCache, onShowCategorySearch, gameStarted, previousGame, onShowStartScreen, largeFont, fontSettings }) {
+function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round, hasDouble, onSwitchRound, onBrowse, singleCoryat, doubleCoryat, fjAnswered, onShowFJ, boardLoading, boardError, onLoadEpisode, canGoPrev, canGoNext, onPrev, onNext, timedMode, onToggleTimedMode, autoMode, onToggleAutoMode, tournamentMode, tournamentState, boardControl, coryatScore, onToggleTournament, onShowCache, onShowCategorySearch, gameStarted, previousGame, onShowStartScreen, largeFont, fontSettings, onRandomGame }) {
   const tileBg = { unanswered: '#0f1e6e', correct: '#1a5c2e', incorrect: '#5c1a1a', pass: '#2a2a4a' }
 
   return (
@@ -1383,6 +1398,7 @@ function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round,
         </button>
         <button style={S.loaderBtn} onClick={onShowCategorySearch} title="Search by category">🔍</button>
         <button style={S.loaderBtn} onClick={onShowCache} title="Offline cache">📥</button>
+        <button style={S.loaderBtn} onClick={onRandomGame} title="Random unplayed game">🎲</button>
         <button style={{ ...S.loaderBtn, opacity: canGoNext ? 1 : 0.3 }} onClick={onNext} disabled={!canGoNext}>Next →</button>
       </div>
       {/* Mode toggles */}
@@ -2412,7 +2428,7 @@ function StudyView({ cards, setCards, onBack }) {
 
   // Filter state
   const [dueFilter, setDueFilter] = useState('due') // 'all' | 'due' | 'today' | 'overdue'
-  const [sourceFilter, setSourceFilter] = useState('all')
+  const [sourceFilter, setSourceFilter] = useState('all') // 'all' | 'drills' | 'board'
   const [categoryFilter, setCategoryFilter] = useState('all')
   const [strugglingOnly, setStrugglingOnly] = useState(false)
 
@@ -2430,6 +2446,8 @@ function StudyView({ cards, setCards, onBack }) {
     if (dueFilter === 'due') filtered = filtered.filter(c => c.dueAt <= todayEndF)
     else if (dueFilter === 'today') filtered = filtered.filter(c => c.dueAt >= todayStartF && c.dueAt <= todayEndF)
     else if (dueFilter === 'overdue') filtered = filtered.filter(c => c.dueAt < todayStartF)
+    if (sourceFilter === 'drills') filtered = filtered.filter(c => c.id?.startsWith('drill-'))
+    else if (sourceFilter === 'board') filtered = filtered.filter(c => !c.id?.startsWith('drill-') && c.source !== 'manual' && c.source !== 'anki')
     if (strugglingOnly === true) filtered = filtered.filter(c => c.repetitions === 0 || (c.lapses || 0) > 0)
     if (strugglingOnly === 'hard') filtered = filtered.filter(c => c.easeFactor < 2.0 && c.repetitions > 0)
     if (sourceFilter !== 'all') filtered = filtered.filter(c => c.source === sourceFilter)
@@ -2594,6 +2612,7 @@ function StudyView({ cards, setCards, onBack }) {
               ].map(([v,l]) => (
                 <button key={v} style={{ ...S.toggleBtn, ...(dueFilter === v ? S.toggleActive : {}) }} onClick={() => setDueFilter(v)}>{l}</button>
               ))}
+
             </div>
           </div>
           <div style={S.configRow}>
@@ -2611,6 +2630,7 @@ function StudyView({ cards, setCards, onBack }) {
             <div style={S.chipRow}>
               {[
                 ['all', 'All'],
+                ['drills', `Drills (${cards.filter(c=>c.id?.startsWith('drill-')).length})`],
                 ['missed', `Missed (${cards.filter(c=>c.source==='missed').length})`],
                 ['anki', `Anki (${cards.filter(c=>c.source==='anki').length})`],
                 ['manual', `Manual (${cards.filter(c=>c.source==='manual').length})`],

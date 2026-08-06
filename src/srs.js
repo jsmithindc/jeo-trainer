@@ -7,14 +7,23 @@ export function sm2(card, quality) {
   let lapses = card.lapses || 0
 
   if (quality === 0) {
+    // Again: reset to 1 day
     repetitions = 0
     interval = 1
     lapses += 1
   } else {
-    lapses = 0 // reset consecutive lapses on any passing grade
-    if (repetitions === 0) interval = 1
-    else if (repetitions === 1) interval = 6
-    else interval = Math.round(interval * easeFactor)
+    lapses = 0
+    if (repetitions === 0) {
+      // First review: Hard=1d, Good=1d, Easy=4d
+      interval = quality === 3 ? 4 : 1
+    } else if (repetitions === 1) {
+      // Second review: Hard=3d, Good=6d, Easy=8d
+      interval = quality === 1 ? 3 : quality === 2 ? 6 : 8
+    } else {
+      // Subsequent: apply quality multiplier to current interval
+      const multiplier = quality === 1 ? 1.2 : quality === 2 ? easeFactor : easeFactor * 1.3
+      interval = Math.round(interval * multiplier)
+    }
     repetitions += 1
   }
 

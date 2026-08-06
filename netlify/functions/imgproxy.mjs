@@ -1,49 +1,50 @@
+// Image proxy using Wikipedia's thumbnail API - reliable, open, no auth needed
 export const handler = async (event) => {
-  const target = event.queryStringParameters?.url
-  if (!target || !target.startsWith('https://upload.wikimedia.org/')) {
-    return { statusCode: 400, body: 'Invalid URL' }
+  const title = event.queryStringParameters?.title
+  if (!title) {
+    return { statusCode: 400, body: 'Missing title parameter' }
   }
 
-  // Split on the last slash before the size prefix to get base and filename
-  // Keep everything URL-encoded as-is
-  const lastSlash = target.lastIndexOf('/')
-  const sizeAndFile = target.slice(lastSlash + 1) // e.g. "330px-Filename.jpg"
-  const base = target.slice(0, lastSlash) // everything before last slash
-  
-  const sizeMatch = sizeAndFile.match(/^(\d+)px-(.+)$/)
-  if (!sizeMatch) {
-    return { statusCode: 400, body: 'Could not parse: ' + sizeAndFile }
-  }
-  
-  const filename = sizeMatch[2] // already URL-encoded
-  const sizes = ['330', '300', '400', '250', '500', '220', '150']
-
-  for (const size of sizes) {
-    const tryUrl = `${base}/${size}px-${filename}`
-    try {
-      const res = await fetch(tryUrl, {
-        headers: { 'User-Agent': 'JeoTrainer/1.0 (https://jeotrainer.netlify.app; jsmithindc@gmail.com)' }
-      })
-      if (res.ok) {
-        const buffer = await res.arrayBuffer()
-        const base64 = Buffer.from(buffer).toString('base64')
-        return {
-          statusCode: 200,
-          isBase64Encoded: true,
-          headers: {
-            'Content-Type': res.headers.get('content-type') || 'image/jpeg',
-            'Cache-Control': 'public, max-age=86400',
-            'Access-Control-Allow-Origin': '*',
-          },
-          body: base64,
-        }
-      }
-    } catch (e) { /* try next */ }
+  const headers = {
+    'Access-Control-Allow-Origin': '*',
+    'Cache-Control': 'public, max-age=604800',
   }
 
-  return {
-    statusCode: 404,
-    headers: { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*' },
-    body: 'Image not available'
+  try {
+    // Wikipedia page image API - returns thumbnail for any article
+    const apiUrl = `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(title)}&prop=pageimages&format=json&pithumbsize=400`
+    const res = await fetch(apiUrl, {
+      headers: { 'User-Agent': 'JeoTrainer/1.0 (jsmithindc@gmail.com)' }
+    })
+    const data = await res.json()
+    const pages = data.query?.pages || {}
+    const page = Object.values(pages)[0]
+    const imgUrl = page?.thumbnail?.source
+
+    if (!imgUrl) {
+      return { statusCode: 404, headers, body: 'No image for: ' + title }
+    }
+
+    // Fetch the actual image
+    const imgRes = await fetch(imgUrl, {
+      headers: { 'User-Agent': 'JeoTrainer/1.0 (jsmithindc@gmail.com)' }
+    })
+    if (!imgRes.ok) {
+      return { statusCode: imgRes.status, headers, body: 'Image fetch failed: ' + imgRes.status }
+    }
+
+    const buffer = await imgRes.arrayBuffer()
+    const base64 = Buffer.from(buffer).toString('base64')
+    return {
+      statusCode: 200,
+      isBase64Encoded: true,
+      headers: {
+        ...headers,
+        'Content-Type': imgRes.headers.get('content-type') || 'image/jpeg',
+      },
+      body: base64,
+    }
+  } catch (e) {
+    return { statusCode: 500, headers, body: 'Error: ' + e.message }
   }
 }

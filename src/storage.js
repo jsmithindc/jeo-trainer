@@ -136,15 +136,18 @@ export function saveDeckSnapshot(cards) {
     const d = new Date()
     const date = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
     const existing = JSON.parse(localStorage.getItem(SNAPSHOT_KEY) || '{}')
-    // Keep last 3 daily snapshots
     const snapshots = existing.snapshots || []
-    // Only save if we don't already have one for today
+    // Strip large image data to keep snapshot small
+    const slim = cards.map(c => {
+      if (!c.image) return c
+      const { image, ...rest } = c
+      return rest
+    })
     if (snapshots.length && snapshots[0].date === date) {
-      // Update today's snapshot if card count changed significantly
-      if (Math.abs(snapshots[0].count - cards.length) < 5) return
-      snapshots[0] = { date, count: cards.length, cards }
+      if (Math.abs(snapshots[0].count - slim.length) < 5) return
+      snapshots[0] = { date, count: slim.length, cards: slim }
     } else {
-      snapshots.unshift({ date, count: cards.length, cards })
+      snapshots.unshift({ date, count: slim.length, cards: slim })
     }
     localStorage.setItem(SNAPSHOT_KEY, JSON.stringify({ snapshots: snapshots.slice(0, 3) }))
   } catch (e) {

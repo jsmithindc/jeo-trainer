@@ -1,25 +1,25 @@
-export default async function handler(req) {
-  const url = new URL(req.url)
-  const target = url.searchParams.get('url')
+export const handler = async (event) => {
+  const target = event.queryStringParameters?.url
   if (!target || !target.startsWith('https://upload.wikimedia.org/')) {
-    return new Response('Invalid URL', { status: 400 })
+    return { statusCode: 400, body: 'Invalid URL' }
   }
   try {
     const res = await fetch(target, {
       headers: { 'User-Agent': 'JeoTrainer/1.0 (https://jeotrainer.netlify.app)' }
     })
-    const body = await res.arrayBuffer()
-    return new Response(body, {
-      status: res.status,
+    const buffer = await res.arrayBuffer()
+    const base64 = Buffer.from(buffer).toString('base64')
+    return {
+      statusCode: 200,
+      isBase64Encoded: true,
       headers: {
-        'Content-Type': res.headers.get('Content-Type') || 'image/jpeg',
+        'Content-Type': res.headers.get('content-type') || 'image/jpeg',
         'Cache-Control': 'public, max-age=86400',
         'Access-Control-Allow-Origin': '*',
-      }
-    })
+      },
+      body: base64,
+    }
   } catch (e) {
-    return new Response('Fetch failed', { status: 500 })
+    return { statusCode: 500, body: 'Fetch failed: ' + e.message }
   }
 }
-
-export const config = { path: '/imgproxy' }

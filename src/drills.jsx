@@ -2765,6 +2765,7 @@ function FlashDrill({ drillKey, onBack, cards = [], setCards = () => {} }) {
       <div style={S.card}>
         <div style={{ fontSize:10, color:'#4060a0', letterSpacing:2, marginBottom:8 }}>{modeConfig.prompt.toUpperCase()}</div>
         {/* Image mode: show image as the question */}
+        <div style={{ fontSize:9, color:'#e57373', marginBottom:4 }}>qField={modeConfig.qField} hasImage={String(!!item.image)} url={item.image?.slice(0,50)}</div>
         {modeConfig.qField === 'image' && item.image ? (
           <img
             src={item.image}

@@ -772,6 +772,7 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids, card
   const [attempted, setAttempted] = useState(new Set())
   const [attemptResults, setAttemptResults] = useState({}) // id → { correct, country }
   const [missCounts, setMissCounts] = useState(() => getDrillMissCounts('world-map'))
+  const [autoNext, setAutoNext] = useState(false)
   const sessionSaved = useRef(false)
   const [mode, setMode] = useState('map')
   const [showReference, setShowReference] = useState(false)
@@ -904,8 +905,17 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids, card
     const bothCorrect = countryCorrect && capitalCorrect
     setResult({ countryCorrect, capitalCorrect, country })
     setAttempted(prev => new Set([...prev, selected]))
-    setAttemptResults(prev => ({ ...prev, [selected]: { correct: bothCorrect, countryCorrect, capitalCorrect, country } }))
-    setScore(prev => ({ correct: prev.correct + (bothCorrect ? 1 : 0), total: prev.total + 1 }))
+    const newResults = { ...attemptResults, [selected]: { correct: bothCorrect, countryCorrect, capitalCorrect, country } }
+    setAttemptResults(newResults)
+    const newScore = { correct: score.correct + (bothCorrect ? 1 : 0), total: score.total + 1 }
+    setScore(newScore)
+    if (totalKnown - attempted.size - 1 === 0 && !sessionSaved.current) {
+      sessionSaved.current = true
+      saveDrillSession('world-map', newScore.correct, newScore.total)
+      saveDrillMisses('world-map', Object.entries(newResults).filter(([,r]) => !r.correct).map(([id]) => id))
+      setMissCounts(getDrillMissCounts('world-map'))
+    }
+    if (autoNext) setTimeout(() => { setSelected(null); setResult(null); autoSelectNext() }, 1200)
   }
 
   function markItemCorrect(field) {
@@ -925,7 +935,6 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids, card
 
   const totalKnown = COUNTRIES.length
   const remaining = totalKnown - attempted.size
-  useEffect(() => { if (remaining === 0 && !sessionSaved.current) { sessionSaved.current = true; saveDrillSession('world-map', score.correct, score.total); saveDrillMisses('world-map', Object.entries(attemptResults).filter(([,r]) => !r.correct).map(([id]) => id)); setMissCounts(getDrillMissCounts('world-map')) } }, [remaining])
 
   if (showReference) return (
     <LabeledMapReference onBack={() => setShowReference(false)} paths={paths} pathCentroids={pathCentroids} />
@@ -992,7 +1001,7 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids, card
         <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18 }} onClick={() => { const nz = Math.min(zoom * 1.5, 8); const cx = (480 - pan.x) / zoom; const cy = (250 - pan.y) / zoom; setPan({ x: 480 - cx * nz, y: 250 - cy * nz }); setZoom(nz) }}>+</button>
         <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18, opacity: zoom <= minZoom ? 0.3 : 1 }} disabled={zoom <= minZoom} onClick={() => { const nz = Math.max(zoom / 1.5, 1); setZoom(nz); if (nz <= minZoom) { setZoom(minZoom); setPan({ x: 0, y: 0 }) } }}>−</button>
         <button style={{ ...S.btnSecondary, flex: 1, padding: '6px 0', fontSize: 12 }} onClick={() => { setZoom(minZoom); setPan({ x: 0, y: 0 }) }}>Reset View</button>
-        <button style={{ ...S.btn, flex: 1, padding: '6px 0', fontSize: 12 }} onClick={autoSelectNext}>Auto Next →</button>
+        <button style={{ ...S.btn, flex: 1, padding: '6px 0', fontSize: 12, background: autoNext ? 'rgba(245,197,24,0.15)' : undefined, border: autoNext ? '1px solid #f5c518' : undefined }} onClick={() => { setAutoNext(a => !a) }}>Auto Next {autoNext ? '✓' : '→'}</button>
       </div>
 
       {/* Map */}
@@ -1190,10 +1199,10 @@ export function DrillsView({ cards = [], setCards = () => {} }) {
         const history = stats[d.id] || []
         const best = history.length > 0 ? Math.max(...history.map(s => s.pct)) : null
         return (
-          <button key={d.id} style={{ ...S.card, textAlign: 'left', cursor: 'pointer', border: '1px solid #1a2460', width: '100%' }} onClick={() => setDrill(d.id)}>
+          <button key={d.id} style={{ ...S.card, textAlign: 'left', cursor: 'pointer', border: '1px solid #1a2460', width: '100%', padding: '18px 20px' }} onClick={() => setDrill(d.id)}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div>
-                <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 18, color: '#f5c518', letterSpacing: 2 }}>{d.emoji} {d.label}</div>
+                <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: '#f5c518', letterSpacing: 2 }}>{d.emoji} {d.label}</div>
                 <div style={{ fontSize: 11, color: '#4060a0', marginTop: 2 }}>{d.desc}</div>
               </div>
               {best !== null && (
@@ -1429,6 +1438,7 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
   const [revealed, setRevealed] = useState(new Set())
   const subDrillId = config.regionLabel === 'State' ? 'us-states' : config.regionLabel === 'Province' ? 'canada' : 'mexico'
   const [missCounts, setMissCounts] = useState(() => getDrillMissCounts(subDrillId))
+  const [autoNext, setAutoNext] = useState(false)
   const sessionSavedSub = useRef(false)
   const [zoom, setZoom] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
@@ -1475,24 +1485,34 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
         // For US states: reposition Alaska and Hawaii as insets
         const isUS = config.regionLabel === 'State' && config.bounds?.[0] === -125
 
-        function transformCoords(coords, name) {
-          if (!isUS) return coords
+        // Transform projected [x,y] coords for AK/HI insets
+        // Alaska raw projects to ~x:-600..-350, y:-350..-180
+        // We want it at x:30..180, y:400..520 (bottom-left inset, scaled ~30%)
+        // Hawaii raw projects to ~x:-600..-490, y:580..680
+        // We want it at x:200..320, y:440..520 (bottom-center-left inset)
+        function transformProjected([x, y], name) {
+          if (!isUS) return [x, y]
           if (name === 'Alaska') {
-            // Scale down and move to bottom-left inset
-            return coords.map(ring => ring.map(([lon, lat]) => {
-              // Scale Alaska down to ~35% and shift to bottom-left
-              const scale = 0.35
-              const shiftLon = 40, shiftLat = -38
-              return [lon * scale + shiftLon, lat * scale + shiftLat]
-            }))
+            const scale = 0.31
+            // raw AK center ~x=-450, y=-260; target center ~x=105, y=460
+            return [x * scale + 105 + 450 * scale, y * scale + 460 + 260 * scale]
           }
           if (name === 'Hawaii') {
-            // Move Hawaii to bottom-center-left inset
-            return coords.map(ring => ring.map(([lon, lat]) => {
-              return [lon + 55, lat - 8]
-            }))
+            // raw HI center ~x=-545, y=635; target center ~x=260, y=480
+            return [x + 545 + 260, y - 635 + 480]
           }
-          return coords
+          return [x, y]
+        }
+
+        function transformCoords(coords, name) {
+          if (!isUS || (name !== 'Alaska' && name !== 'Hawaii')) return coords
+          return coords.map(ring => ring.map(pt => {
+            const [px, py] = project(pt)
+            const [tx, ty] = transformProjected([px, py], name)
+            // We need to return lon/lat that projects to tx,ty
+            // Reverse projection: lon = tx/w*(maxLon-minLon)+minLon, lat = maxLat-ty/h*(maxLat-minLat)
+            return [tx / w * (maxLon - minLon) + minLon, maxLat - ty / h * (maxLat - minLat)]
+          }))
         }
 
         function transformMultiCoords(coordsArray, name) {
@@ -1532,7 +1552,7 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
           const cy = (Math.min(...ys) + Math.max(...ys)) / 2
           const spanX = Math.max(...xs) - Math.min(...xs)
           const spanY = Math.max(...ys) - Math.min(...ys)
-          const newZoom = Math.min(Math.max(Math.min(vw2 * 0.75 / (spanX||1), vh2 * 0.72 / (spanY||1)), 1), 8)
+          const newZoom = Math.min(Math.max(Math.min(vw2 * 0.68 / (spanX||1), vh2 * 0.65 / (spanY||1)), 1), 8)
           setZoom(newZoom)
           setMinZoom(newZoom)
           setPan({ x: vw2/2 - cx * newZoom, y: vh2/2 - cy * newZoom })
@@ -1561,8 +1581,17 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
     const both = regionCorrect && capitalCorrect
     setResult({ regionCorrect, capitalCorrect, data })
     setAttempted(prev => new Set([...prev, selected]))
-    setAttemptResults(prev => ({ ...prev, [selected]: { correct: both, regionCorrect, capitalCorrect, data } }))
-    setScore(prev => ({ correct: prev.correct + (both ? 1 : 0), total: prev.total + 1 }))
+    const newResults = { ...attemptResults, [selected]: { correct: both, regionCorrect, capitalCorrect, data } }
+    setAttemptResults(newResults)
+    const newScore = { correct: score.correct + (both ? 1 : 0), total: score.total + 1 }
+    setScore(newScore)
+    if (config.data.length - attempted.size - 1 === 0 && !sessionSavedSub.current) {
+      sessionSavedSub.current = true
+      saveDrillSession(subDrillId, newScore.correct, newScore.total)
+      saveDrillMisses(subDrillId, Object.entries(newResults).filter(([,r]) => !r.correct).map(([name]) => name))
+      setMissCounts(getDrillMissCounts(subDrillId))
+    }
+    if (autoNext) setTimeout(() => { setSelected(null); setResult(null); autoSelectNext() }, 1200)
   }
 
   function markItemCorrect(field) {
@@ -1588,7 +1617,6 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
   }
 
   const remaining = config.data.length - attempted.size
-  useEffect(() => { if (remaining === 0 && !sessionSavedSub.current) { sessionSavedSub.current = true; saveDrillSession(subDrillId, score.correct, score.total); saveDrillMisses(subDrillId, Object.entries(attemptResults).filter(([,r]) => !r.correct).map(([name]) => name)); setMissCounts(getDrillMissCounts(subDrillId)) } }, [remaining])
   const vw = config.width || 960, vh = config.height || 500
 
   const filteredList = config.data
@@ -1728,7 +1756,7 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
         <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18 }} onClick={() => { const nz=Math.min(zoom*1.5,8); const cx=(480-pan.x)/zoom; const cy=(250-pan.y)/zoom; setPan({x:480-cx*nz,y:250-cy*nz}); setZoom(nz) }}>+</button>
         <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18, opacity:zoom<=minZoom?0.3:1 }} disabled={zoom<=minZoom} onClick={() => { const nz=Math.max(zoom/1.5,minZoom); setZoom(nz); if(nz<=minZoom){setZoom(minZoom);setPan({x:0,y:0})} }}>−</button>
         <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:12 }} onClick={() => { setZoom(minZoom); setPan({x:0,y:0}) }}>Reset</button>
-        <button style={{ ...S.btn, flex:1, padding:'6px 0', fontSize:12 }} onClick={autoSelectNext}>Auto Next →</button>
+        <button style={{ ...S.btn, flex:1, padding:'6px 0', fontSize:12, background: autoNext ? 'rgba(245,197,24,0.15)' : undefined, border: autoNext ? '1px solid #f5c518' : undefined }} onClick={() => setAutoNext(a => !a)}>Auto Next {autoNext ? '✓' : '→'}</button>
       </div>
 
       <div
@@ -1865,6 +1893,7 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
   const [attempted, setAttempted] = useState(new Set())
   const [attemptResults, setAttemptResults] = useState({})
   const [missCounts, setMissCounts] = useState(() => getDrillMissCounts('region-' + regionKey))
+  const [autoNext, setAutoNext] = useState(false)
   const sessionSavedReg = useRef(false)
   const [showReference, setShowReference] = useState(false)
   const [refMode, setRefMode] = useState('map')
@@ -1880,7 +1909,6 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
   const regionPaths = worldPaths.filter(p => region.ids.has(p.id))
   const regionCountries = COUNTRIES.filter(c => region.ids.has(c.id))
   const remaining = regionCountries.length - attempted.size
-  useEffect(() => { if (remaining === 0 && !sessionSavedReg.current) { sessionSavedReg.current = true; saveDrillSession('region-' + regionKey, score.correct, score.total); saveDrillMisses('region-' + regionKey, Object.entries(attemptResults).filter(([,r]) => !r.correct).map(([id]) => id)); setMissCounts(getDrillMissCounts('region-' + regionKey)) } }, [remaining])
 
   // Auto-center on region when paths load
   useEffect(() => {
@@ -1903,7 +1931,7 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
     if (cx < 0) cx += 960 // wrap back to positive
     const cy = (minY + maxY) / 2
     const spanX = maxX - minX, spanY = maxY - minY
-    const zx = 960 * 0.75 / (spanX || 1), zy = 500 * 0.72 / (spanY || 1)
+    const zx = 960 * 0.68 / (spanX || 1), zy = 500 * 0.65 / (spanY || 1)
     const newZoom = Math.min(Math.max(Math.min(zx, zy), 1), 8)
     setZoom(newZoom)
     setMinZoom(newZoom)
@@ -1926,8 +1954,17 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
     const both = countryCorrect && capitalCorrect
     setResult({ countryCorrect, capitalCorrect, country })
     setAttempted(prev => new Set([...prev, selected]))
-    setAttemptResults(prev => ({ ...prev, [selected]: { correct: both, countryCorrect, capitalCorrect, country } }))
-    setScore(prev => ({ correct: prev.correct + (both ? 1 : 0), total: prev.total + 1 }))
+    const newResults = { ...attemptResults, [selected]: { correct: both, countryCorrect, capitalCorrect, country } }
+    setAttemptResults(newResults)
+    const newScore = { correct: score.correct + (both ? 1 : 0), total: score.total + 1 }
+    setScore(newScore)
+    if (regionCountries.length - attempted.size - 1 === 0 && !sessionSavedReg.current) {
+      sessionSavedReg.current = true
+      saveDrillSession('region-' + regionKey, newScore.correct, newScore.total)
+      saveDrillMisses('region-' + regionKey, Object.entries(newResults).filter(([,r]) => !r.correct).map(([id]) => id))
+      setMissCounts(getDrillMissCounts('region-' + regionKey))
+    }
+    if (autoNext) setTimeout(() => { setSelected(null); setResult(null); autoSelectNext() }, 1200)
   }
 
   function markItemCorrect(field) {
@@ -2075,7 +2112,7 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
         <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18 }} onClick={() => { const nz=Math.min(zoom*1.5,8); const cx=(480-pan.x)/zoom; const cy=(250-pan.y)/zoom; setPan({x:480-cx*nz,y:250-cy*nz}); setZoom(nz) }}>+</button>
         <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18, opacity:zoom<=minZoom?0.3:1 }} disabled={zoom<=minZoom} onClick={() => { const nz=Math.max(zoom/1.5,minZoom); setZoom(nz); if(nz<=minZoom){setZoom(minZoom);setPan({x:0,y:0})} }}>−</button>
         <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:12 }} onClick={() => { setZoom(minZoom); setPan({x:0,y:0}) }}>Reset</button>
-        <button style={{ ...S.btn, flex:1, padding:'6px 0', fontSize:12 }} onClick={autoSelectNext}>Auto Next →</button>
+        <button style={{ ...S.btn, flex:1, padding:'6px 0', fontSize:12, background: autoNext ? 'rgba(245,197,24,0.15)' : undefined, border: autoNext ? '1px solid #f5c518' : undefined }} onClick={() => setAutoNext(a => !a)}>Auto Next {autoNext ? '✓' : '→'}</button>
       </div>
       <div
         style={{ width:'100%', background:'#060b1a', borderRadius:12, overflow:'hidden', border:'1px solid #1a2460', cursor:dragging?'grabbing':'grab', userSelect:'none' }}

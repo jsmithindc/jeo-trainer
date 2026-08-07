@@ -12,7 +12,7 @@ import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpi
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 import { DrillsView } from './drills.jsx'
 
-const APP_VERSION = '2.1.7'
+const APP_VERSION = '2.1.8'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -252,6 +252,16 @@ export default function App() {
         setGameHistory(merged.gameHistory)
         saveCards(merged.cards)
         saveGameHistory(merged.gameHistory)
+        // Merge daily stats: take the max across devices for today
+        if (remote.dailyStats) {
+          const today = new Date().toLocaleDateString()
+          const remoteToday = remote.dailyStats[today] || 0
+          const localToday = getDailyStats().cardsReviewed
+          if (remoteToday > localToday) {
+            incrementDailyCards(remoteToday - localToday)
+            setDailyCards(remoteToday)
+          }
+        }
       })
       .catch(err => setSyncError(err.message))
       .finally(() => setSyncing(false))
@@ -272,7 +282,7 @@ export default function App() {
       clearTimeout(syncTimeout.current)
       syncTimeout.current = setTimeout(() => {
         setSyncing(true)
-        saveRemoteData(cards, gameHistory)
+        saveRemoteData(cards, gameHistory, { [new Date().toLocaleDateString()]: getDailyStats().cardsReviewed })
           .catch(err => setSyncError(err.message))
           .finally(() => setSyncing(false))
       }, 2000)
@@ -1227,7 +1237,7 @@ function StudyTabView({ cards, setCards, user, dueCount }) {
         {subTab === 'flashcards' && (
           <>
             {flashcardView === 'menu' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '0 0', maxWidth: 480, margin: '0 auto', width: '100%' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <div style={{ background: 'linear-gradient(135deg, #0a0f2e 0%, #0f1e6e 100%)', borderRadius: 12, padding: '16px 16px', textAlign: 'center', border: '1px solid #2a3480' }}>
                   <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 32, color: '#f5c518', letterSpacing: 4 }}>FLASHCARDS</div>
                   <div style={{ fontSize: 11, color: '#4060a0', letterSpacing: 2, marginTop: 2 }}>SPACED REPETITION STUDY</div>
@@ -2478,6 +2488,7 @@ function StudyView({ cards, setCards, onBack }) {
     else if (dueFilter === 'overdue') filtered = filtered.filter(c => c.dueAt < todayStartF)
     const DRILL_CATS = ['US Presidents','US States','Geography','Astronomy','Shakespeare','Famous Authors','Famous Painters','Classical Composers','Famous Ballets','Greek & Latin Roots','US Vice Presidents']
     if (sourceFilter === 'drills') filtered = filtered.filter(c => c.id?.startsWith('drill-') || DRILL_CATS.some(cat => c.category?.includes(cat)))
+    else if (sourceFilter === 'leeches') filtered = filtered.filter(c => (c.lapses || 0) >= 4)
     else if (sourceFilter === 'board') filtered = filtered.filter(c => !c.id?.startsWith('drill-') && c.source !== 'manual' && c.source !== 'anki')
     else if (sourceFilter !== 'all') filtered = filtered.filter(c => c.source === sourceFilter)
     if (strugglingOnly === true) filtered = filtered.filter(c => c.repetitions === 0 || (c.lapses || 0) > 0)
@@ -2662,11 +2673,12 @@ function StudyView({ cards, setCards, onBack }) {
               {[
                 ['all', 'All'],
                 ['drills', `Drills (${cards.filter(c=>c.id?.startsWith('drill-')).length})`],
+                ['leeches', `🐛 Leeches (${cards.filter(c=>(c.lapses||0)>=4).length})`],
                 ['missed', `Missed (${cards.filter(c=>c.source==='missed').length})`],
                 ['anki', `Anki (${cards.filter(c=>c.source==='anki').length})`],
                 ['manual', `Manual (${cards.filter(c=>c.source==='manual').length})`],
               ].map(([val, label]) => (
-                <button key={val} style={{ ...S.chip, ...(sourceFilter === val ? S.chipActive : {}) }} onClick={() => setSourceFilter(val)}>
+                <button key={val} style={{ ...S.chip, ...(sourceFilter === val ? S.chipActive : {}), ...(val === 'leeches' ? { color: '#e57373' } : {}) }} onClick={() => setSourceFilter(val)}>
                   {label}
                 </button>
               ))}

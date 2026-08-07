@@ -36,7 +36,7 @@ export async function signOut() {
 export async function loadRemoteData() {
   const { data, error } = await supabase
     .from('user_data')
-    .select('cards, game_history, updated_at')
+    .select('cards, game_history, daily_stats, updated_at')
     .single()
 
   if (error) {
@@ -48,10 +48,11 @@ export async function loadRemoteData() {
     cards: data.cards || [],
     gameHistory: data.game_history || [],
     updatedAt: data.updated_at || null,
+    dailyStats: data.daily_stats || null,
   }
 }
 
-export async function saveRemoteData(cards, gameHistory) {
+export async function saveRemoteData(cards, gameHistory, dailyStats = null) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return
 
@@ -64,13 +65,13 @@ export async function saveRemoteData(cards, gameHistory) {
   if (existing) {
     const { error } = await supabase
       .from('user_data')
-      .update({ cards, game_history: gameHistory, updated_at: new Date().toISOString() })
+      .update({ cards, game_history: gameHistory, ...(dailyStats ? { daily_stats: dailyStats } : {}), updated_at: new Date().toISOString() })
       .eq('user_id', user.id)
     if (error) throw error
   } else {
     const { error } = await supabase
       .from('user_data')
-      .insert({ user_id: user.id, cards, game_history: gameHistory, updated_at: new Date().toISOString() })
+      .insert({ user_id: user.id, cards, game_history: gameHistory, ...(dailyStats ? { daily_stats: dailyStats } : {}), updated_at: new Date().toISOString() })
     if (error) throw error
   }
 }

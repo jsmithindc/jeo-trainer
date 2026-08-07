@@ -653,7 +653,7 @@ function LabeledMapReference({ onBack, paths, pathCentroids }) {
           {/* Zoom controls */}
           <div style={{ display: 'flex', gap: 8 }}>
             <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18 }} onClick={() => { const nz = Math.min(zoom * 1.5, 8); const cx = (480 - pan.x) / zoom; const cy = (250 - pan.y) / zoom; setPan({ x: 480 - cx * nz, y: 250 - cy * nz }); setZoom(nz) }}>+</button>
-            <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18, opacity: zoom <= minZoom ? 0.3 : 1 }} disabled={zoom <= minZoom} onClick={() => { const nz = Math.max(zoom / 1.5, 1); setZoom(nz); if (nz <= minZoom) { setZoom(minZoom); setPan({ x: 0, y: 0 }) } }}>−</button>
+            <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18, opacity: zoom <= minZoom ? 0.3 : 1 }} disabled={zoom <= minZoom} onClick={() => { const nz = Math.max(zoom / 1.5, 1); setZoom(nz); if (nz <= minZoom) { setZoom(minZoom); setPan(initialPan) } }}>−</button>
             <button style={{ ...S.btnSecondary, flex: 1, padding: '6px 0', fontSize: 12 }} onClick={() => { setZoom(minZoom); setPan({ x: 0, y: 0 }) }}>Reset View</button>
             <button style={{ ...S.btnSecondary, flex: 1, padding: '6px 0', fontSize: 11, color: '#4dd0e1' }} onClick={() => setRevealed(new Set(COUNTRIES.map(c => c.id)))}>Show All</button>
             <button style={{ ...S.btnSecondary, flex: 1, padding: '6px 0', fontSize: 11 }} onClick={() => setRevealed(new Set())}>Hide All</button>
@@ -783,6 +783,7 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids, card
   const [zoom, setZoom] = useState(1)
   const [minZoom, setMinZoom] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
+  const [initialPan, setInitialPan] = useState({ x: 0, y: 0 })
   const [dragging, setDragging] = useState(false)
   const [dragStart, setDragStart] = useState(null)
   const pathCentroids = useRef({}) // id → {x, y} center
@@ -999,7 +1000,7 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids, card
       {/* Zoom controls */}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18 }} onClick={() => { const nz = Math.min(zoom * 1.5, 8); const cx = (480 - pan.x) / zoom; const cy = (250 - pan.y) / zoom; setPan({ x: 480 - cx * nz, y: 250 - cy * nz }); setZoom(nz) }}>+</button>
-        <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18, opacity: zoom <= minZoom ? 0.3 : 1 }} disabled={zoom <= minZoom} onClick={() => { const nz = Math.max(zoom / 1.5, 1); setZoom(nz); if (nz <= minZoom) { setZoom(minZoom); setPan({ x: 0, y: 0 }) } }}>−</button>
+        <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18, opacity: zoom <= minZoom ? 0.3 : 1 }} disabled={zoom <= minZoom} onClick={() => { const nz = Math.max(zoom / 1.5, 1); setZoom(nz); if (nz <= minZoom) { setZoom(minZoom); setPan(initialPan) } }}>−</button>
         <button style={{ ...S.btnSecondary, flex: 1, padding: '6px 0', fontSize: 12 }} onClick={() => { setZoom(minZoom); setPan({ x: 0, y: 0 }) }}>Reset View</button>
         <button style={{ ...S.btn, flex: 1, padding: '6px 0', fontSize: 12, background: autoNext ? 'rgba(245,197,24,0.15)' : undefined, border: autoNext ? '1px solid #f5c518' : undefined }} onClick={() => { setAutoNext(a => !a) }}>Auto Next {autoNext ? '✓' : '→'}</button>
       </div>
@@ -1186,7 +1187,8 @@ export function DrillsView({ cards = [], setCards = () => {} }) {
   // Top-level hub
   return (
     <div style={{ ...S.wrap, paddingTop: 8 }}>
-      <div style={{ background: 'linear-gradient(135deg, #0a0f2e 0%, #0f1e6e 100%)', borderRadius: 12, padding: '20px 16px', marginBottom: 4, textAlign: 'center', border: '1px solid #2a3480' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ background: 'linear-gradient(135deg, #0a0f2e 0%, #0f1e6e 100%)', borderRadius: 12, padding: '16px 16px', textAlign: 'center', border: '1px solid #2a3480' }}>
         <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 32, color: '#f5c518', letterSpacing: 4 }}>DRILLS</div>
         <div style={{ fontSize: 11, color: '#4060a0', letterSpacing: 2, marginTop: 2 }}>STANDALONE PRACTICE TESTS</div>
       </div>
@@ -1220,6 +1222,7 @@ export function DrillsView({ cards = [], setCards = () => {} }) {
           </button>
         )
       })}
+      </div>
     </div>
   )
 }
@@ -1442,6 +1445,7 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
   const sessionSavedSub = useRef(false)
   const [zoom, setZoom] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
+  const [initialPan, setInitialPan] = useState({ x: 0, y: 0 })
   const [minZoom, setMinZoom] = useState(1)
   const [dragging, setDragging] = useState(false)
   const [dragStart, setDragStart] = useState(null)
@@ -1552,10 +1556,14 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
           const cy = (Math.min(...ys) + Math.max(...ys)) / 2
           const spanX = Math.max(...xs) - Math.min(...xs)
           const spanY = Math.max(...ys) - Math.min(...ys)
-          const newZoom = Math.min(Math.max(Math.min(vw2 * 0.68 / (spanX||1), vh2 * 0.65 / (spanY||1)), 1), 8)
+          const newZoom = Math.min(Math.max(Math.min(vw2 * 0.68 / (spanX||1), vh2 * 0.60 / (spanY||1)), 1), 8)
           setZoom(newZoom)
           setMinZoom(newZoom)
-          setPan({ x: vw2/2 - cx * newZoom, y: vh2/2 - cy * newZoom })
+          // Shift Canada up to show northern territories
+          const subAdj = config.regionLabel === 'Province' ? { dx: 0, dy: -40 } : { dx: 0, dy: 0 }
+          const subInitPan = { x: vw2/2 - cx * newZoom + subAdj.dx, y: vh2/2 - cy * newZoom + subAdj.dy }
+          setPan(subInitPan)
+          setInitialPan(subInitPan)
         }
       })
       .catch(err => { setLoadError(err.message || 'Failed to load'); setLoading(false) })
@@ -1637,8 +1645,8 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
         <>
           <div style={{ display: 'flex', gap: 6 }}>
             <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18 }} onClick={() => setZoom(z => Math.min(z*1.5,8))}>+</button>
-            <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18, opacity: zoom <= minZoom ? 0.3 : 1 }} disabled={zoom <= minZoom} onClick={() => { const nz = Math.max(zoom/1.5, 1); setZoom(nz); if (nz === 1) setPan({x:0,y:0}) }}>−</button>
-            <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:11 }} onClick={() => { setZoom(minZoom); setPan({x:0,y:0}) }}>Reset</button>
+            <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18, opacity: zoom <= minZoom ? 0.3 : 1 }} disabled={zoom <= minZoom} onClick={() => { const nz = Math.max(zoom/1.5, 1); setZoom(nz); if (nz <= minZoom) setPan(initialPan) }}>−</button>
+            <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:11 }} onClick={() => { setZoom(minZoom); setPan(initialPan) }}>Reset</button>
             <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:11, color:'#4dd0e1' }} onClick={() => setRevealed(new Set(config.data.map(d=>d.name)))}>Show All</button>
             <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:11 }} onClick={() => setRevealed(new Set())}>Hide All</button>
           </div>
@@ -1754,8 +1762,8 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
 
       <div style={{ display:'flex', gap:6 }}>
         <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18 }} onClick={() => { const nz=Math.min(zoom*1.5,8); const cx=(480-pan.x)/zoom; const cy=(250-pan.y)/zoom; setPan({x:480-cx*nz,y:250-cy*nz}); setZoom(nz) }}>+</button>
-        <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18, opacity:zoom<=minZoom?0.3:1 }} disabled={zoom<=minZoom} onClick={() => { const nz=Math.max(zoom/1.5,minZoom); setZoom(nz); if(nz<=minZoom){setZoom(minZoom);setPan({x:0,y:0})} }}>−</button>
-        <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:12 }} onClick={() => { setZoom(minZoom); setPan({x:0,y:0}) }}>Reset</button>
+        <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18, opacity:zoom<=minZoom?0.3:1 }} disabled={zoom<=minZoom} onClick={() => { const nz=Math.max(zoom/1.5,minZoom); setZoom(nz); if(nz<=minZoom){setZoom(minZoom);setPan(initialPan)} }}>−</button>
+        <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:12 }} onClick={() => { setZoom(minZoom); setPan(initialPan) }}>Reset</button>
         <button style={{ ...S.btn, flex:1, padding:'6px 0', fontSize:12, background: autoNext ? 'rgba(245,197,24,0.15)' : undefined, border: autoNext ? '1px solid #f5c518' : undefined }} onClick={() => setAutoNext(a => !a)}>Auto Next {autoNext ? '✓' : '→'}</button>
       </div>
 
@@ -1900,6 +1908,7 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
   const [zoom, setZoom] = useState(1)
   const [minZoom, setMinZoom] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
+  const [initialPan, setInitialPan] = useState({ x: 0, y: 0 })
   const [dragging, setDragging] = useState(false)
   const [dragStart, setDragStart] = useState(null)
   const [listSearch, setListSearch] = useState('')
@@ -1935,7 +1944,16 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
     const newZoom = Math.min(Math.max(Math.min(zx, zy), 1), 8)
     setZoom(newZoom)
     setMinZoom(newZoom)
-    setPan({ x: 480 - cx * newZoom, y: 250 - cy * newZoom })
+    // Per-region pan adjustments
+    const panAdjust = {
+      oceania:          { dx: -60, dy: -15 },  // shift west, slightly up
+      south_america:    { dx:   0, dy: -25 },  // shift up to show bottom
+      central_america:  { dx:   0, dy:   0 },
+    }
+    const adj = panAdjust[regionKey] || { dx: 0, dy: 0 }
+    const regInitPan = { x: 480 - cx * newZoom + adj.dx, y: 250 - cy * newZoom + adj.dy }
+    setPan(regInitPan)
+    setInitialPan(regInitPan)
   }, [worldPaths.length])
 
   function handleClick(id) {
@@ -2007,7 +2025,7 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
           <div style={{ display:'flex', gap:6 }}>
             <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18 }} onClick={() => { const nz=Math.min(zoom*1.5,8); const cx=(480-pan.x)/zoom; const cy=(250-pan.y)/zoom; setPan({x:480-cx*nz,y:250-cy*nz}); setZoom(nz) }}>+</button>
             <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18, opacity:zoom<=minZoom?0.3:1 }} disabled={zoom<=minZoom} onClick={() => { const nz=Math.max(zoom/1.5,minZoom); setZoom(nz); if(nz<=minZoom){setPan({x:0,y:0})} }}>−</button>
-            <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:11 }} onClick={() => { setZoom(minZoom); setPan({x:0,y:0}) }}>Reset</button>
+            <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:11 }} onClick={() => { setZoom(minZoom); setPan(initialPan) }}>Reset</button>
             <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:11, color:'#4dd0e1' }} onClick={() => setRevealed(new Set(regionCountries.map(c=>c.id)))}>Show All</button>
             <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:11 }} onClick={() => setRevealed(new Set())}>Hide All</button>
           </div>
@@ -2110,8 +2128,8 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
       </div>
       <div style={{ display:'flex', gap:6 }}>
         <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18 }} onClick={() => { const nz=Math.min(zoom*1.5,8); const cx=(480-pan.x)/zoom; const cy=(250-pan.y)/zoom; setPan({x:480-cx*nz,y:250-cy*nz}); setZoom(nz) }}>+</button>
-        <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18, opacity:zoom<=minZoom?0.3:1 }} disabled={zoom<=minZoom} onClick={() => { const nz=Math.max(zoom/1.5,minZoom); setZoom(nz); if(nz<=minZoom){setZoom(minZoom);setPan({x:0,y:0})} }}>−</button>
-        <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:12 }} onClick={() => { setZoom(minZoom); setPan({x:0,y:0}) }}>Reset</button>
+        <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18, opacity:zoom<=minZoom?0.3:1 }} disabled={zoom<=minZoom} onClick={() => { const nz=Math.max(zoom/1.5,minZoom); setZoom(nz); if(nz<=minZoom){setZoom(minZoom);setPan(initialPan)} }}>−</button>
+        <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:12 }} onClick={() => { setZoom(minZoom); setPan(initialPan) }}>Reset</button>
         <button style={{ ...S.btn, flex:1, padding:'6px 0', fontSize:12, background: autoNext ? 'rgba(245,197,24,0.15)' : undefined, border: autoNext ? '1px solid #f5c518' : undefined }} onClick={() => setAutoNext(a => !a)}>Auto Next {autoNext ? '✓' : '→'}</button>
       </div>
       <div

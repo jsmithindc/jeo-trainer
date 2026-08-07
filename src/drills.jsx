@@ -1186,7 +1186,7 @@ export function DrillsView({ cards = [], setCards = () => {} }) {
 
   // Top-level hub
   return (
-    <div style={{ ...S.wrap, paddingTop: 8 }}>
+    <div style={S.wrap}>
       <div style={{ background: 'linear-gradient(135deg, #0a0f2e 0%, #0f1e6e 100%)', borderRadius: 12, padding: '16px 16px', textAlign: 'center', border: '1px solid #2a3480' }}>
         <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 32, color: '#f5c518', letterSpacing: 4 }}>DRILLS</div>
         <div style={{ fontSize: 11, color: '#4060a0', letterSpacing: 2, marginTop: 2 }}>STANDALONE PRACTICE TESTS</div>
@@ -1558,7 +1558,7 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
           setZoom(newZoom)
           setMinZoom(newZoom)
           // Shift Canada up to show northern territories
-          const subAdj = config.regionLabel === 'Province' ? { dx: 0, dy: -40 } : { dx: 0, dy: 0 }
+          const subAdj = config.regionLabel === 'Province' ? { dx: 0, dy: 40 } : { dx: 0, dy: 0 }
           const subInitPan = { x: vw2/2 - cx * newZoom + subAdj.dx, y: vh2/2 - cy * newZoom + subAdj.dy }
           setPan(subInitPan)
           setInitialPan(subInitPan)
@@ -1945,7 +1945,7 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
     // Per-region pan adjustments
     const panAdjust = {
       oceania:          { dx: 100, dy: -15 },  // shift east, slightly up
-      south_america:    { dx:   0, dy: -55 },  // shift up more to show bottom
+      south_america:    { dx:   0, dy: -28 },  // balanced vertical centering
       central_america:  { dx:   0, dy:   0 },
     }
     const adj = panAdjust[regionKey] || { dx: 0, dy: 0 }

@@ -773,7 +773,6 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids, card
   const [attemptResults, setAttemptResults] = useState({}) // id → { correct, country }
   const [missCounts, setMissCounts] = useState(() => getDrillMissCounts('world-map'))
   const sessionSaved = useRef(false)
-  useEffect(() => { if (remaining === 0 && !sessionSaved.current) { sessionSaved.current = true; saveDrillSession('world-map', score.correct, score.total); saveDrillMisses('world-map', Object.entries(attemptResults).filter(([,r]) => !r.correct).map(([id]) => id)); setMissCounts(getDrillMissCounts('world-map')) } }, [remaining])
   const [mode, setMode] = useState('map')
   const [showReference, setShowReference] = useState(false)
   const [retryCount, setRetryCount] = useState(0)
@@ -926,6 +925,7 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids, card
 
   const totalKnown = COUNTRIES.length
   const remaining = totalKnown - attempted.size
+  useEffect(() => { if (remaining === 0 && !sessionSaved.current) { sessionSaved.current = true; saveDrillSession('world-map', score.correct, score.total); saveDrillMisses('world-map', Object.entries(attemptResults).filter(([,r]) => !r.correct).map(([id]) => id)); setMissCounts(getDrillMissCounts('world-map')) } }, [remaining])
 
   if (showReference) return (
     <LabeledMapReference onBack={() => setShowReference(false)} paths={paths} pathCentroids={pathCentroids} />
@@ -1178,7 +1178,7 @@ export function DrillsView({ cards = [], setCards = () => {} }) {
   return (
     <div style={{ ...S.wrap, paddingTop: 8 }}>
       <div style={{ background: 'linear-gradient(135deg, #0a0f2e 0%, #0f1e6e 100%)', borderRadius: 12, padding: '20px 16px', marginBottom: 4, textAlign: 'center', border: '1px solid #2a3480' }}>
-        <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 32, color: '#f5c518', letterSpacing: 4 }}>⚡ DRILLS</div>
+        <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 32, color: '#f5c518', letterSpacing: 4 }}>DRILLS</div>
         <div style={{ fontSize: 11, color: '#4060a0', letterSpacing: 2, marginTop: 2 }}>STANDALONE PRACTICE TESTS</div>
       </div>
 
@@ -1430,7 +1430,6 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
   const subDrillId = config.regionLabel === 'State' ? 'us-states' : config.regionLabel === 'Province' ? 'canada' : 'mexico'
   const [missCounts, setMissCounts] = useState(() => getDrillMissCounts(subDrillId))
   const sessionSavedSub = useRef(false)
-  useEffect(() => { if (remaining === 0 && !sessionSavedSub.current) { sessionSavedSub.current = true; saveDrillSession(subDrillId, score.correct, score.total); saveDrillMisses(subDrillId, Object.entries(attemptResults).filter(([,r]) => !r.correct).map(([name]) => name)); setMissCounts(getDrillMissCounts(subDrillId)) } }, [remaining])
   const [zoom, setZoom] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
   const [minZoom, setMinZoom] = useState(1)
@@ -1589,6 +1588,7 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
   }
 
   const remaining = config.data.length - attempted.size
+  useEffect(() => { if (remaining === 0 && !sessionSavedSub.current) { sessionSavedSub.current = true; saveDrillSession(subDrillId, score.correct, score.total); saveDrillMisses(subDrillId, Object.entries(attemptResults).filter(([,r]) => !r.correct).map(([name]) => name)); setMissCounts(getDrillMissCounts(subDrillId)) } }, [remaining])
   const vw = config.width || 960, vh = config.height || 500
 
   const filteredList = config.data
@@ -1866,7 +1866,6 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
   const [attemptResults, setAttemptResults] = useState({})
   const [missCounts, setMissCounts] = useState(() => getDrillMissCounts('region-' + regionKey))
   const sessionSavedReg = useRef(false)
-  useEffect(() => { if (remaining === 0 && !sessionSavedReg.current) { sessionSavedReg.current = true; saveDrillSession('region-' + regionKey, score.correct, score.total); saveDrillMisses('region-' + regionKey, Object.entries(attemptResults).filter(([,r]) => !r.correct).map(([id]) => id)); setMissCounts(getDrillMissCounts('region-' + regionKey)) } }, [remaining])
   const [showReference, setShowReference] = useState(false)
   const [refMode, setRefMode] = useState('map')
   const [zoom, setZoom] = useState(1)
@@ -1881,6 +1880,7 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
   const regionPaths = worldPaths.filter(p => region.ids.has(p.id))
   const regionCountries = COUNTRIES.filter(c => region.ids.has(c.id))
   const remaining = regionCountries.length - attempted.size
+  useEffect(() => { if (remaining === 0 && !sessionSavedReg.current) { sessionSavedReg.current = true; saveDrillSession('region-' + regionKey, score.correct, score.total); saveDrillMisses('region-' + regionKey, Object.entries(attemptResults).filter(([,r]) => !r.correct).map(([id]) => id)); setMissCounts(getDrillMissCounts('region-' + regionKey)) } }, [remaining])
 
   // Auto-center on region when paths load
   useEffect(() => {

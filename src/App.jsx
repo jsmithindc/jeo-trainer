@@ -12,7 +12,7 @@ import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpi
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 import { DrillsView } from './drills.jsx'
 
-const APP_VERSION = '2.2.4'
+const APP_VERSION = '2.2.5'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -1164,7 +1164,7 @@ function Header({ coryatScore, actualScore, correctCount, incorrectCount, passCo
   const showActual = actualScore !== 0 || coryatScore !== actualScore
   return (
     <header style={S.header}>
-      <div style={{ minWidth: 120 }}>
+      <div>
         <div style={S.logoMain}>JEO TRAINER</div>
         {episodeMeta
           ? <div style={S.logoSub}>#{episodeMeta.episodeNumber} · {episodeMeta.airDate}</div>
@@ -1190,7 +1190,7 @@ function Header({ coryatScore, actualScore, correctCount, incorrectCount, passCo
           </div>
         )}
       </div>
-      <div style={{ ...S.headerStats, minWidth: 120, justifyContent: 'flex-end' }}>
+      <div style={{ ...S.headerStats, justifyContent: 'flex-end' }}>
         <div style={S.pill}>{correctCount}✓ {incorrectCount}✗ {passCount}—</div>
         <div style={S.pill}>{answeredCount}/{totalClues}</div>
         <button style={{ ...S.authBtn, color: syncError ? '#e57373' : user ? '#7cd992' : '#8890c0' }} onClick={onAuthClick} title={syncError ? `Sync error: ${syncError}` : user ? 'Synced' : 'Sign in to sync'}>
@@ -3893,10 +3893,10 @@ function ScoreSparkline({ games }) {
 // ─── Styles ───────────────────────────────────────────────────────────────────
 const S = {
   app: { fontFamily: "'Barlow Condensed', sans-serif", background: '#060b1a', minHeight: '100dvh', color: '#e8e8f0' },
-  header: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', paddingTop: 'calc(12px + env(safe-area-inset-top))', background: 'linear-gradient(135deg, #0a0f2e 0%, #0f1e6e 100%)', borderBottom: '3px solid #f5c518', boxShadow: '0 4px 20px rgba(245,197,24,0.2)', position: 'relative' },
+  header: { display: 'grid', gridTemplateColumns: '1fr auto 1fr', alignItems: 'center', padding: '12px 16px', paddingTop: 'calc(12px + env(safe-area-inset-top))', background: 'linear-gradient(135deg, #0a0f2e 0%, #0f1e6e 100%)', borderBottom: '3px solid #f5c518', boxShadow: '0 4px 20px rgba(245,197,24,0.2)' },
   logoMain: { fontFamily: "'Bebas Neue', sans-serif", fontSize: 26, color: '#f5c518', letterSpacing: 4 },
   logoSub: { fontSize: 9, letterSpacing: 3, color: '#8890c0', marginTop: -4 },
-  scoreBox: { textAlign: 'center', position: 'absolute', left: '50%', transform: 'translateX(-50%)' },
+  scoreBox: { textAlign: 'center' },
   scoreLbl: { fontSize: 10, letterSpacing: 3, color: '#8890c0' },
   scoreVal: { fontFamily: "'Bebas Neue', sans-serif", fontSize: 38, lineHeight: 1.1 },
   headerStats: { display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 },

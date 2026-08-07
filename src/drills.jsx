@@ -856,39 +856,34 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids, card
   }
 
   // Auto-select next country generally moving east
-  function autoSelectNext() {
-    const unattempted = COUNTRIES.filter(c => !attempted.has(c.id))
+  function autoSelectNextWith(att = attempted) {
+    const unattempted = COUNTRIES.filter(c => !att.has(c.id))
     if (unattempted.length === 0) return
 
-    // Sort by longitude (west to east), then latitude (north to south)
     const withCentroids = unattempted
       .map(c => ({ ...c, centroid: pathCentroids.current[c.id] }))
       .filter(c => c.centroid)
 
     if (withCentroids.length === 0) {
-      // Fallback: pick random
       const r = unattempted[Math.floor(Math.random() * unattempted.length)]
       handleCountryClick(r.id)
       return
     }
 
-    // Find current position (selected country centroid or start from left)
     const curCentroid = selected && pathCentroids.current[selected]
       ? pathCentroids.current[selected]
       : { x: 0, y: 0 }
 
-    // Find nearest country to the east (higher x), wrapping around
     let eastward = withCentroids.filter(c => c.centroid.x > curCentroid.x + 10)
-    if (eastward.length === 0) eastward = withCentroids // wrap to start
+    if (eastward.length === 0) eastward = withCentroids
 
-    // Sort by x then y, pick closest
     eastward.sort((a, b) => a.centroid.x - b.centroid.x || a.centroid.y - b.centroid.y)
     handleCountryClick(eastward[0].id)
 
-    // Pan/zoom to selected country
     const c = eastward[0].centroid
     setPan({ x: -(c.x * zoom - 480), y: -(c.y * zoom - 250) })
   }
+  function autoSelectNext() { autoSelectNextWith(attempted) }
 
   function handleCountryClick(id) {
     if (attempted.has(id)) return
@@ -916,7 +911,7 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids, card
       saveDrillMisses('world-map', Object.entries(newResults).filter(([,r]) => !r.correct).map(([id]) => id))
       setMissCounts(getDrillMissCounts('world-map'))
     }
-    if (autoNext) setTimeout(() => { setSelected(null); setResult(null); autoSelectNext() }, 1200)
+    if (autoNext) { const na = new Set([...attempted, selected]); setTimeout(() => { setSelected(null); setResult(null); autoSelectNextWith(na) }, 1200) }
   }
 
   function markItemCorrect(field) {
@@ -1597,7 +1592,7 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
       saveDrillMisses(subDrillId, Object.entries(newResults).filter(([,r]) => !r.correct).map(([name]) => name))
       setMissCounts(getDrillMissCounts(subDrillId))
     }
-    if (autoNext) setTimeout(() => { setSelected(null); setResult(null); autoSelectNext() }, 1200)
+    if (autoNext) { const na = new Set([...attempted, selected]); setTimeout(() => { setSelected(null); setResult(null); autoSelectNextWith(na) }, 1200) }
   }
 
   function markItemCorrect(field) {
@@ -1608,8 +1603,8 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
     if (updated.regionCorrect && updated.capitalCorrect) setScore(prev => ({ ...prev, correct: prev.correct + 1 }))
   }
 
-  function autoSelectNext() {
-    const unattempted = config.data.filter(d => !attempted.has(d.name))
+  function autoSelectNextWith(att = attempted) {
+    const unattempted = config.data.filter(d => !att.has(d.name))
     if (!unattempted.length) return
     const curCentroid = selected && centroids[selected] ? centroids[selected] : { x: 0, y: 0 }
     const withC = unattempted.map(d => ({ ...d, c: centroids[d.name] })).filter(d => d.c)
@@ -1852,38 +1847,52 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
 const TINY_ISLANDS = new Set(['BRB','LCA','VCT','GRD','ATG','DMA','KNA','BHS','TTO','JAM'])
 // Caribbean bounding box in equirectangular 960x500 coords
 // lon: -90 to -59, lat: 8 to 28
-const CARIB_BOUNDS = { minX: 190, maxX: 270, minY: 155, maxY: 215 }
+const CARIB_BOUNDS = { minX: 195, maxX: 268, minY: 158, maxY: 213 }
 
 function CaribbeanInset({ paths, selected, attempted, attemptResults }) {
   const { minX, maxX, minY, maxY } = CARIB_BOUNDS
   const w = maxX - minX, h = maxY - minY
-  const scale = 3.5
+  const scale = 4.5
   const vw = w * scale, vh = h * scale
+
+  // Get centroid of a path
+  function getCx(d) {
+    const coords = [...d.matchAll(/[ML]([\d.]+),([\d.]+)/g)].map(m => [+m[1], +m[2]])
+    const xs = coords.map(c => c[0])
+    return (Math.min(...xs) + Math.max(...xs)) / 2
+  }
+  function getCy(d) {
+    const coords = [...d.matchAll(/[ML]([\d.]+),([\d.]+)/g)].map(m => [+m[1], +m[2]])
+    const ys = coords.map(c => c[1])
+    return (Math.min(...ys) + Math.max(...ys)) / 2
+  }
+
+  const visiblePaths = paths.filter(p => {
+    const coords = [...p.d.matchAll(/[ML]([\d.]+),([\d.]+)/g)].map(m => [+m[1], +m[2]])
+    if (!coords.length) return false
+    const xs = coords.map(c => c[0]), ys = coords.map(c => c[1])
+    return Math.min(...xs) < maxX && Math.max(...xs) > minX && Math.min(...ys) < maxY && Math.max(...ys) > minY
+  })
+
+  const selectedPath = paths.find(p => p.id === selected)
+  const selCx = selectedPath ? getCx(selectedPath.d) : null
+  const selCy = selectedPath ? getCy(selectedPath.d) : null
 
   return (
     <div style={{ position:'absolute', bottom:8, right:8, width:vw, height:vh, background:'#060b1a', border:'2px solid #f5c518', borderRadius:8, overflow:'hidden', boxShadow:'0 2px 12px rgba(0,0,0,0.6)', zIndex:10 }}>
       <div style={{ fontSize:8, color:'#f5c518', letterSpacing:1, padding:'2px 6px', background:'rgba(0,0,0,0.5)', position:'absolute', top:0, left:0, zIndex:1 }}>CARIBBEAN</div>
       <svg width={vw} height={vh} viewBox={`${minX} ${minY} ${w} ${h}`} style={{ display:'block' }}>
         <rect x={minX} y={minY} width={w} height={h} fill="#060b1a" />
-        {paths.filter(p => {
-          // Only show paths that overlap the Caribbean bounds
-          const coords = [...(p.d.matchAll(/[ML]([\d.]+),([\d.]+)/g) || [])].map(m => [+m[1], +m[2]])
-          if (!coords.length) return false
-          const xs = coords.map(c => c[0]), ys = coords.map(c => c[1])
-          return Math.min(...xs) < maxX && Math.max(...xs) > minX && Math.min(...ys) < maxY && Math.max(...ys) > minY
-        }).map(p => {
+        {visiblePaths.map(p => {
           const isSelected = p.id === selected
           const res = attemptResults[p.id]
           const fill = isSelected ? '#f5c518' : res ? '#e0e0e0' : attempted?.has(p.id) ? '#e0e0e0' : '#1a3070'
-          return (
-            <g key={p.id}>
-              <path d={p.d} fill={fill} stroke="#0a0f2e" strokeWidth={0.3} />
-              {isSelected && (
-                <circle cx={(() => { const coords=[...p.d.matchAll(/[ML]([\d.]+),([\d.]+)/g)].map(m=>[+m[1],+m[2]]); const xs=coords.map(c=>c[0]); return (Math.min(...xs)+Math.max(...xs))/2 })()} cy={(() => { const coords=[...p.d.matchAll(/[ML]([\d.]+),([\d.]+)/g)].map(m=>[+m[1],+m[2]]); const ys=coords.map(c=>c[1]); return (Math.min(...ys)+Math.max(...ys))/2 })()} r={0.8} fill="#f5c518" />
-              )}
-            </g>
-          )
+          return <path key={p.id} d={p.d} fill={fill} stroke="#0a0f2e" strokeWidth={0.4} />
         })}
+        {/* Always show a dot for selected island even if path is too tiny to see */}
+        {selCx && selCy && (
+          <circle cx={selCx} cy={selCy} r={1.2} fill="#f5c518" stroke="#0a0f2e" strokeWidth={0.3} />
+        )}
       </svg>
     </div>
   )
@@ -1968,7 +1977,8 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
   function checkAnswer() {
     const country = COUNTRY_MAP[selected]
     if (!country) return
-    const countryCorrect = fuzzyMatch(answer.country, country.name)
+    const isTiny = TINY_ISLANDS.has(selected)
+    const countryCorrect = isTiny ? true : fuzzyMatch(answer.country, country.name)
     const capitalCorrect = fuzzyMatch(answer.capital, country.capital)
     const both = countryCorrect && capitalCorrect
     setResult({ countryCorrect, capitalCorrect, country })
@@ -1983,7 +1993,7 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
       saveDrillMisses('region-' + regionKey, Object.entries(newResults).filter(([,r]) => !r.correct).map(([id]) => id))
       setMissCounts(getDrillMissCounts('region-' + regionKey))
     }
-    if (autoNext) setTimeout(() => { setSelected(null); setResult(null); autoSelectNext() }, 1200)
+    if (autoNext) { const na = new Set([...attempted, selected]); setTimeout(() => { setSelected(null); setResult(null); autoSelectNextWith(na) }, 1200) }
   }
 
   function markItemCorrect(field) {
@@ -1993,8 +2003,8 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
     if (updated?.countryCorrect && updated?.capitalCorrect) setScore(prev => ({ ...prev, correct: prev.correct + 1 }))
   }
 
-  function autoSelectNext() {
-    const unattempted = regionCountries.filter(c => !attempted.has(c.id))
+  function autoSelectNextWith(att = attempted) {
+    const unattempted = regionCountries.filter(c => !att.has(c.id))
     if (!unattempted.length) return
     const curC = selected && worldCentroids.current[selected] ? worldCentroids.current[selected] : { x: 0, y: 0 }
     const withC = unattempted.map(c => ({ ...c, c: worldCentroids.current[c.id] })).filter(c => c.c)
@@ -2006,6 +2016,7 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
     const c = east[0].c
     setPan({ x: -(c.x * zoom - 480), y: -(c.y * zoom - 250) })
   }
+  function autoSelectNext() { autoSelectNextWith(attempted) }
 
   const filteredList = regionCountries
     .filter(c => !listSearch || c.name.toLowerCase().includes(listSearch.toLowerCase()) || c.capital.toLowerCase().includes(listSearch.toLowerCase()))
@@ -2142,9 +2153,7 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
         onTouchMove={e => { if(dragging&&dragStart){const t=e.touches[0];setPan({x:t.clientX-dragStart.x,y:t.clientY-dragStart.y})} }}
         onTouchEnd={() => setDragging(false)}
       >
-        {selected && TINY_ISLANDS.has(selected) && (
-          <CaribbeanInset paths={regionPaths} selected={selected} attempted={attempted} attemptResults={attemptResults} />
-        )}
+
         <svg viewBox="0 0 960 500" style={{ width:'100%', height:'auto', display:'block' }}>
           <rect width="960" height="500" fill="#060b1a" />
           <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
@@ -2198,6 +2207,13 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
               }}>＋ Add to deck</button>
               <button style={{ ...S.btn, marginTop:12, fontSize:14 }} onClick={() => setSelected(null)}>TAP ANOTHER</button>
             </div>
+          ) : TINY_ISLANDS.has(selected) ? (
+            <div>
+              <div style={{ fontSize: 11, color: '#4060a0', letterSpacing: 2, marginBottom: 6 }}>CAPITAL OF</div>
+              <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 28, color: '#f5c518', letterSpacing: 2, marginBottom: 10 }}>{COUNTRY_MAP[selected]?.name}</div>
+              <input ref={inputRef} style={{ ...S.input, marginBottom:10 }} value={answer.capital} onChange={e => setAnswer(a=>({...a,capital:e.target.value}))} onKeyDown={e => { if(e.key==='Enter') checkAnswer() }} placeholder="Capital city..." autoFocus />
+              <button style={S.btn} onClick={() => checkAnswer()}>CHECK</button>
+            </div>
           ) : (
             <div>
               <div style={S.subtitle}>IDENTIFY THIS COUNTRY</div>
@@ -2208,7 +2224,33 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
           )}
         </div>
       )}
-      {!selected && <div style={{ textAlign:'center', fontSize:12, color:'#2a3460', padding:'8px 0' }}>Tap any country on the map</div>}
+      {!selected && (
+        <div>
+          <div style={{ textAlign:'center', fontSize:12, color:'#2a3460', padding:'8px 0' }}>Tap any country on the map</div>
+          {(() => {
+            const tinyInRegion = [...region.ids].filter(id => TINY_ISLANDS.has(id) && !attempted.has(id))
+            if (!tinyInRegion.length) return null
+            return (
+              <div style={{ marginTop: 4 }}>
+                <div style={{ fontSize: 9, color: '#4060a0', letterSpacing: 2, textAlign: 'center', marginBottom: 6 }}>ISLAND NATIONS</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, justifyContent: 'center' }}>
+                  {tinyInRegion.map(id => {
+                    const c = COUNTRY_MAP[id]
+                    if (!c) return null
+                    const done = attemptResults[id]
+                    return (
+                      <button key={id} onClick={() => { setSelected(id); setAnswer({ country: c.name, capital: '' }); setResult(null) }}
+                        style={{ fontSize: 11, padding: '4px 10px', borderRadius: 8, border: `1px solid ${done ? '#2e8c50' : '#1a2460'}`, background: done ? '#0a1e10' : '#0a0f2e', color: done ? '#4caf7d' : '#c0c8e8', cursor: 'pointer' }}>
+                        {c.name}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            )
+          })()}
+        </div>
+      )}
     </div>
   )
 }

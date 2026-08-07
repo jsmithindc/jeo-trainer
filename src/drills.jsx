@@ -745,7 +745,8 @@ function LabeledMapReference({ onBack, paths, pathCentroids }) {
                 onClick={() => toggleReveal(c.id)}
               >
                 <div style={{ flex: 1 }}>
-                  <span style={{ fontSize: 13, color: '#c0c8e8' }}>{c.name}</span>
+                  <span style={{ fontSize: 13, color: missCounts[c.id] > 0 ? '#ffb3b3' : '#c0c8e8' }}>{c.name}</span>
+                  {missCounts[c.id] > 0 && <span style={{ display:'inline-flex', gap:2, marginLeft:4, verticalAlign:'middle' }}>{[0,1,2].map(i=><span key={i} style={{ width:6, height:6, borderRadius:'50%', background: i<missCounts[c.id]?'#e57373':'#1a2460', display:'inline-block' }}/>)}</span>}
                   {revealed.has(c.id) && (
                     <span style={{ fontSize: 12, color: '#f5c518', marginLeft: 10 }}>→ {c.capital}</span>
                   )}
@@ -770,6 +771,9 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids, card
   const [score, setScore] = useState({ correct: 0, total: 0 })
   const [attempted, setAttempted] = useState(new Set())
   const [attemptResults, setAttemptResults] = useState({}) // id → { correct, country }
+  const [missCounts, setMissCounts] = useState(() => getDrillMissCounts('world-map'))
+  const sessionSaved = useRef(false)
+  useEffect(() => { if (remaining === 0 && !sessionSaved.current) { sessionSaved.current = true; saveDrillSession('world-map', score.correct, score.total); saveDrillMisses('world-map', Object.entries(attemptResults).filter(([,r]) => !r.correct).map(([id]) => id)); setMissCounts(getDrillMissCounts('world-map')) } }, [remaining])
   const [mode, setMode] = useState('map')
   const [showReference, setShowReference] = useState(false)
   const [retryCount, setRetryCount] = useState(0)
@@ -1173,9 +1177,9 @@ export function DrillsView({ cards = [], setCards = () => {} }) {
   // Top-level hub
   return (
     <div style={{ ...S.wrap, paddingTop: 8 }}>
-      <div style={S.card}>
-        <div style={S.title}>DRILLS</div>
-        <div style={S.subtitle}>STANDALONE PRACTICE TESTS</div>
+      <div style={{ background: 'linear-gradient(135deg, #0a0f2e 0%, #0f1e6e 100%)', borderRadius: 12, padding: '20px 16px', marginBottom: 4, textAlign: 'center', border: '1px solid #2a3480' }}>
+        <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 32, color: '#f5c518', letterSpacing: 4 }}>⚡ DRILLS</div>
+        <div style={{ fontSize: 11, color: '#4060a0', letterSpacing: 2, marginTop: 2 }}>STANDALONE PRACTICE TESTS</div>
       </div>
 
       {[
@@ -1423,6 +1427,10 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
   const [attemptResults, setAttemptResults] = useState({})
   const [refMode, setRefMode] = useState('map')
   const [revealed, setRevealed] = useState(new Set())
+  const subDrillId = config.regionLabel === 'State' ? 'us-states' : config.regionLabel === 'Province' ? 'canada' : 'mexico'
+  const [missCounts, setMissCounts] = useState(() => getDrillMissCounts(subDrillId))
+  const sessionSavedSub = useRef(false)
+  useEffect(() => { if (remaining === 0 && !sessionSavedSub.current) { sessionSavedSub.current = true; saveDrillSession(subDrillId, score.correct, score.total); saveDrillMisses(subDrillId, Object.entries(attemptResults).filter(([,r]) => !r.correct).map(([name]) => name)); setMissCounts(getDrillMissCounts(subDrillId)) } }, [remaining])
   const [zoom, setZoom] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
   const [minZoom, setMinZoom] = useState(1)
@@ -1465,16 +1473,45 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
             y: (Math.min(...ys) + Math.max(...ys)) / 2,
           }
         }
+        // For US states: reposition Alaska and Hawaii as insets
+        const isUS = config.regionLabel === 'State' && config.bounds?.[0] === -125
+
+        function transformCoords(coords, name) {
+          if (!isUS) return coords
+          if (name === 'Alaska') {
+            // Scale down and move to bottom-left inset
+            return coords.map(ring => ring.map(([lon, lat]) => {
+              // Scale Alaska down to ~35% and shift to bottom-left
+              const scale = 0.35
+              const shiftLon = 40, shiftLat = -38
+              return [lon * scale + shiftLon, lat * scale + shiftLat]
+            }))
+          }
+          if (name === 'Hawaii') {
+            // Move Hawaii to bottom-center-left inset
+            return coords.map(ring => ring.map(([lon, lat]) => {
+              return [lon + 55, lat - 8]
+            }))
+          }
+          return coords
+        }
+
+        function transformMultiCoords(coordsArray, name) {
+          return coordsArray.map(c => transformCoords(c, name))
+        }
+
         const newCentroids = {}
         const built = geo.features.map(f => {
           const name = f.properties?.name || f.properties?.NAME || ''
           let d = '', centroid = null
           if (f.geometry?.type === 'Polygon') {
-            d = toPath(f.geometry.coordinates)
-            centroid = getCentroid(f.geometry.coordinates)
+            const transformed = transformCoords(f.geometry.coordinates, name)
+            d = toPath(transformed)
+            centroid = getCentroid(transformed)
           } else if (f.geometry?.type === 'MultiPolygon') {
-            d = f.geometry.coordinates.map(p => toPath(p)).join(' ')
-            const largest = f.geometry.coordinates.reduce((a,b) => b[0].length > a[0].length ? b : a)
+            const transformed = transformMultiCoords(f.geometry.coordinates, name)
+            d = transformed.map(p => toPath(p)).join(' ')
+            const largest = transformed.reduce((a,b) => b[0].length > a[0].length ? b : a)
             centroid = getCentroid(largest)
           }
           if (centroid) newCentroids[name] = centroid
@@ -1496,7 +1533,7 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
           const cy = (Math.min(...ys) + Math.max(...ys)) / 2
           const spanX = Math.max(...xs) - Math.min(...xs)
           const spanY = Math.max(...ys) - Math.min(...ys)
-          const newZoom = Math.min(Math.max(Math.min(vw2 * 0.85 / (spanX||1), vh2 * 0.85 / (spanY||1)), 1), 8)
+          const newZoom = Math.min(Math.max(Math.min(vw2 * 0.75 / (spanX||1), vh2 * 0.72 / (spanY||1)), 1), 8)
           setZoom(newZoom)
           setMinZoom(newZoom)
           setPan({ x: vw2/2 - cx * newZoom, y: vh2/2 - cy * newZoom })
@@ -1626,7 +1663,8 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
             {filteredList.map((d,i) => (
               <div key={d.name} style={{ display:'flex', alignItems:'center', gap:10, padding:'8px 14px', borderBottom:i<filteredList.length-1?'1px solid #0d1235':'none', background:revealed.has(d.name)?'rgba(77,208,225,0.06)':i%2===0?'transparent':'#060b1a', cursor:'pointer' }} onClick={() => setRevealed(prev=>{const n=new Set(prev);n.has(d.name)?n.delete(d.name):n.add(d.name);return n})}>
                 <div style={{ flex:1 }}>
-                  <span style={{ fontSize:13, color:'#c0c8e8' }}>{d.name}</span>
+                  <span style={{ fontSize:13, color: missCounts[d.name] > 0 ? '#ffb3b3' : '#c0c8e8' }}>{d.name}</span>
+                  {missCounts[d.name] > 0 && <span style={{ display:'inline-flex', gap:2, marginLeft:4, verticalAlign:'middle' }}>{[0,1,2].map(i=><span key={i} style={{ width:6, height:6, borderRadius:'50%', background: i<missCounts[d.name]?'#e57373':'#1a2460', display:'inline-block' }}/>)}</span>}
                   {revealed.has(d.name) && <span style={{ fontSize:12, color:'#f5c518', marginLeft:10 }}>→ {d.capital}</span>}
                 </div>
                 <span style={{ fontSize:10, color:'#2a3460' }}>{revealed.has(d.name)?'▲':'▼'}</span>
@@ -1694,7 +1732,7 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
       </div>
 
       <div
-        style={{ width:'100%', background:'#060b1a', borderRadius:12, overflow:'hidden', border:'1px solid #1a2460', cursor:dragging?'grabbing':'grab', userSelect:'none' }}
+        style={{ width:'100%', background:'#060b1a', borderRadius:12, overflow:'hidden', border:'1px solid #1a2460', cursor:dragging?'grabbing':'grab', userSelect:'none', position:'relative' }}
         onMouseDown={e => { setDragging(true); setDragStart({x:e.clientX-pan.x,y:e.clientY-pan.y}) }}
         onMouseMove={e => { if(dragging&&dragStart) setPan({x:e.clientX-dragStart.x,y:e.clientY-dragStart.y}) }}
         onMouseUp={() => setDragging(false)} onMouseLeave={() => setDragging(false)}
@@ -1776,6 +1814,47 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
 }
 
 // ─── Regional World Map ───────────────────────────────────────────────────────
+// Tiny island nations that need a Caribbean inset view
+const TINY_ISLANDS = new Set(['BRB','LCA','VCT','GRD','ATG','DMA','KNA','BHS','TTO','JAM'])
+// Caribbean bounding box in equirectangular 960x500 coords
+// lon: -90 to -59, lat: 8 to 28
+const CARIB_BOUNDS = { minX: 190, maxX: 270, minY: 155, maxY: 215 }
+
+function CaribbeanInset({ paths, selected, attempted, attemptResults }) {
+  const { minX, maxX, minY, maxY } = CARIB_BOUNDS
+  const w = maxX - minX, h = maxY - minY
+  const scale = 3.5
+  const vw = w * scale, vh = h * scale
+
+  return (
+    <div style={{ position:'absolute', bottom:8, right:8, width:vw, height:vh, background:'#060b1a', border:'2px solid #f5c518', borderRadius:8, overflow:'hidden', boxShadow:'0 2px 12px rgba(0,0,0,0.6)', zIndex:10 }}>
+      <div style={{ fontSize:8, color:'#f5c518', letterSpacing:1, padding:'2px 6px', background:'rgba(0,0,0,0.5)', position:'absolute', top:0, left:0, zIndex:1 }}>CARIBBEAN</div>
+      <svg width={vw} height={vh} viewBox={`${minX} ${minY} ${w} ${h}`} style={{ display:'block' }}>
+        <rect x={minX} y={minY} width={w} height={h} fill="#060b1a" />
+        {paths.filter(p => {
+          // Only show paths that overlap the Caribbean bounds
+          const coords = [...(p.d.matchAll(/[ML]([\d.]+),([\d.]+)/g) || [])].map(m => [+m[1], +m[2]])
+          if (!coords.length) return false
+          const xs = coords.map(c => c[0]), ys = coords.map(c => c[1])
+          return Math.min(...xs) < maxX && Math.max(...xs) > minX && Math.min(...ys) < maxY && Math.max(...ys) > minY
+        }).map(p => {
+          const isSelected = p.id === selected
+          const res = attemptResults[p.id]
+          const fill = isSelected ? '#f5c518' : res ? '#e0e0e0' : attempted?.has(p.id) ? '#e0e0e0' : '#1a3070'
+          return (
+            <g key={p.id}>
+              <path d={p.d} fill={fill} stroke="#0a0f2e" strokeWidth={0.3} />
+              {isSelected && (
+                <circle cx={(() => { const coords=[...p.d.matchAll(/[ML]([\d.]+),([\d.]+)/g)].map(m=>[+m[1],+m[2]]); const xs=coords.map(c=>c[0]); return (Math.min(...xs)+Math.max(...xs))/2 })()} cy={(() => { const coords=[...p.d.matchAll(/[ML]([\d.]+),([\d.]+)/g)].map(m=>[+m[1],+m[2]]); const ys=coords.map(c=>c[1]); return (Math.min(...ys)+Math.max(...ys))/2 })()} r={0.8} fill="#f5c518" />
+              )}
+            </g>
+          )
+        })}
+      </svg>
+    </div>
+  )
+}
+
 function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards = [], setCards = () => {} }) {
   const region = REGIONS[regionKey]
   const [revealed, setRevealed] = useState(new Set())
@@ -1785,6 +1864,9 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
   const [score, setScore] = useState({ correct: 0, total: 0 })
   const [attempted, setAttempted] = useState(new Set())
   const [attemptResults, setAttemptResults] = useState({})
+  const [missCounts, setMissCounts] = useState(() => getDrillMissCounts('region-' + regionKey))
+  const sessionSavedReg = useRef(false)
+  useEffect(() => { if (remaining === 0 && !sessionSavedReg.current) { sessionSavedReg.current = true; saveDrillSession('region-' + regionKey, score.correct, score.total); saveDrillMisses('region-' + regionKey, Object.entries(attemptResults).filter(([,r]) => !r.correct).map(([id]) => id)); setMissCounts(getDrillMissCounts('region-' + regionKey)) } }, [remaining])
   const [showReference, setShowReference] = useState(false)
   const [refMode, setRefMode] = useState('map')
   const [zoom, setZoom] = useState(1)
@@ -1821,7 +1903,7 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
     if (cx < 0) cx += 960 // wrap back to positive
     const cy = (minY + maxY) / 2
     const spanX = maxX - minX, spanY = maxY - minY
-    const zx = 960 * 0.8 / (spanX || 1), zy = 500 * 0.8 / (spanY || 1)
+    const zx = 960 * 0.75 / (spanX || 1), zy = 500 * 0.72 / (spanY || 1)
     const newZoom = Math.min(Math.max(Math.min(zx, zy), 1), 8)
     setZoom(newZoom)
     setMinZoom(newZoom)
@@ -1893,7 +1975,7 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
             <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:11 }} onClick={() => setRevealed(new Set())}>Hide All</button>
           </div>
           <div
-            style={{ width:'100%', background:'#060b1a', borderRadius:12, overflow:'hidden', border:'1px solid #1a2460', cursor:dragging?'grabbing':'grab', userSelect:'none' }}
+            style={{ width:'100%', background:'#060b1a', borderRadius:12, overflow:'hidden', border:'1px solid #1a2460', cursor:dragging?'grabbing':'grab', userSelect:'none', position:'relative' }}
             onMouseDown={e => { setDragging(true); setDragStart({x:e.clientX-pan.x,y:e.clientY-pan.y}) }}
             onMouseMove={e => { if(dragging&&dragStart) setPan({x:e.clientX-dragStart.x,y:e.clientY-dragStart.y}) }}
             onMouseUp={() => setDragging(false)} onMouseLeave={() => setDragging(false)}
@@ -1936,7 +2018,8 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
               <div key={c.id} style={{ display:'flex', alignItems:'center', gap:10, padding:'8px 14px', borderBottom:i<filteredList.length-1?'1px solid #0d1235':'none', background:revealed.has(c.id)?'rgba(77,208,225,0.06)':i%2===0?'transparent':'#060b1a', cursor:'pointer' }}
                 onClick={() => setRevealed(prev=>{const n=new Set(prev);n.has(c.id)?n.delete(c.id):n.add(c.id);return n})}>
                 <div style={{ flex:1 }}>
-                  <span style={{ fontSize:13, color:'#c0c8e8' }}>{c.name}</span>
+                  <span style={{ fontSize:13, color: missCounts[c.id] > 0 ? '#ffb3b3' : '#c0c8e8' }}>{c.name}</span>
+                  {missCounts[c.id] > 0 && <span style={{ display:'inline-flex', gap:2, marginLeft:4, verticalAlign:'middle' }}>{[0,1,2].map(i=><span key={i} style={{ width:6, height:6, borderRadius:'50%', background: i<missCounts[c.id]?'#e57373':'#1a2460', display:'inline-block' }}/>)}</span>}
                   {revealed.has(c.id) && <span style={{ fontSize:12, color:'#f5c518', marginLeft:10 }}>→ {c.capital}</span>}
                 </div>
                 <span style={{ fontSize:10, color:'#2a3460' }}>{revealed.has(c.id)?'▲':'▼'}</span>
@@ -2003,6 +2086,9 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
         onTouchMove={e => { if(dragging&&dragStart){const t=e.touches[0];setPan({x:t.clientX-dragStart.x,y:t.clientY-dragStart.y})} }}
         onTouchEnd={() => setDragging(false)}
       >
+        {selected && TINY_ISLANDS.has(selected) && (
+          <CaribbeanInset paths={regionPaths} selected={selected} attempted={attempted} attemptResults={attemptResults} />
+        )}
         <svg viewBox="0 0 960 500" style={{ width:'100%', height:'auto', display:'block' }}>
           <rect width="960" height="500" fill="#060b1a" />
           <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>

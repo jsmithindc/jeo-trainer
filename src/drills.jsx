@@ -1558,7 +1558,7 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
           setZoom(newZoom)
           setMinZoom(newZoom)
           // Shift Canada up to show northern territories
-          const subAdj = config.regionLabel === 'Province' ? { dx: 0, dy: 85 } : { dx: 0, dy: 0 }
+          const subAdj = config.regionLabel === 'Province' ? { dx: 0, dy: 90 } : { dx: 0, dy: 0 }
           const subInitPan = { x: vw2/2 - cx * newZoom + subAdj.dx, y: vh2/2 - cy * newZoom + subAdj.dy }
           setPan(subInitPan)
           setInitialPan(subInitPan)
@@ -1945,7 +1945,7 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
     // Per-region pan adjustments
     const panAdjust = {
       oceania:          { dx: 100, dy: -15 },  // shift east, slightly up
-      south_america:    { dx:   0, dy: -30 },  // balanced vertical centering
+      south_america:    { dx:   0, dy: -40 },  // balanced vertical centering
       central_america:  { dx:   0, dy:   0 },
     }
     const adj = panAdjust[regionKey] || { dx: 0, dy: 0 }

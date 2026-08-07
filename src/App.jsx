@@ -12,7 +12,7 @@ import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpi
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 import { DrillsView } from './drills.jsx'
 
-const APP_VERSION = '2.2.3'
+const APP_VERSION = '2.2.4'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -1164,7 +1164,7 @@ function Header({ coryatScore, actualScore, correctCount, incorrectCount, passCo
   const showActual = actualScore !== 0 || coryatScore !== actualScore
   return (
     <header style={S.header}>
-      <div style={{ minWidth: 100 }}>
+      <div style={{ minWidth: 120 }}>
         <div style={S.logoMain}>JEO TRAINER</div>
         {episodeMeta
           ? <div style={S.logoSub}>#{episodeMeta.episodeNumber} · {episodeMeta.airDate}</div>
@@ -1190,7 +1190,7 @@ function Header({ coryatScore, actualScore, correctCount, incorrectCount, passCo
           </div>
         )}
       </div>
-      <div style={{ ...S.headerStats, minWidth: 100, justifyContent: 'flex-end' }}>
+      <div style={{ ...S.headerStats, minWidth: 120, justifyContent: 'flex-end' }}>
         <div style={S.pill}>{correctCount}✓ {incorrectCount}✗ {passCount}—</div>
         <div style={S.pill}>{answeredCount}/{totalClues}</div>
         <button style={{ ...S.authBtn, color: syncError ? '#e57373' : user ? '#7cd992' : '#8890c0' }} onClick={onAuthClick} title={syncError ? `Sync error: ${syncError}` : user ? 'Synced' : 'Sign in to sync'}>

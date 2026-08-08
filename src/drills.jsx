@@ -106,14 +106,18 @@ function saveDrillMisses(drillId, missedKeys) {
 }
 
 function getDrillMissCounts(drillId) {
-  // Returns map of key → number of recent quizzes missed (1-3)
+  // Returns map of key → array of booleans [session0missed, session1missed, session2missed]
+  // session0 = most recent, session1 = previous, session2 = oldest
   const all = loadDrillMisses()
   const sessions = all[drillId] || []
-  const counts = {}
-  sessions.forEach(s => {
-    s.keys.forEach(k => { counts[k] = (counts[k] || 0) + 1 })
+  const result = {}
+  sessions.forEach((s, sessionIdx) => {
+    s.keys.forEach(k => {
+      if (!result[k]) result[k] = [false, false, false]
+      result[k][sessionIdx] = true
+    })
   })
-  return counts
+  return result
 }
 
 // ─── Presidents Data ──────────────────────────────────────────────────────────
@@ -312,6 +316,9 @@ export const COUNTRIES = [
   { id: 'RUS', name: 'Russia', capital: 'Moscow' },
   { id: 'RWA', name: 'Rwanda', capital: 'Kigali' },
   { id: 'KNA', name: 'Saint Kitts and Nevis', capital: 'Basseterre' },
+  { id: 'PRI', name: 'Puerto Rico', capital: 'San Juan' },
+  { id: 'GRD', name: 'Grenada', capital: "St. George's" },
+  { id: 'DMA', name: 'Dominica', capital: 'Roseau' },
   { id: 'LCA', name: 'Saint Lucia', capital: 'Castries' },
   { id: 'VCT', name: 'Saint Vincent and the Grenadines', capital: 'Kingstown' },
   { id: 'WSM', name: 'Samoa', capital: 'Apia' },
@@ -462,10 +469,10 @@ export function PresidentsDrill({ onBack, cards = [], setCards = () => {} }) {
             <span style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 16, color: '#f5c518', minWidth: 28, textAlign: 'right' }}>{p.num}</span>
             <div style={{ flex: 1 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <div style={{ fontSize: 13, color: missCounts[String(p.num)] > 0 ? '#ffb3b3' : '#c0c8e8' }}>{p.name}</div>
-                {missCounts[String(p.num)] > 0 && (
+                <div style={{ fontSize: 13, color: true ? '#ffb3b3' : '#c0c8e8' }}>{p.name}</div>
+                {(missCounts[String(p.num)] !== undefined) && (
                   <div style={{ display: 'flex', gap: 2 }}>
-                    {[0,1,2].map(i => <div key={i} style={{ width: 6, height: 6, borderRadius: '50%', background: i < missCounts[String(p.num)] ? '#e57373' : '#1a2460' }} />)}
+                    {(missCounts[String(p.num)] || [false,false,false]).map((missed, i) => <div key={i} style={{ width: 6, height: 6, borderRadius: '50%', background: missed ? '#e57373' : '#1a2460' }} />)}
                   </div>
                 )}
               </div>
@@ -654,7 +661,7 @@ function LabeledMapReference({ onBack, paths, pathCentroids }) {
           <div style={{ display: 'flex', gap: 8 }}>
             <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18 }} onClick={() => { const nz = Math.min(zoom * 1.5, 8); const cx = (480 - pan.x) / zoom; const cy = (250 - pan.y) / zoom; setPan({ x: 480 - cx * nz, y: 250 - cy * nz }); setZoom(nz) }}>+</button>
             <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18, opacity: zoom <= minZoom ? 0.3 : 1 }} disabled={zoom <= minZoom} onClick={() => { const nz = Math.max(zoom / 1.5, 1); setZoom(nz); if (nz <= minZoom) { setZoom(minZoom); setPan(initialPan) } }}>−</button>
-            <button style={{ ...S.btnSecondary, flex: 1, padding: '6px 0', fontSize: 12 }} onClick={() => { setZoom(minZoom); setPan({ x: 0, y: 0 }) }}>Reset View</button>
+            <button style={{ ...S.btnSecondary, flex: 1, padding: '6px 0', fontSize: 12 }} onClick={() => { setZoom(minZoom); setPan(initialPan) }}>Reset View</button>
             <button style={{ ...S.btnSecondary, flex: 1, padding: '6px 0', fontSize: 11, color: '#4dd0e1' }} onClick={() => setRevealed(new Set(COUNTRIES.map(c => c.id)))}>Show All</button>
             <button style={{ ...S.btnSecondary, flex: 1, padding: '6px 0', fontSize: 11 }} onClick={() => setRevealed(new Set())}>Hide All</button>
           </div>
@@ -746,7 +753,7 @@ function LabeledMapReference({ onBack, paths, pathCentroids }) {
               >
                 <div style={{ flex: 1 }}>
                   <span style={{ fontSize: 13, color: missCounts[c.id] > 0 ? '#ffb3b3' : '#c0c8e8' }}>{c.name}</span>
-                  {missCounts[c.id] > 0 && <span style={{ display:'inline-flex', gap:2, marginLeft:4, verticalAlign:'middle' }}>{[0,1,2].map(i=><span key={i} style={{ width:6, height:6, borderRadius:'50%', background: i<missCounts[c.id]?'#e57373':'#1a2460', display:'inline-block' }}/>)}</span>}
+                  {true && <span style={{ display:'inline-flex', gap:2, marginLeft:4, verticalAlign:'middle' }}>{(missCounts[c.id] || [false,false,false]).map((missed, i) => <span key={i} style={{ width:6, height:6, borderRadius:'50%', background: missed?'#e57373':'#1a2460', display:'inline-block' }}/>)}</span>}
                   {revealed.has(c.id) && (
                     <span style={{ fontSize: 12, color: '#f5c518', marginLeft: 10 }}>→ {c.capital}</span>
                   )}
@@ -757,6 +764,184 @@ function LabeledMapReference({ onBack, paths, pathCentroids }) {
           </div>
         </>
       )}
+    </div>
+  )
+}
+
+const WATER_BODIES = [
+  { name: 'Pacific Ocean', type: 'ocean', pts: '0.0,83.3 213.3,83.3 266.7,208.3 266.7,416.7 0.0,416.7', cx: 80.0, cy: 250.0 },
+  { name: 'Pacific Ocean', type: 'ocean', pts: '800.0,83.3 960.0,83.3 960.0,416.7 800.0,416.7', cx: 880.0, cy: 250.0 },
+  { name: 'Atlantic Ocean', type: 'ocean', pts: '266.7,83.3 453.3,83.3 506.7,250.0 506.7,416.7 320.0,416.7 266.7,250.0', cx: 370.0, cy: 230.0 },
+  { name: 'Indian Ocean', type: 'ocean', pts: '533.3,277.8 746.7,277.8 800.0,416.7 533.3,416.7', cx: 640.0, cy: 350.0 },
+  { name: 'Arctic Ocean', type: 'ocean', pts: '0.0,55.6 960.0,55.6 960.0,0.0 0.0,0.0', cx: 480.0, cy: 27.8 },
+  { name: 'Southern Ocean', type: 'ocean', pts: '0.0,416.7 960.0,416.7 960.0,458.3 0.0,458.3', cx: 480.0, cy: 433.3 },
+  { name: 'Mediterranean Sea', type: 'sea', pts: '464.0,150.0 576.0,150.0 576.0,133.3 464.0,133.3', cx: 520.0, cy: 141.7 },
+  { name: 'Caribbean Sea', type: 'sea', pts: '245.3,227.8 320.0,227.8 320.0,188.9 245.3,188.9', cx: 282.7, cy: 208.3 },
+  { name: 'South China Sea', type: 'sea', pts: '746.7,250.0 805.3,250.0 805.3,180.6 746.7,180.6', cx: 776.0, cy: 215.3 },
+  { name: 'Bering Sea', type: 'sea', pts: '912.0,105.6 960.0,105.6 960.0,66.7 912.0,66.7', cx: 936.0, cy: 86.2 },
+  { name: 'Coral Sea', type: 'sea', pts: '858.7,277.8 906.7,277.8 906.7,319.4 858.7,319.4', cx: 882.7, cy: 298.6 },
+  { name: 'Arabian Sea', type: 'sea', pts: '626.7,236.1 688.0,236.1 688.0,180.6 626.7,180.6', cx: 657.3, cy: 208.3 },
+  { name: 'Tasman Sea', type: 'sea', pts: '874.7,333.3 946.7,333.3 946.7,380.6 874.7,380.6', cx: 910.7, cy: 357.0 },
+  { name: 'North Sea', type: 'sea', pts: '474.7,108.3 506.7,108.3 506.7,80.6 474.7,80.6', cx: 490.7, cy: 94.5 },
+  { name: 'Norwegian Sea', type: 'sea', pts: '466.7,77.8 533.3,77.8 533.3,50.0 466.7,50.0', cx: 500.0, cy: 63.9 },
+  { name: 'Barents Sea', type: 'sea', pts: '520.0,55.6 640.0,55.6 640.0,27.8 520.0,27.8', cx: 580.0, cy: 41.7 },
+  { name: 'Greenland Sea', type: 'sea', pts: '426.7,50.0 506.7,50.0 506.7,22.2 426.7,22.2', cx: 466.7, cy: 36.1 },
+  { name: 'Labrador Sea', type: 'sea', pts: '320.0,102.8 368.0,102.8 368.0,69.4 320.0,69.4', cx: 344.0, cy: 86.1 },
+  { name: 'Beaufort Sea', type: 'sea', pts: '61.3,61.1 160.0,61.1 160.0,33.3 61.3,33.3', cx: 110.7, cy: 47.2 },
+  { name: 'Chukchi Sea', type: 'sea', pts: '0.0,66.7 61.3,66.7 61.3,50.0 0.0,50.0', cx: 30.7, cy: 58.3 },
+  { name: 'East China Sea', type: 'sea', pts: '800.0,183.3 832.0,183.3 832.0,161.1 800.0,161.1', cx: 816.0, cy: 172.2 },
+  { name: 'Yellow Sea', type: 'sea', pts: '797.3,161.1 813.3,161.1 813.3,138.9 797.3,138.9', cx: 805.3, cy: 150.0 },
+  { name: 'Sea of Japan', type: 'sea', pts: '824.0,155.6 858.7,155.6 858.7,122.2 824.0,122.2', cx: 841.3, cy: 138.9 },
+  { name: 'Banda Sea', type: 'sea', pts: '810.7,258.3 832.0,258.3 832.0,272.2 810.7,272.2', cx: 821.3, cy: 265.3 },
+  { name: 'Celebes Sea', type: 'sea', pts: '794.7,244.4 816.0,244.4 816.0,227.8 794.7,227.8', cx: 805.3, cy: 236.1 },
+  { name: 'Arafura Sea', type: 'sea', pts: '832.0,266.7 853.3,266.7 853.3,283.3 832.0,283.3', cx: 842.7, cy: 275.0 },
+  { name: 'Timor Sea', type: 'sea', pts: '808.0,277.8 826.7,277.8 826.7,288.9 808.0,288.9', cx: 817.3, cy: 283.3 },
+  { name: 'Andaman Sea', type: 'sea', pts: '725.3,233.3 746.7,233.3 746.7,205.6 725.3,205.6', cx: 736.0, cy: 219.5 },
+  { name: 'Red Sea', type: 'sea', pts: '565.3,216.7 597.3,216.7 597.3,172.2 565.3,172.2', cx: 581.3, cy: 194.5 },
+  { name: 'Black Sea', type: 'sea', pts: '554.7,136.1 592.0,136.1 592.0,122.2 554.7,122.2', cx: 573.3, cy: 129.2 },
+  { name: 'Caspian Sea', type: 'sea', pts: '610.7,150.0 626.7,150.0 626.7,116.7 610.7,116.7', cx: 618.7, cy: 133.3 },
+  { name: 'Sea of Azov', type: 'sea', pts: '570.7,125.0 581.3,125.0 581.3,116.7 570.7,116.7', cx: 576.0, cy: 120.8 },
+  { name: 'Laccadive Sea', type: 'sea', pts: '672.0,236.1 693.3,236.1 693.3,208.3 672.0,208.3', cx: 682.7, cy: 222.2 },
+  { name: 'Gulf of Mexico', type: 'gulf', pts: '218.7,200.0 261.3,200.0 261.3,166.7 218.7,166.7', cx: 240.0, cy: 183.3 },
+  { name: 'Gulf of Guinea', type: 'gulf', pts: '453.3,263.9 506.7,263.9 506.7,236.1 453.3,236.1', cx: 480.0, cy: 250.0 },
+  { name: 'Gulf of Aden', type: 'gulf', pts: '592.0,222.2 618.7,222.2 618.7,208.3 592.0,208.3', cx: 605.3, cy: 215.3 },
+  { name: 'Gulf of Oman', type: 'gulf', pts: '626.7,194.4 645.3,194.4 645.3,180.6 626.7,180.6', cx: 636.0, cy: 187.5 },
+  { name: 'Persian Gulf', type: 'gulf', pts: '608.0,186.1 632.0,186.1 632.0,172.2 608.0,172.2', cx: 620.0, cy: 179.2 },
+  { name: 'Bay of Bengal', type: 'gulf', pts: '693.3,227.8 746.7,227.8 746.7,188.9 693.3,188.9', cx: 720.0, cy: 208.3 },
+  { name: 'Bay of Biscay', type: 'gulf', pts: '453.3,130.6 480.0,130.6 480.0,116.7 453.3,116.7', cx: 466.7, cy: 123.6 },
+  { name: 'Hudson Bay', type: 'gulf', pts: '226.7,108.3 280.0,108.3 280.0,69.4 226.7,69.4', cx: 253.3, cy: 88.9 },
+  { name: 'Gulf of Alaska', type: 'gulf', pts: '53.3,102.8 120.0,102.8 120.0,77.8 53.3,77.8', cx: 86.7, cy: 90.3 },
+  { name: 'Gulf of California', type: 'gulf', pts: '173.3,188.9 192.0,188.9 192.0,166.7 173.3,166.7', cx: 182.7, cy: 177.8 },
+  { name: 'Gulf of St. Lawrence', type: 'gulf', pts: '301.3,122.2 330.7,122.2 330.7,108.3 301.3,108.3', cx: 316.0, cy: 115.3 },
+  { name: 'Great Australian Bight', type: 'gulf', pts: '794.7,338.9 832.0,338.9 832.0,347.2 794.7,347.2', cx: 813.3, cy: 342.8 },
+  { name: 'Baffin Bay', type: 'gulf', pts: '266.7,66.7 325.3,66.7 325.3,33.3 266.7,33.3', cx: 296.0, cy: 50.0 },
+  { name: 'Gulf of Finland', type: 'gulf', pts: '541.3,86.1 562.7,86.1 562.7,80.6 541.3,80.6', cx: 552.0, cy: 83.3 },
+  { name: 'Gulf of Bothnia', type: 'gulf', pts: '528.0,83.3 549.3,83.3 549.3,66.7 528.0,66.7', cx: 538.7, cy: 75.0 },
+  { name: 'Drake Passage', type: 'strait', pts: '293.3,402.8 333.3,402.8 333.3,430.6 293.3,430.6', cx: 313.3, cy: 416.7 },
+  { name: 'Strait of Gibraltar', type: 'strait', pts: '462.0,153.0 478.0,153.0 478.0,150.0 462.0,150.0', cx: 470.0, cy: 151.5 },
+  { name: 'English Channel', type: 'strait', pts: '464.0,114.0 490.0,114.0 490.0,106.0 464.0,106.0', cx: 477.0, cy: 110.0 },
+  { name: 'Strait of Malacca', type: 'strait', pts: '741.3,247.2 760.0,247.2 760.0,233.3 741.3,233.3', cx: 750.7, cy: 240.3 },
+  { name: 'Mozambique Channel', type: 'strait', pts: '568.0,283.3 592.0,283.3 592.0,325.0 568.0,325.0', cx: 580.0, cy: 304.2 },
+  { name: 'Bass Strait', type: 'strait', pts: '864.0,355.6 880.0,355.6 880.0,366.7 864.0,366.7', cx: 872.0, cy: 361.1 },
+  { name: 'Bosphorus', type: 'strait', pts: '553.0,137.0 560.0,137.0 560.0,130.0 553.0,130.0', cx: 556.5, cy: 133.5 },
+  { name: 'Strait of Magellan', type: 'strait', pts: '277.3,394.4 306.7,394.4 306.7,402.8 277.3,402.8', cx: 292.0, cy: 398.6 },
+  { name: 'Taiwan Strait', type: 'strait', pts: '794.7,188.9 805.3,188.9 805.3,177.8 794.7,177.8', cx: 800.0, cy: 183.3 },
+  { name: 'Strait of Dover', type: 'strait', pts: '481.0,112.0 490.0,112.0 490.0,106.0 481.0,106.0', cx: 485.5, cy: 109.0 },
+  { name: 'Suez Canal', type: 'strait', pts: '564.0,170.0 572.0,170.0 572.0,163.0 564.0,163.0', cx: 568.0, cy: 166.5 },
+  { name: 'Strait of Hormuz', type: 'strait', pts: '625.0,181.0 641.0,181.0 641.0,175.0 625.0,175.0', cx: 633.0, cy: 178.0 },
+]
+const WATER_BODY_MAP = Object.fromEntries(WATER_BODIES.map(w => [w.name, w]))
+
+// ─── Water Bodies Map Drill ───────────────────────────────────────────────────
+function WaterBodiesDrill({ onBack, cards = [], setCards = () => {} }) {
+  const [selected, setSelected] = useState(null)
+  const [answer, setAnswer] = useState('')
+  const [result, setResult] = useState(null)
+  const [attempted, setAttempted] = useState(new Set())
+  const [score, setScore] = useState({ correct: 0, total: 0 })
+  const [zoom, setZoom] = useState(1)
+  const [pan, setPan] = useState({ x: 0, y: 0 })
+  const [dragging, setDragging] = useState(false)
+  const [dragStart, setDragStart] = useState(null)
+  const [filter, setFilter] = useState('all')
+  const inputRef = useRef(null)
+  const drillId = 'water-bodies'
+  const [missCounts, setMissCounts] = useState(() => getDrillMissCounts(drillId))
+  const sessionSaved = useRef(false)
+
+  const uniqueBodies = [...new Map(WATER_BODIES.filter(w => filter === 'all' || w.type === filter).map(w => [w.name, w])).values()]
+  const remaining = uniqueBodies.filter(w => !attempted.has(w.name)).length
+
+  useEffect(() => {
+    if (remaining === 0 && uniqueBodies.length > 0 && !sessionSaved.current && score.total > 0) {
+      sessionSaved.current = true
+      const missedNames = uniqueBodies.filter(w => {
+        const res = Array.from(attempted).includes(w.name)
+        return res && !score.correct
+      }).map(w => w.name)
+      saveDrillSession(drillId, score.correct, score.total)
+      saveDrillMisses(drillId, missedNames)
+      setMissCounts(getDrillMissCounts(drillId))
+    }
+  }, [remaining])
+
+  function handleClick(wb) {
+    if (!wb || attempted.has(wb.name)) return
+    setSelected(wb.name)
+    setAnswer('')
+    setResult(null)
+    setTimeout(() => inputRef.current?.focus(), 100)
+  }
+
+  function checkAnswer() {
+    if (!selected) return
+    const correct = fuzzyMatch(answer, selected)
+    setResult({ correct, name: selected })
+    setAttempted(prev => new Set([...prev, selected]))
+    setScore(prev => ({ correct: prev.correct + (correct ? 1 : 0), total: prev.total + 1 }))
+  }
+
+  return (
+    <div style={S.wrap}>
+      <div style={{ display:'flex', gap:8, alignItems:'center', marginBottom:4 }}>
+        <button style={S.btnSecondary} onClick={onBack}>← Back</button>
+        <div style={{ flex:1, fontSize:11, color:'#4060a0', letterSpacing:2, textAlign:'center' }}>{score.correct}/{score.total} · {remaining} left</div>
+      </div>
+      <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:6 }}>
+        {[['all','All'],['ocean','Oceans'],['sea','Seas'],['gulf','Gulfs & Bays'],['strait','Straits & Channels']].map(([f,l]) => (
+          <button key={f} style={{ fontSize:10, padding:'3px 8px', borderRadius:6, border:`1px solid ${filter===f?'#f5c518':'#1a2460'}`, background:filter===f?'rgba(245,197,24,0.1)':'#060b1a', color:filter===f?'#f5c518':'#6070a0', cursor:'pointer' }} onClick={() => setFilter(f)}>{l}</button>
+        ))}
+      </div>
+      <div style={{ width:'100%', background:'#04101f', borderRadius:12, overflow:'hidden', border:'1px solid #1a2460', cursor:dragging?'grabbing':'grab', userSelect:'none' }}
+        onMouseDown={e => { setDragging(true); setDragStart({x:e.clientX-pan.x,y:e.clientY-pan.y}) }}
+        onMouseMove={e => { if(dragging&&dragStart) setPan({x:e.clientX-dragStart.x,y:e.clientY-dragStart.y}) }}
+        onMouseUp={() => setDragging(false)} onMouseLeave={() => setDragging(false)}
+        onTouchStart={e => { const t=e.touches[0]; setDragging(true); setDragStart({x:t.clientX-pan.x,y:t.clientY-pan.y}) }}
+        onTouchMove={e => { const t=e.touches[0]; if(dragging&&dragStart) setPan({x:t.clientX-dragStart.x,y:t.clientY-dragStart.y}) }}
+        onTouchEnd={() => setDragging(false)}
+      >
+        <svg viewBox="0 0 960 500" style={{ width:"100%", height:"auto", display:"block" }} onClick={e => { if(dragging) return; const rect=e.currentTarget.getBoundingClientRect(); const sx=(e.clientX-rect.left)/rect.width*960; const sy=(e.clientY-rect.top)/rect.height*500; }}>
+          <rect width="960" height="500" fill="#04101f" />
+          {WATER_BODIES.filter(w => filter === "all" || w.type === filter).map((w, i) => {
+            const isSel = w.name === selected
+            const isDone = attempted.has(w.name)
+            const colors = { ocean:"#0d2a5c", sea:"#0e3575", gulf:"#0a2e68", strait:"#122870" }
+            const fill = isSel ? "rgba(245,197,24,0.45)" : isDone ? "rgba(77,208,225,0.3)" : colors[w.type] || "#1a3070"
+            const stroke = isSel ? "#f5c518" : isDone ? "#4dd0e1" : "#1a3580"
+            return <polygon key={i} points={w.pts} fill={fill} stroke={stroke} strokeWidth={isSel?1.5:0.5} style={{ cursor:"pointer" }} onClick={e => { e.stopPropagation(); if(!dragging) handleClick(w) }} />
+          })}
+          {/* Labels for attempted */}
+          {WATER_BODIES.filter((w,i,arr) => attempted.has(w.name) && arr.findIndex(x=>x.name===w.name)===i).map(w => (
+            <text key={w.name} x={w.cx} y={w.cy} textAnchor="middle" fontSize={7} fill="#4dd0e1" style={{ pointerEvents:"none", fontFamily:"sans-serif" }}>{w.name}</text>
+          ))}
+        </svg>
+      </div>
+      {selected && !result && (
+        <div style={S.card}>
+          <div style={{ fontSize:11, color:"#4060a0", letterSpacing:2, marginBottom:6 }}>NAME THIS BODY OF WATER</div>
+          <div style={{ fontSize:10, color:"#4060a0", marginBottom:8, textTransform:"capitalize" }}>({WATER_BODY_MAP[selected]?.type})</div>
+          <input ref={inputRef} style={{ ...S.input, marginBottom:10 }} value={answer} onChange={e => setAnswer(e.target.value)} onKeyDown={e => { if(e.key==="Enter") checkAnswer() }} placeholder="Body of water name..." autoFocus />
+          <button style={S.btn} onClick={checkAnswer}>CHECK</button>
+        </div>
+      )}
+      {result && (
+        <div style={S.card}>
+          <div style={{ fontSize:16, marginBottom:4 }}>{result.correct ? "✓ Correct!" : "✗ Incorrect"}</div>
+          <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:20, color:"#f5c518", letterSpacing:2 }}>{result.name}</div>
+          <div style={{ fontSize:10, color:"#4060a0", textTransform:"capitalize", marginBottom:10 }}>{WATER_BODY_MAP[result.name]?.type}</div>
+          <div style={{ display:"flex", gap:8 }}>
+            <button style={{ ...S.btn, flex:1 }} onClick={() => { setSelected(null); setResult(null) }}>TAP ANOTHER</button>
+            <button style={{ fontSize:10, color:"#4caf7d", border:"1px solid #2e8c50", borderRadius:8, padding:"6px 12px", background:"#0a1e10", cursor:"pointer" }} onClick={() => {
+              const freshCards = loadCards()
+              if (freshCards.some(c => c.front === result.name)) { alert("Already in deck"); return }
+              const card = makeFlashCard(result.name, `${result.name} (${WATER_BODY_MAP[result.name]?.type})`, "Geography · Water Bodies")
+              const updated = [...freshCards, card]; saveCards(updated); setCards(updated)
+              alert(`Added to deck`)
+            }}>＋ Deck</button>
+          </div>
+        </div>
+      )}
+      {!selected && <div style={{ textAlign:"center", fontSize:12, color:"#2a3460", padding:"8px 0" }}>Tap any highlighted area to identify it</div>}
     </div>
   )
 }
@@ -996,7 +1181,7 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids, card
       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18 }} onClick={() => { const nz = Math.min(zoom * 1.5, 8); const cx = (480 - pan.x) / zoom; const cy = (250 - pan.y) / zoom; setPan({ x: 480 - cx * nz, y: 250 - cy * nz }); setZoom(nz) }}>+</button>
         <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18, opacity: zoom <= minZoom ? 0.3 : 1 }} disabled={zoom <= minZoom} onClick={() => { const nz = Math.max(zoom / 1.5, 1); setZoom(nz); if (nz <= minZoom) { setZoom(minZoom); setPan(initialPan) } }}>−</button>
-        <button style={{ ...S.btnSecondary, flex: 1, padding: '6px 0', fontSize: 12 }} onClick={() => { setZoom(minZoom); setPan({ x: 0, y: 0 }) }}>Reset View</button>
+        <button style={{ ...S.btnSecondary, flex: 1, padding: '6px 0', fontSize: 12 }} onClick={() => { setZoom(minZoom); setPan(initialPan) }}>Reset View</button>
         <button style={{ ...S.btn, flex: 1, padding: '6px 0', fontSize: 12, background: autoNext ? 'rgba(245,197,24,0.15)' : undefined, border: autoNext ? '1px solid #f5c518' : undefined }} onClick={() => { setAutoNext(a => !a) }}>Auto Next {autoNext ? '✓' : '→'}</button>
       </div>
 
@@ -1163,8 +1348,8 @@ export function DrillsView({ cards = [], setCards = () => {} }) {
   }, [])
 
   if (drill === 'knowledge') return <KnowledgeHub onBack={handleBack} onSelect={setDrill} stats={stats} />
-  if (drill === 'presidents') return <PresidentsDrill onBack={() => setDrill('knowledge')} cards={cards} setCards={setCards} />
-  if (drill && FLASH_DRILLS[drill]) return <FlashDrill drillKey={drill} onBack={() => setDrill('knowledge')} cards={cards} setCards={setCards} />
+  if (drill === 'presidents') return <PresidentsDrill onBack={() => { setDrill('knowledge'); setStats(loadDrillStats()) }} cards={cards} setCards={setCards} />
+  if (drill && FLASH_DRILLS[drill]) return <FlashDrill drillKey={drill} onBack={() => { setDrill('knowledge'); setStats(loadDrillStats()) }} cards={cards} setCards={setCards} />
   if (drill === 'geography') return (
     <GeographyHub
       onBack={handleBack}
@@ -1173,7 +1358,8 @@ export function DrillsView({ cards = [], setCards = () => {} }) {
       worldLoading={worldLoading}
     />
   )
-  if (drill === 'worldmap') return <WorldMapDrill onBack={() => setDrill('geography')} preloadedPaths={worldPaths} preloadedCentroids={worldCentroids} />
+  if (drill === 'worldmap') return <WorldMapDrill onBack={() => { setDrill('geography'); setStats(loadDrillStats()) }} preloadedPaths={worldPaths} preloadedCentroids={worldCentroids} />
+  if (drill === 'water-bodies') return <WaterBodiesDrill onBack={() => setDrill('geography')} cards={cards} setCards={setCards} />
   if (drill?.startsWith('region-')) return <RegionalMapDrill regionKey={drill.replace('region-','')} onBack={() => setDrill('geography')} worldPaths={worldPaths} worldCentroids={worldCentroids} />
   if (drill === 'us-states') return <SubnationalMapDrill onBack={() => setDrill('geography')} config={{ geojsonUrl:'https://raw.githubusercontent.com/PublicaMundi/MappingAPI/master/data/geojson/us-states.json', data:US_STATES, regionLabel:'State', bounds:[-125,-66,24,50], width:960, height:560 }} cards={cards} setCards={setCards} />
   if (drill === 'canada') return <SubnationalMapDrill onBack={() => setDrill('geography')} config={{ geojsonUrl:'https://raw.githubusercontent.com/codeforamerica/click_that_hood/master/public/data/canada.geojson', data:CANADA_PROVINCES, regionLabel:'Province', bounds:[-141,-52,41,84], width:960, height:640 }} cards={cards} setCards={setCards} />
@@ -1226,6 +1412,7 @@ function KnowledgeHub({ onBack, onSelect, stats }) {
     { id: 'presidents', emoji: '🇺🇸', label: 'US PRESIDENTS', desc: 'All 47 presidents · number, name & years' },
     { id: 'vice_presidents', emoji: '🏛', label: 'US VICE PRESIDENTS', desc: '49 VPs · name, number & president served' },
     { id: 'astronomy', emoji: '🪐', label: 'PLANETS & ASTRONOMY', desc: 'Solar system, moons & space facts' },
+    { id: 'poets', emoji: '✍️', label: 'FAMOUS POETS', desc: 'Poets, works & quotes' },
     { id: 'shakespeare', emoji: '🎭', label: 'SHAKESPEARE', desc: 'Plays, characters & quotes' },
     { id: 'authors', emoji: '📚', label: 'FAMOUS AUTHORS', desc: 'Authors and their major works' },
     { id: 'painters', emoji: '🎨', label: 'FAMOUS PAINTERS', desc: 'Artists, paintings & movements' },
@@ -1280,6 +1467,7 @@ function GeographyHub({ onBack, onSelect, stats, worldLoading }) {
     { id: 'region-south_america', emoji: '🌎', label: 'SOUTH AMERICA', desc: `${REGIONS.south_america.ids.size} countries` },
     { id: 'region-oceania', emoji: '🌊', label: 'OCEANIA', desc: `${REGIONS.oceania.ids.size} countries` },
     { id: 'region-central_america', emoji: '🌴', label: 'CENTRAL AMERICA & CARIBBEAN', desc: `${REGIONS.central_america.ids.size} countries` },
+    { id: 'water-bodies', emoji: '🌊', label: 'WATER BODIES', desc: '60 oceans, seas, gulfs & straits' },
     { id: null, isHeader: true, label: '── SUBNATIONAL ──' },
     { id: 'us-states', emoji: '🗺', label: 'US STATES', desc: '50 states & capitals' },
     { id: 'canada', emoji: '🍁', label: 'CANADA', desc: '13 provinces & territories' },
@@ -1693,7 +1881,7 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
               <div key={d.name} style={{ display:'flex', alignItems:'center', gap:10, padding:'8px 14px', borderBottom:i<filteredList.length-1?'1px solid #0d1235':'none', background:revealed.has(d.name)?'rgba(77,208,225,0.06)':i%2===0?'transparent':'#060b1a', cursor:'pointer' }} onClick={() => setRevealed(prev=>{const n=new Set(prev);n.has(d.name)?n.delete(d.name):n.add(d.name);return n})}>
                 <div style={{ flex:1 }}>
                   <span style={{ fontSize:13, color: missCounts[d.name] > 0 ? '#ffb3b3' : '#c0c8e8' }}>{d.name}</span>
-                  {missCounts[d.name] > 0 && <span style={{ display:'inline-flex', gap:2, marginLeft:4, verticalAlign:'middle' }}>{[0,1,2].map(i=><span key={i} style={{ width:6, height:6, borderRadius:'50%', background: i<missCounts[d.name]?'#e57373':'#1a2460', display:'inline-block' }}/>)}</span>}
+                  {true && <span style={{ display:'inline-flex', gap:2, marginLeft:4, verticalAlign:'middle' }}>{(missCounts[d.name] || [false,false,false]).map((missed, i) => <span key={i} style={{ width:6, height:6, borderRadius:'50%', background: missed?'#e57373':'#1a2460', display:'inline-block' }}/>)}</span>}
                   {revealed.has(d.name) && <span style={{ fontSize:12, color:'#f5c518', marginLeft:10 }}>→ {d.capital}</span>}
                 </div>
                 <span style={{ fontSize:10, color:'#2a3460' }}>{revealed.has(d.name)?'▲':'▼'}</span>
@@ -1844,7 +2032,7 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
 
 // ─── Regional World Map ───────────────────────────────────────────────────────
 // Tiny island nations that need a Caribbean inset view
-const TINY_ISLANDS = new Set(['BRB','LCA','VCT','GRD','ATG','DMA','KNA','BHS','TTO','JAM'])
+const TINY_ISLANDS = new Set(['BRB','LCA','VCT','GRD','ATG','DMA','KNA','BHS','TTO','JAM','KIR','MHL','FSM','NRU','PLW','WSM','TON','TUV'])
 // Caribbean bounding box in equirectangular 960x500 coords
 // lon: -90 to -59, lat: 8 to 28
 const CARIB_BOUNDS = { minX: 195, maxX: 268, minY: 158, maxY: 213 }
@@ -2036,7 +2224,7 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
         <>
           <div style={{ display:'flex', gap:6 }}>
             <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18 }} onClick={() => { const nz=Math.min(zoom*1.5,8); const cx=(480-pan.x)/zoom; const cy=(250-pan.y)/zoom; setPan({x:480-cx*nz,y:250-cy*nz}); setZoom(nz) }}>+</button>
-            <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18, opacity:zoom<=minZoom?0.3:1 }} disabled={zoom<=minZoom} onClick={() => { const nz=Math.max(zoom/1.5,minZoom); setZoom(nz); if(nz<=minZoom){setPan({x:0,y:0})} }}>−</button>
+            <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18, opacity:zoom<=minZoom?0.3:1 }} disabled={zoom<=minZoom} onClick={() => { const nz=Math.max(zoom/1.5,minZoom); setZoom(nz); if(nz<=minZoom){setPan(initialPan)} }}>−</button>
             <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:11 }} onClick={() => { setZoom(minZoom); setPan(initialPan) }}>Reset</button>
             <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:11, color:'#4dd0e1' }} onClick={() => setRevealed(new Set(regionCountries.map(c=>c.id)))}>Show All</button>
             <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:11 }} onClick={() => setRevealed(new Set())}>Hide All</button>
@@ -2056,7 +2244,34 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
                 {regionPaths.map(p => {
                   const country = COUNTRY_MAP[p.id]
                   const isRevealed = revealed.has(p.id)
-                  const c = worldCentroids.current[p.id]
+                  const CENTROID_OVERRIDES = {
+                    'NOR': { x: 511, y: 105 },
+                    'RUS': { x: 680, y: 120 },
+                    'FRA': { x: 480, y: 178 },
+                    'ESP': { x: 455, y: 210 },
+                    'NLD': { x: 488, y: 148 },
+                  }
+                  // Leader line targets for small/crowded countries (label moved to open water/space)
+                  const LABEL_OVERRIDES = {
+                    'ALB': { lx: 585, ly: 235 }, 'AND': { lx: 458, ly: 198 },
+                    'ARM': { lx: 680, ly: 200 }, 'AZE': { lx: 700, ly: 210 },
+                    'BIH': { lx: 558, ly: 238 }, 'BGR': { lx: 620, ly: 248 },
+                    'HRV': { lx: 545, ly: 242 }, 'CYP': { lx: 670, ly: 270 },
+                    'CZE': { lx: 535, ly: 158 }, 'EST': { lx: 590, ly: 100 },
+                    'GEO': { lx: 700, ly: 195 }, 'HUN': { lx: 570, ly: 188 },
+                    'XKX': { lx: 600, ly: 250 }, 'LVA': { lx: 590, ly: 112 },
+                    'LIE': { lx: 510, ly: 178 }, 'LTU': { lx: 575, ly: 128 },
+                    'LUX': { lx: 478, ly: 162 }, 'MLT': { lx: 560, ly: 280 },
+                    'MDA': { lx: 635, ly: 188 }, 'MCO': { lx: 500, ly: 205 },
+                    'MNE': { lx: 575, ly: 248 }, 'MKD': { lx: 600, ly: 258 },
+                    'SMR': { lx: 535, ly: 210 }, 'SVK': { lx: 565, ly: 168 },
+                    'SVN': { lx: 535, ly: 178 }, 'VAT': { lx: 525, ly: 222 },
+                    'BLR': { lx: 620, ly: 140 }, 'BEL': { lx: 468, ly: 148 },
+                  }
+                  const rawC = CENTROID_OVERRIDES[p.id] || worldCentroids.current[p.id]
+                  const labelPos = LABEL_OVERRIDES[p.id] || rawC
+                  const c = rawC
+                  const hasLeader = LABEL_OVERRIDES[p.id] && rawC && zoom <= minZoom * 1.2
                   return (
                     <g key={p.id}>
                       <path d={p.d} fill={isRevealed?'#4dd0e1':'#1a3070'} stroke="#0a0f2e" strokeWidth={0.5/zoom}
@@ -2065,8 +2280,9 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
                       />
                       {c && country && (isRevealed || zoom >= minZoom * 1.5) && (
                         <g onClick={e => { if(!dragging){e.stopPropagation();setRevealed(prev => { const n=new Set(prev); n.has(p.id)?n.delete(p.id):n.add(p.id); return n })} }} style={{ cursor:'pointer' }}>
-                          <text x={c.x} y={c.y-(isRevealed?5:0)} textAnchor="middle" fontSize={8/zoom} fill={isRevealed?'#fff':'#8890d0'} style={{ pointerEvents:'none', fontFamily:'sans-serif' }}>{country.name}</text>
-                          {isRevealed && <text x={c.x} y={c.y+10/zoom} textAnchor="middle" fontSize={7/zoom} fill="#f5c518" style={{ pointerEvents:'none', fontFamily:'sans-serif' }}>{country.capital}</text>}
+                          {hasLeader && <line x1={c.x} y1={c.y} x2={labelPos.lx} y2={labelPos.ly} stroke="#4060a0" strokeWidth={0.4/zoom} strokeDasharray={`${1/zoom},${1/zoom}`} style={{ pointerEvents:'none' }} />}
+                          <text x={hasLeader ? labelPos.lx : c.x} y={(hasLeader ? labelPos.ly : c.y)-(isRevealed?5:0)} textAnchor="middle" fontSize={8/zoom} fill={isRevealed?'#fff':'#8890d0'} style={{ pointerEvents:'none', fontFamily:'sans-serif' }}>{country.name}</text>
+                          {isRevealed && <text x={hasLeader ? labelPos.lx : c.x} y={(hasLeader ? labelPos.ly : c.y)+10/zoom} textAnchor="middle" fontSize={7/zoom} fill="#f5c518" style={{ pointerEvents:'none', fontFamily:'sans-serif' }}>{country.capital}</text>}
                         </g>
                       )}
                     </g>
@@ -2086,7 +2302,7 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
                 onClick={() => setRevealed(prev=>{const n=new Set(prev);n.has(c.id)?n.delete(c.id):n.add(c.id);return n})}>
                 <div style={{ flex:1 }}>
                   <span style={{ fontSize:13, color: missCounts[c.id] > 0 ? '#ffb3b3' : '#c0c8e8' }}>{c.name}</span>
-                  {missCounts[c.id] > 0 && <span style={{ display:'inline-flex', gap:2, marginLeft:4, verticalAlign:'middle' }}>{[0,1,2].map(i=><span key={i} style={{ width:6, height:6, borderRadius:'50%', background: i<missCounts[c.id]?'#e57373':'#1a2460', display:'inline-block' }}/>)}</span>}
+                  {true && <span style={{ display:'inline-flex', gap:2, marginLeft:4, verticalAlign:'middle' }}>{(missCounts[c.id] || [false,false,false]).map((missed, i) => <span key={i} style={{ width:6, height:6, borderRadius:'50%', background: missed?'#e57373':'#1a2460', display:'inline-block' }}/>)}</span>}
                   {revealed.has(c.id) && <span style={{ fontSize:12, color:'#f5c518', marginLeft:10 }}>→ {c.capital}</span>}
                 </div>
                 <span style={{ fontSize:10, color:'#2a3460' }}>{revealed.has(c.id)?'▲':'▼'}</span>
@@ -2400,6 +2616,63 @@ export const FLASH_DRILLS = {
     ],
   },
 
+  poets: {
+    label: 'FAMOUS POETS',
+    emoji: '✍️',
+    desc: 'Poets, works & quotes',
+    modes: [
+      { id: 'work_to_poet', prompt: 'Work → Poet', qField: 'work_prompt', aField: 'poet' },
+      { id: 'quote_to_poet', prompt: 'Quote → Poet', qField: 'quote', aField: 'poet', skipIfNoField: true },
+      { id: 'poet_to_work', prompt: 'Poet → Famous Work', qField: 'poet_prompt', aField: 'work' },
+    ],
+    items: [
+      { poet: 'Homer', era: 'Ancient Greek', work: 'The Iliad', work_prompt: 'The Iliad / The Odyssey', poet_prompt: 'Homer (Ancient Greek)', quote: 'Sing, O goddess, the anger of Achilles' },
+      { poet: 'Virgil', era: 'Ancient Roman', work: 'The Aeneid', work_prompt: 'The Aeneid', poet_prompt: 'Virgil (Ancient Roman)', quote: 'Fortune favors the bold' },
+      { poet: 'Dante Alighieri', era: 'Medieval Italian', work: 'The Divine Comedy', work_prompt: 'The Divine Comedy / Inferno', poet_prompt: 'Dante Alighieri (Medieval Italian)', quote: 'Abandon all hope, ye who enter here' },
+      { poet: 'Geoffrey Chaucer', era: 'Medieval English', work: 'The Canterbury Tales', work_prompt: 'The Canterbury Tales', poet_prompt: 'Geoffrey Chaucer (Medieval English)', quote: null },
+      { poet: 'John Milton', era: 'English Baroque', work: 'Paradise Lost', work_prompt: 'Paradise Lost', poet_prompt: 'John Milton (English Baroque)', quote: 'Better to reign in Hell than serve in Heaven' },
+      { poet: 'William Blake', era: 'Romantic', work: 'Songs of Innocence and Experience', work_prompt: 'Songs of Innocence and Experience / The Tyger', poet_prompt: 'William Blake (Romantic)', quote: 'Tyger Tyger, burning bright, in the forests of the night' },
+      { poet: 'William Wordsworth', era: 'Romantic', work: 'The Prelude', work_prompt: 'The Prelude / Tintern Abbey', poet_prompt: 'William Wordsworth (Romantic)', quote: 'Poetry is the spontaneous overflow of powerful feelings' },
+      { poet: 'Samuel Taylor Coleridge', era: 'Romantic', work: 'The Rime of the Ancient Mariner', work_prompt: 'The Rime of the Ancient Mariner / Kubla Khan', poet_prompt: 'Samuel Taylor Coleridge (Romantic)', quote: 'Water, water, everywhere, nor any drop to drink' },
+      { poet: 'Lord Byron', era: 'Romantic', work: 'Don Juan', work_prompt: 'Don Juan / Childe Harold\'s Pilgrimage', poet_prompt: 'Lord Byron (Romantic)', quote: 'She walks in beauty, like the night' },
+      { poet: 'Percy Bysshe Shelley', era: 'Romantic', work: 'Ozymandias', work_prompt: 'Ozymandias / Ode to the West Wind', poet_prompt: 'Percy Bysshe Shelley (Romantic)', quote: 'I am Ozymandias, King of Kings; Look on my works, ye Mighty, and despair!' },
+      { poet: 'John Keats', era: 'Romantic', work: 'Ode to a Nightingale', work_prompt: 'Ode to a Nightingale / Ode on a Grecian Urn', poet_prompt: 'John Keats (Romantic)', quote: 'Beauty is truth, truth beauty' },
+      { poet: 'Edgar Allan Poe', era: 'American Gothic', work: 'The Raven', work_prompt: 'The Raven / Annabel Lee', poet_prompt: 'Edgar Allan Poe (American Gothic)', quote: 'Quoth the Raven, Nevermore' },
+      { poet: 'Walt Whitman', era: 'American Transcendentalist', work: 'Leaves of Grass', work_prompt: 'Leaves of Grass / Song of Myself', poet_prompt: 'Walt Whitman (American Transcendentalist)', quote: 'I sing the body electric' },
+      { poet: 'Emily Dickinson', era: 'American', work: 'Because I could not stop for Death', work_prompt: 'Because I could not stop for Death / Hope is the thing with feathers', poet_prompt: 'Emily Dickinson (American)', quote: 'Hope is the thing with feathers that perches in the soul' },
+      { poet: 'Alfred Lord Tennyson', era: 'Victorian', work: 'In Memoriam A.H.H.', work_prompt: 'In Memoriam / The Charge of the Light Brigade / Ulysses', poet_prompt: 'Alfred Lord Tennyson (Victorian)', quote: 'Tis better to have loved and lost than never to have loved at all' },
+      { poet: 'Robert Browning', era: 'Victorian', work: 'My Last Duchess', work_prompt: 'My Last Duchess / The Pied Piper of Hamelin', poet_prompt: 'Robert Browning (Victorian)', quote: null },
+      { poet: 'Gerard Manley Hopkins', era: 'Victorian', work: 'The Windhover', work_prompt: 'The Windhover / God\'s Grandeur', poet_prompt: 'Gerard Manley Hopkins (Victorian)', quote: null },
+      { poet: 'William Butler Yeats', era: 'Irish Modernist', work: 'The Second Coming', work_prompt: 'The Second Coming / The Lake Isle of Innisfree', poet_prompt: 'W.B. Yeats (Irish Modernist)', quote: 'Things fall apart; the centre cannot hold' },
+      { poet: 'T.S. Eliot', era: 'Modernist', work: 'The Waste Land', work_prompt: 'The Waste Land / The Love Song of J. Alfred Prufrock', poet_prompt: 'T.S. Eliot (Modernist)', quote: 'This is the way the world ends, not with a bang but a whimper' },
+      { poet: 'Ezra Pound', era: 'Modernist', work: 'The Cantos', work_prompt: 'The Cantos / In a Station of the Metro', poet_prompt: 'Ezra Pound (Modernist)', quote: null },
+      { poet: 'Robert Frost', era: 'American', work: 'The Road Not Taken', work_prompt: 'The Road Not Taken / Stopping by Woods on a Snowy Evening', poet_prompt: 'Robert Frost (American)', quote: 'Two roads diverged in a wood, and I took the one less traveled by' },
+      { poet: 'Langston Hughes', era: 'Harlem Renaissance', work: 'The Weary Blues', work_prompt: 'The Weary Blues / A Dream Deferred', poet_prompt: 'Langston Hughes (Harlem Renaissance)', quote: 'What happens to a dream deferred? Does it dry up like a raisin in the sun?' },
+      { poet: 'e.e. cummings', era: 'American Modernist', work: 'i carry your heart with me', work_prompt: 'i carry your heart with me / anyone lived in a pretty how town', poet_prompt: 'e.e. cummings (American Modernist)', quote: 'i carry your heart with me(i carry it in my heart)' },
+      { poet: 'Pablo Neruda', era: 'Chilean', work: 'Twenty Love Poems and a Song of Despair', work_prompt: 'Twenty Love Poems / Ode to My Socks', poet_prompt: 'Pablo Neruda (Chilean)', quote: 'I want to do with you what spring does with the cherry trees' },
+      { poet: 'Sylvia Plath', era: 'Confessional', work: 'Ariel', work_prompt: 'Ariel / The Bell Jar (novel)', poet_prompt: 'Sylvia Plath (Confessional)', quote: 'Dying is an art, like everything else. I do it exceptionally well.' },
+      { poet: 'Allen Ginsberg', era: 'Beat Generation', work: 'Howl', work_prompt: 'Howl / Kaddish', poet_prompt: 'Allen Ginsberg (Beat Generation)', quote: 'I saw the best minds of my generation destroyed by madness' },
+      { poet: 'Seamus Heaney', era: 'Irish', work: 'Death of a Naturalist', work_prompt: 'Death of a Naturalist / Digging', poet_prompt: 'Seamus Heaney (Irish)', quote: null },
+      { poet: 'Maya Angelou', era: 'American', work: 'Still I Rise', work_prompt: 'Still I Rise / I Know Why the Caged Bird Sings', poet_prompt: 'Maya Angelou (American)', quote: 'Still I rise' },
+      { poet: 'Rumi', era: 'Persian Sufi', work: 'The Masnavi', work_prompt: 'The Masnavi / The Divan-i Shams-i Tabrizi', poet_prompt: 'Rumi (Persian Sufi)', quote: 'Out beyond ideas of wrongdoing and rightdoing, there is a field. I\'ll meet you there.' },
+      { poet: 'Li Bai', era: 'Tang Dynasty Chinese', work: 'Quiet Night Thought', work_prompt: 'Quiet Night Thought / Drinking Alone by Moonlight', poet_prompt: 'Li Bai (Tang Dynasty Chinese)', quote: null },
+      { poet: 'Ovid', era: 'Ancient Roman', work: 'Metamorphoses', work_prompt: 'Metamorphoses / Ars Amatoria', poet_prompt: 'Ovid (Ancient Roman)', quote: null },
+      { poet: 'Sappho', era: 'Ancient Greek', work: 'Ode to Aphrodite', work_prompt: 'Ode to Aphrodite / Fragment 31', poet_prompt: 'Sappho (Ancient Greek)', quote: null },
+      { poet: 'Omar Khayyam', era: 'Persian', work: 'Rubaiyat', work_prompt: 'Rubaiyat of Omar Khayyam', poet_prompt: 'Omar Khayyam (Persian)', quote: 'A jug of wine, a loaf of bread—and thou' },
+      { poet: 'John Donne', era: 'Metaphysical', work: 'Death, Be Not Proud', work_prompt: 'Death, Be Not Proud / The Sun Rising', poet_prompt: 'John Donne (Metaphysical)', quote: 'No man is an island, entire of itself' },
+      { poet: 'Alexander Pope', era: 'Neoclassical', work: 'The Rape of the Lock', work_prompt: 'The Rape of the Lock / An Essay on Man', poet_prompt: 'Alexander Pope (Neoclassical)', quote: 'To err is human, to forgive divine' },
+      { poet: 'Robert Burns', era: 'Scottish Romantic', work: 'Auld Lang Syne', work_prompt: 'Auld Lang Syne / To a Mouse', poet_prompt: 'Robert Burns (Scottish Romantic)', quote: 'O my luve is like a red, red rose' },
+      { poet: 'Heinrich Heine', era: 'German Romantic', work: 'Book of Songs', work_prompt: 'Book of Songs / The Lorelei', poet_prompt: 'Heinrich Heine (German Romantic)', quote: null },
+      { poet: 'Charles Baudelaire', era: 'French Symbolist', work: 'Les Fleurs du mal', work_prompt: 'Les Fleurs du mal (The Flowers of Evil)', poet_prompt: 'Charles Baudelaire (French Symbolist)', quote: null },
+      { poet: 'Arthur Rimbaud', era: 'French Symbolist', work: 'A Season in Hell', work_prompt: 'A Season in Hell / The Drunken Boat', poet_prompt: 'Arthur Rimbaud (French Symbolist)', quote: null },
+      { poet: 'Paul Verlaine', era: 'French Symbolist', work: 'Romances Without Words', work_prompt: 'Romances Without Words / Autumn Song', poet_prompt: 'Paul Verlaine (French Symbolist)', quote: null },
+      { poet: 'Rainer Maria Rilke', era: 'German', work: 'Duino Elegies', work_prompt: 'Duino Elegies / Letters to a Young Poet', poet_prompt: 'Rainer Maria Rilke (German)', quote: 'Beauty is nothing but the beginning of terror' },
+      { poet: 'Federico García Lorca', era: 'Spanish', work: 'Gypsy Ballads', work_prompt: 'Gypsy Ballads / Lament for Ignacio Sánchez Mejías', poet_prompt: 'Federico García Lorca (Spanish)', quote: null },
+      { poet: 'Anna Akhmatova', era: 'Russian Acmeist', work: 'Requiem', work_prompt: 'Requiem / Lot\'s Wife', poet_prompt: 'Anna Akhmatova (Russian Acmeist)', quote: null },
+      { poet: 'Dylan Thomas', era: 'Welsh', work: 'Do Not Go Gentle into That Good Night', work_prompt: 'Do Not Go Gentle into That Good Night / Fern Hill', poet_prompt: 'Dylan Thomas (Welsh)', quote: 'Do not go gentle into that good night, Old age should burn and rave at close of day' },
+      { poet: 'Philip Larkin', era: 'British', work: 'This Be the Verse', work_prompt: 'This Be the Verse / The Whitsun Weddings', poet_prompt: 'Philip Larkin (British)', quote: null },
+    ],
+  },
   shakespeare: {
     label: 'SHAKESPEARE',
     emoji: '🎭',
@@ -2799,6 +3072,11 @@ function FlashDrill({ drillKey, onBack, cards = [], setCards = () => {} }) {
       const authorCorrect = override || fuzzyMatch(answer2.trim(), item.author || '')
       correct = titleCorrect && authorCorrect
       expected = `${item.work} · ${item.author}`
+    } else if (modeConfig.aField === 'meaning' && String(item.meaning || '').includes('/')) {
+      // Multi-word meanings (e.g. "bad/evil") - accept any one of the words
+      const meanings = String(item.meaning).split('/').map(m => m.trim())
+      correct = override || meanings.some(m => fuzzyMatch(userAns, m))
+      expected = item[modeConfig.aField]
     } else {
       correct = override || fuzzyMatch(userAns, String(item[modeConfig.aField] || ''))
       expected = item[modeConfig.aField]
@@ -2851,9 +3129,9 @@ function FlashDrill({ drillKey, onBack, cards = [], setCards = () => {} }) {
                 <img src={it.image} alt={it.work} referrerPolicy="no-referrer" style={{ width:64, height:64, objectFit:'contain', borderRadius:6, flexShrink:0, background:'#060b1a' }} onError={e => { e.target.style.display='none' }} />
               )}
               <div style={{ flex:1 }}>
-                {missCount > 0 && (
+                {true && (
                   <div style={{ display:'flex', gap:2, marginBottom:4 }}>
-                    {[0,1,2].map(j => <div key={j} style={{ width:6, height:6, borderRadius:'50%', background:j<missCount?'#e57373':'#1a2460' }} />)}
+                    {(Array.isArray(missCount) ? missCount : [false,false,false]).map((missed, j) => <div key={j} style={{ width:6, height:6, borderRadius:'50%', background:missed?'#e57373':'#1a2460' }} />)}
                   </div>
                 )}
                 {Object.entries(it)

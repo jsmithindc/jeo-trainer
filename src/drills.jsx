@@ -680,7 +680,7 @@ function LabeledMapReference({ onBack, paths, pathCentroids }) {
           >
             <svg viewBox="0 0 960 500" style={{ width: '100%', height: 'auto', display: 'block' }}>
               <rect width="960" height="500" fill="#060b1a" />
-              <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
+              <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`} style={{ transformOrigin: '480px 250px' }}>
                 {/* Country shapes */}
                 {paths.map(p => {
                   const country = COUNTRY_MAP[p.id]
@@ -782,6 +782,7 @@ function WaterBodiesDrill({ onBack, cards = [], setCards = () => {} }) {
   const [dragging, setDragging] = useState(false)
   const [dragStart, setDragStart] = useState(null)
   const [filter, setFilter] = useState('all')
+  const [autoNext, setAutoNext] = useState(false)
   const inputRef = useRef(null)
   const drillId = 'water-bodies'
   const [missCounts, setMissCounts] = useState(() => getDrillMissCounts(drillId))
@@ -812,9 +813,11 @@ function WaterBodiesDrill({ onBack, cards = [], setCards = () => {} }) {
     if (!selected) return
     const correct = fuzzyMatch(answer, selected)
     setResult({ correct, name: selected })
-    setAttempted(prev => new Set([...prev, selected]))
+    const newAtt = new Set([...attempted, selected])
+    setAttempted(newAtt)
     if (correct) setCorrectSet(prev => new Set([...prev, selected]))
     setScore(prev => ({ correct: prev.correct + (correct ? 1 : 0), total: prev.total + 1 }))
+    if (autoNext) setTimeout(() => { setSelected(null); setResult(null) }, 1200)
   }
 
   function getColor(name) {
@@ -833,10 +836,13 @@ function WaterBodiesDrill({ onBack, cards = [], setCards = () => {} }) {
   }
 
   return (
-    <div style={S.wrap}>
-      <div style={{ display:'flex', gap:8, alignItems:'center', marginBottom:4 }}>
-        <button style={S.btnSecondary} onClick={onBack}>← Back</button>
-        <div style={{ flex:1, fontSize:11, color:'#4060a0', letterSpacing:2, textAlign:'center' }}>{score.correct}/{score.total} · {remaining} left</div>
+    <div style={{ display:'flex', flexDirection:'column', gap:10, width:'100%' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'0 4px' }}>
+        <button style={{ fontSize:12, color:'#4060a0', background:'none', border:'none', cursor:'pointer' }} onClick={onBack}>← Back</button>
+        <div style={{ display:'flex', gap:10, alignItems:'center' }}>
+          <div style={{ fontSize:11, color:'#4060a0', letterSpacing:2 }}>{score.correct}/{score.total} · {remaining} left</div>
+          <button style={{ fontSize:11, padding:'3px 10px', borderRadius:6, border:`1px solid ${autoNext?'#f5c518':'#1a2460'}`, background:autoNext?'rgba(245,197,24,0.1)':'transparent', color:autoNext?'#f5c518':'#4060a0', cursor:'pointer' }} onClick={() => setAutoNext(a=>!a)}>Auto Next {autoNext?'✓':'→'}</button>
+        </div>
       </div>
       <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:6 }}>
         {[['all','All'],['ocean','Oceans'],['sea','Seas'],['gulf','Gulfs & Bays'],['strait','Straits & Channels']].map(([f,l]) => (
@@ -853,7 +859,7 @@ function WaterBodiesDrill({ onBack, cards = [], setCards = () => {} }) {
       >
         <svg viewBox="0 0 960 500" style={{ width:'100%', height:'auto', display:'block' }}>
           <rect width="960" height="500" fill="#04101f" />
-          <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
+          <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`} style={{ transformOrigin: '480px 250px' }}>
             {filteredBodies.map((w, i) => (
               <path key={i} d={w.d}
                 fill={getColor(w.name)}
@@ -1805,7 +1811,7 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
           >
             <svg viewBox={`0 0 ${vw} ${vh}`} style={{ width:'100%', height:'auto', display:'block' }}>
               <rect width={vw} height={vh} fill="#060b1a" />
-              <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
+              <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`} style={{ transformOrigin: '480px 250px' }}>
                 {paths.map(p => {
                   const data = getRegionData(p.name)
                   const isRevealed = revealed.has(p.name)
@@ -1922,7 +1928,7 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
       >
         <svg viewBox={`0 0 ${vw} ${vh}`} style={{ width:'100%', height:'auto', display:'block' }}>
           <rect width={vw} height={vh} fill="#060b1a" />
-          <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
+          <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`} style={{ transformOrigin: '480px 250px' }}>
             {paths.map(p => {
               const data = getRegionData(p.name)
               const isAttempted = attempted.has(p.name)
@@ -2203,7 +2209,7 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
           >
             <svg viewBox="0 0 960 500" style={{ width:'100%', height:'auto', display:'block' }}>
               <rect width="960" height="500" fill="#060b1a" />
-              <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
+              <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`} style={{ transformOrigin: '480px 250px' }}>
                 {regionPaths.map(p => {
                   const country = COUNTRY_MAP[p.id]
                   const isRevealed = revealed.has(p.id)
@@ -2335,7 +2341,7 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
 
         <svg viewBox="0 0 960 500" style={{ width:'100%', height:'auto', display:'block' }}>
           <rect width="960" height="500" fill="#060b1a" />
-          <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
+          <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`} style={{ transformOrigin: '480px 250px' }}>
             {regionPaths.map(p => (
               <path key={p.id} d={p.d}
                 fill={p.id===selected?'#f5c518':attempted.has(p.id)?'#e0e0e0':'#1a3070'}

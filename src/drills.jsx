@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { saveCards, loadCards } from './storage.js'
+import { WATER_BODIES, WATER_BODY_MAP } from './waterBodies.js'
 
 // ─── Generate SVG snapshot of a map region ───────────────────────────────────
 function makeMapSnapshot(targetPath, allPaths, viewPad = 30) {
@@ -768,76 +769,13 @@ function LabeledMapReference({ onBack, paths, pathCentroids }) {
   )
 }
 
-const WATER_BODIES = [
-  { name: 'Pacific Ocean', type: 'ocean', pts: '0.0,83.3 213.3,83.3 266.7,208.3 266.7,416.7 0.0,416.7', cx: 80.0, cy: 250.0 },
-  { name: 'Pacific Ocean', type: 'ocean', pts: '800.0,83.3 960.0,83.3 960.0,416.7 800.0,416.7', cx: 880.0, cy: 250.0 },
-  { name: 'Atlantic Ocean', type: 'ocean', pts: '266.7,83.3 453.3,83.3 506.7,250.0 506.7,416.7 320.0,416.7 266.7,250.0', cx: 370.0, cy: 230.0 },
-  { name: 'Indian Ocean', type: 'ocean', pts: '533.3,277.8 746.7,277.8 800.0,416.7 533.3,416.7', cx: 640.0, cy: 350.0 },
-  { name: 'Arctic Ocean', type: 'ocean', pts: '0.0,55.6 960.0,55.6 960.0,0.0 0.0,0.0', cx: 480.0, cy: 27.8 },
-  { name: 'Southern Ocean', type: 'ocean', pts: '0.0,416.7 960.0,416.7 960.0,458.3 0.0,458.3', cx: 480.0, cy: 433.3 },
-  { name: 'Mediterranean Sea', type: 'sea', pts: '464.0,150.0 576.0,150.0 576.0,133.3 464.0,133.3', cx: 520.0, cy: 141.7 },
-  { name: 'Caribbean Sea', type: 'sea', pts: '245.3,227.8 320.0,227.8 320.0,188.9 245.3,188.9', cx: 282.7, cy: 208.3 },
-  { name: 'South China Sea', type: 'sea', pts: '746.7,250.0 805.3,250.0 805.3,180.6 746.7,180.6', cx: 776.0, cy: 215.3 },
-  { name: 'Bering Sea', type: 'sea', pts: '912.0,105.6 960.0,105.6 960.0,66.7 912.0,66.7', cx: 936.0, cy: 86.2 },
-  { name: 'Coral Sea', type: 'sea', pts: '858.7,277.8 906.7,277.8 906.7,319.4 858.7,319.4', cx: 882.7, cy: 298.6 },
-  { name: 'Arabian Sea', type: 'sea', pts: '626.7,236.1 688.0,236.1 688.0,180.6 626.7,180.6', cx: 657.3, cy: 208.3 },
-  { name: 'Tasman Sea', type: 'sea', pts: '874.7,333.3 946.7,333.3 946.7,380.6 874.7,380.6', cx: 910.7, cy: 357.0 },
-  { name: 'North Sea', type: 'sea', pts: '474.7,108.3 506.7,108.3 506.7,80.6 474.7,80.6', cx: 490.7, cy: 94.5 },
-  { name: 'Norwegian Sea', type: 'sea', pts: '466.7,77.8 533.3,77.8 533.3,50.0 466.7,50.0', cx: 500.0, cy: 63.9 },
-  { name: 'Barents Sea', type: 'sea', pts: '520.0,55.6 640.0,55.6 640.0,27.8 520.0,27.8', cx: 580.0, cy: 41.7 },
-  { name: 'Greenland Sea', type: 'sea', pts: '426.7,50.0 506.7,50.0 506.7,22.2 426.7,22.2', cx: 466.7, cy: 36.1 },
-  { name: 'Labrador Sea', type: 'sea', pts: '320.0,102.8 368.0,102.8 368.0,69.4 320.0,69.4', cx: 344.0, cy: 86.1 },
-  { name: 'Beaufort Sea', type: 'sea', pts: '61.3,61.1 160.0,61.1 160.0,33.3 61.3,33.3', cx: 110.7, cy: 47.2 },
-  { name: 'Chukchi Sea', type: 'sea', pts: '0.0,66.7 61.3,66.7 61.3,50.0 0.0,50.0', cx: 30.7, cy: 58.3 },
-  { name: 'East China Sea', type: 'sea', pts: '800.0,183.3 832.0,183.3 832.0,161.1 800.0,161.1', cx: 816.0, cy: 172.2 },
-  { name: 'Yellow Sea', type: 'sea', pts: '797.3,161.1 813.3,161.1 813.3,138.9 797.3,138.9', cx: 805.3, cy: 150.0 },
-  { name: 'Sea of Japan', type: 'sea', pts: '824.0,155.6 858.7,155.6 858.7,122.2 824.0,122.2', cx: 841.3, cy: 138.9 },
-  { name: 'Banda Sea', type: 'sea', pts: '810.7,258.3 832.0,258.3 832.0,272.2 810.7,272.2', cx: 821.3, cy: 265.3 },
-  { name: 'Celebes Sea', type: 'sea', pts: '794.7,244.4 816.0,244.4 816.0,227.8 794.7,227.8', cx: 805.3, cy: 236.1 },
-  { name: 'Arafura Sea', type: 'sea', pts: '832.0,266.7 853.3,266.7 853.3,283.3 832.0,283.3', cx: 842.7, cy: 275.0 },
-  { name: 'Timor Sea', type: 'sea', pts: '808.0,277.8 826.7,277.8 826.7,288.9 808.0,288.9', cx: 817.3, cy: 283.3 },
-  { name: 'Andaman Sea', type: 'sea', pts: '725.3,233.3 746.7,233.3 746.7,205.6 725.3,205.6', cx: 736.0, cy: 219.5 },
-  { name: 'Red Sea', type: 'sea', pts: '565.3,216.7 597.3,216.7 597.3,172.2 565.3,172.2', cx: 581.3, cy: 194.5 },
-  { name: 'Black Sea', type: 'sea', pts: '554.7,136.1 592.0,136.1 592.0,122.2 554.7,122.2', cx: 573.3, cy: 129.2 },
-  { name: 'Caspian Sea', type: 'sea', pts: '610.7,150.0 626.7,150.0 626.7,116.7 610.7,116.7', cx: 618.7, cy: 133.3 },
-  { name: 'Sea of Azov', type: 'sea', pts: '570.7,125.0 581.3,125.0 581.3,116.7 570.7,116.7', cx: 576.0, cy: 120.8 },
-  { name: 'Laccadive Sea', type: 'sea', pts: '672.0,236.1 693.3,236.1 693.3,208.3 672.0,208.3', cx: 682.7, cy: 222.2 },
-  { name: 'Gulf of Mexico', type: 'gulf', pts: '218.7,200.0 261.3,200.0 261.3,166.7 218.7,166.7', cx: 240.0, cy: 183.3 },
-  { name: 'Gulf of Guinea', type: 'gulf', pts: '453.3,263.9 506.7,263.9 506.7,236.1 453.3,236.1', cx: 480.0, cy: 250.0 },
-  { name: 'Gulf of Aden', type: 'gulf', pts: '592.0,222.2 618.7,222.2 618.7,208.3 592.0,208.3', cx: 605.3, cy: 215.3 },
-  { name: 'Gulf of Oman', type: 'gulf', pts: '626.7,194.4 645.3,194.4 645.3,180.6 626.7,180.6', cx: 636.0, cy: 187.5 },
-  { name: 'Persian Gulf', type: 'gulf', pts: '608.0,186.1 632.0,186.1 632.0,172.2 608.0,172.2', cx: 620.0, cy: 179.2 },
-  { name: 'Bay of Bengal', type: 'gulf', pts: '693.3,227.8 746.7,227.8 746.7,188.9 693.3,188.9', cx: 720.0, cy: 208.3 },
-  { name: 'Bay of Biscay', type: 'gulf', pts: '453.3,130.6 480.0,130.6 480.0,116.7 453.3,116.7', cx: 466.7, cy: 123.6 },
-  { name: 'Hudson Bay', type: 'gulf', pts: '226.7,108.3 280.0,108.3 280.0,69.4 226.7,69.4', cx: 253.3, cy: 88.9 },
-  { name: 'Gulf of Alaska', type: 'gulf', pts: '53.3,102.8 120.0,102.8 120.0,77.8 53.3,77.8', cx: 86.7, cy: 90.3 },
-  { name: 'Gulf of California', type: 'gulf', pts: '173.3,188.9 192.0,188.9 192.0,166.7 173.3,166.7', cx: 182.7, cy: 177.8 },
-  { name: 'Gulf of St. Lawrence', type: 'gulf', pts: '301.3,122.2 330.7,122.2 330.7,108.3 301.3,108.3', cx: 316.0, cy: 115.3 },
-  { name: 'Great Australian Bight', type: 'gulf', pts: '794.7,338.9 832.0,338.9 832.0,347.2 794.7,347.2', cx: 813.3, cy: 342.8 },
-  { name: 'Baffin Bay', type: 'gulf', pts: '266.7,66.7 325.3,66.7 325.3,33.3 266.7,33.3', cx: 296.0, cy: 50.0 },
-  { name: 'Gulf of Finland', type: 'gulf', pts: '541.3,86.1 562.7,86.1 562.7,80.6 541.3,80.6', cx: 552.0, cy: 83.3 },
-  { name: 'Gulf of Bothnia', type: 'gulf', pts: '528.0,83.3 549.3,83.3 549.3,66.7 528.0,66.7', cx: 538.7, cy: 75.0 },
-  { name: 'Drake Passage', type: 'strait', pts: '293.3,402.8 333.3,402.8 333.3,430.6 293.3,430.6', cx: 313.3, cy: 416.7 },
-  { name: 'Strait of Gibraltar', type: 'strait', pts: '462.0,153.0 478.0,153.0 478.0,150.0 462.0,150.0', cx: 470.0, cy: 151.5 },
-  { name: 'English Channel', type: 'strait', pts: '464.0,114.0 490.0,114.0 490.0,106.0 464.0,106.0', cx: 477.0, cy: 110.0 },
-  { name: 'Strait of Malacca', type: 'strait', pts: '741.3,247.2 760.0,247.2 760.0,233.3 741.3,233.3', cx: 750.7, cy: 240.3 },
-  { name: 'Mozambique Channel', type: 'strait', pts: '568.0,283.3 592.0,283.3 592.0,325.0 568.0,325.0', cx: 580.0, cy: 304.2 },
-  { name: 'Bass Strait', type: 'strait', pts: '864.0,355.6 880.0,355.6 880.0,366.7 864.0,366.7', cx: 872.0, cy: 361.1 },
-  { name: 'Bosphorus', type: 'strait', pts: '553.0,137.0 560.0,137.0 560.0,130.0 553.0,130.0', cx: 556.5, cy: 133.5 },
-  { name: 'Strait of Magellan', type: 'strait', pts: '277.3,394.4 306.7,394.4 306.7,402.8 277.3,402.8', cx: 292.0, cy: 398.6 },
-  { name: 'Taiwan Strait', type: 'strait', pts: '794.7,188.9 805.3,188.9 805.3,177.8 794.7,177.8', cx: 800.0, cy: 183.3 },
-  { name: 'Strait of Dover', type: 'strait', pts: '481.0,112.0 490.0,112.0 490.0,106.0 481.0,106.0', cx: 485.5, cy: 109.0 },
-  { name: 'Suez Canal', type: 'strait', pts: '564.0,170.0 572.0,170.0 572.0,163.0 564.0,163.0', cx: 568.0, cy: 166.5 },
-  { name: 'Strait of Hormuz', type: 'strait', pts: '625.0,181.0 641.0,181.0 641.0,175.0 625.0,175.0', cx: 633.0, cy: 178.0 },
-]
-const WATER_BODY_MAP = Object.fromEntries(WATER_BODIES.map(w => [w.name, w]))
-
 // ─── Water Bodies Map Drill ───────────────────────────────────────────────────
 function WaterBodiesDrill({ onBack, cards = [], setCards = () => {} }) {
   const [selected, setSelected] = useState(null)
   const [answer, setAnswer] = useState('')
   const [result, setResult] = useState(null)
   const [attempted, setAttempted] = useState(new Set())
+  const [correctSet, setCorrectSet] = useState(new Set())
   const [score, setScore] = useState({ correct: 0, total: 0 })
   const [zoom, setZoom] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
@@ -849,16 +787,13 @@ function WaterBodiesDrill({ onBack, cards = [], setCards = () => {} }) {
   const [missCounts, setMissCounts] = useState(() => getDrillMissCounts(drillId))
   const sessionSaved = useRef(false)
 
-  const uniqueBodies = [...new Map(WATER_BODIES.filter(w => filter === 'all' || w.type === filter).map(w => [w.name, w])).values()]
-  const remaining = uniqueBodies.filter(w => !attempted.has(w.name)).length
+  const filteredBodies = WATER_BODIES.filter(w => filter === 'all' || w.type === filter)
+  const remaining = filteredBodies.filter(w => !attempted.has(w.name)).length
 
   useEffect(() => {
-    if (remaining === 0 && uniqueBodies.length > 0 && !sessionSaved.current && score.total > 0) {
+    if (remaining === 0 && filteredBodies.length > 0 && !sessionSaved.current && score.total > 0) {
       sessionSaved.current = true
-      const missedNames = uniqueBodies.filter(w => {
-        const res = Array.from(attempted).includes(w.name)
-        return res && !score.correct
-      }).map(w => w.name)
+      const missedNames = filteredBodies.filter(w => !correctSet.has(w.name)).map(w => w.name)
       saveDrillSession(drillId, score.correct, score.total)
       saveDrillMisses(drillId, missedNames)
       setMissCounts(getDrillMissCounts(drillId))
@@ -878,7 +813,23 @@ function WaterBodiesDrill({ onBack, cards = [], setCards = () => {} }) {
     const correct = fuzzyMatch(answer, selected)
     setResult({ correct, name: selected })
     setAttempted(prev => new Set([...prev, selected]))
+    if (correct) setCorrectSet(prev => new Set([...prev, selected]))
     setScore(prev => ({ correct: prev.correct + (correct ? 1 : 0), total: prev.total + 1 }))
+  }
+
+  function getColor(name) {
+    if (name === selected) return 'rgba(245,197,24,0.55)'
+    if (correctSet.has(name)) return 'rgba(77,208,225,0.4)'
+    if (attempted.has(name)) return 'rgba(229,115,115,0.35)'
+    const colors = { ocean: 'rgba(10,40,100,0.7)', sea: 'rgba(13,52,120,0.65)', gulf: 'rgba(10,46,110,0.65)', strait: 'rgba(18,40,110,0.65)' }
+    return colors[WATER_BODY_MAP[name]?.type] || 'rgba(20,48,115,0.6)'
+  }
+
+  function getStroke(name) {
+    if (name === selected) return '#f5c518'
+    if (correctSet.has(name)) return '#4dd0e1'
+    if (attempted.has(name)) return '#e57373'
+    return '#1a3580'
   }
 
   return (
@@ -889,7 +840,7 @@ function WaterBodiesDrill({ onBack, cards = [], setCards = () => {} }) {
       </div>
       <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:6 }}>
         {[['all','All'],['ocean','Oceans'],['sea','Seas'],['gulf','Gulfs & Bays'],['strait','Straits & Channels']].map(([f,l]) => (
-          <button key={f} style={{ fontSize:10, padding:'3px 8px', borderRadius:6, border:`1px solid ${filter===f?'#f5c518':'#1a2460'}`, background:filter===f?'rgba(245,197,24,0.1)':'#060b1a', color:filter===f?'#f5c518':'#6070a0', cursor:'pointer' }} onClick={() => setFilter(f)}>{l}</button>
+          <button key={f} style={{ fontSize:10, padding:'3px 8px', borderRadius:6, border:`1px solid ${filter===f?'#f5c518':'#1a2460'}`, background:filter===f?'rgba(245,197,24,0.1)':'#060b1a', color:filter===f?'#f5c518':'#6070a0', cursor:'pointer' }} onClick={() => { setFilter(f); setSelected(null); setResult(null) }}>{l}</button>
         ))}
       </div>
       <div style={{ width:'100%', background:'#04101f', borderRadius:12, overflow:'hidden', border:'1px solid #1a2460', cursor:dragging?'grabbing':'grab', userSelect:'none' }}
@@ -900,48 +851,60 @@ function WaterBodiesDrill({ onBack, cards = [], setCards = () => {} }) {
         onTouchMove={e => { const t=e.touches[0]; if(dragging&&dragStart) setPan({x:t.clientX-dragStart.x,y:t.clientY-dragStart.y}) }}
         onTouchEnd={() => setDragging(false)}
       >
-        <svg viewBox="0 0 960 500" style={{ width:"100%", height:"auto", display:"block" }} onClick={e => { if(dragging) return; const rect=e.currentTarget.getBoundingClientRect(); const sx=(e.clientX-rect.left)/rect.width*960; const sy=(e.clientY-rect.top)/rect.height*500; }}>
+        <svg viewBox="0 0 960 500" style={{ width:'100%', height:'auto', display:'block' }}>
           <rect width="960" height="500" fill="#04101f" />
-          {WATER_BODIES.filter(w => filter === "all" || w.type === filter).map((w, i) => {
-            const isSel = w.name === selected
-            const isDone = attempted.has(w.name)
-            const colors = { ocean:"#0d2a5c", sea:"#0e3575", gulf:"#0a2e68", strait:"#122870" }
-            const fill = isSel ? "rgba(245,197,24,0.45)" : isDone ? "rgba(77,208,225,0.3)" : colors[w.type] || "#1a3070"
-            const stroke = isSel ? "#f5c518" : isDone ? "#4dd0e1" : "#1a3580"
-            return <polygon key={i} points={w.pts} fill={fill} stroke={stroke} strokeWidth={isSel?1.5:0.5} style={{ cursor:"pointer" }} onClick={e => { e.stopPropagation(); if(!dragging) handleClick(w) }} />
-          })}
-          {/* Labels for attempted */}
-          {WATER_BODIES.filter((w,i,arr) => attempted.has(w.name) && arr.findIndex(x=>x.name===w.name)===i).map(w => (
-            <text key={w.name} x={w.cx} y={w.cy} textAnchor="middle" fontSize={7} fill="#4dd0e1" style={{ pointerEvents:"none", fontFamily:"sans-serif" }}>{w.name}</text>
-          ))}
+          <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
+            {filteredBodies.map((w, i) => (
+              <path key={i} d={w.d}
+                fill={getColor(w.name)}
+                stroke={getStroke(w.name)}
+                strokeWidth={w.name === selected ? 1/zoom : 0.4/zoom}
+                style={{ cursor: attempted.has(w.name) ? 'default' : 'pointer' }}
+                onClick={e => { e.stopPropagation(); if(!dragging) handleClick(w) }}
+              />
+            ))}
+            {/* Labels for answered bodies */}
+            {filteredBodies.filter(w => attempted.has(w.name)).map(w => (
+              <text key={w.name} x={w.cx} y={w.cy} textAnchor="middle" fontSize={7/zoom}
+                fill={correctSet.has(w.name) ? '#4dd0e1' : '#e57373'}
+                style={{ pointerEvents:'none', fontFamily:'sans-serif', fontWeight:'bold' }}>
+                {w.name}
+              </text>
+            ))}
+          </g>
         </svg>
+      </div>
+      <div style={{ display:'flex', gap:8, marginTop:4 }}>
+        <button style={{ ...S.btnSecondary, fontSize:11, padding:'4px 8px' }} onClick={() => { const nz=Math.min(zoom*1.5,8); const cx=(480-pan.x)/zoom; const cy=(250-pan.y)/zoom; setPan({x:480-cx*nz,y:250-cy*nz}); setZoom(nz) }}>＋</button>
+        <button style={{ ...S.btnSecondary, fontSize:11, padding:'4px 8px' }} onClick={() => { setZoom(1); setPan({x:0,y:0}) }}>Reset</button>
+        <button style={{ ...S.btnSecondary, fontSize:11, padding:'4px 8px' }} onClick={() => { const nz=Math.max(zoom/1.5,1); const cx=(480-pan.x)/zoom; const cy=(250-pan.y)/zoom; setPan({x:480-cx*nz,y:250-cy*nz}); setZoom(nz) }}>−</button>
       </div>
       {selected && !result && (
         <div style={S.card}>
-          <div style={{ fontSize:11, color:"#4060a0", letterSpacing:2, marginBottom:6 }}>NAME THIS BODY OF WATER</div>
-          <div style={{ fontSize:10, color:"#4060a0", marginBottom:8, textTransform:"capitalize" }}>({WATER_BODY_MAP[selected]?.type})</div>
-          <input ref={inputRef} style={{ ...S.input, marginBottom:10 }} value={answer} onChange={e => setAnswer(e.target.value)} onKeyDown={e => { if(e.key==="Enter") checkAnswer() }} placeholder="Body of water name..." autoFocus />
+          <div style={{ fontSize:11, color:'#4060a0', letterSpacing:2, marginBottom:6 }}>NAME THIS BODY OF WATER</div>
+          <div style={{ fontSize:10, color:'#4060a0', marginBottom:8, textTransform:'capitalize' }}>({WATER_BODY_MAP[selected]?.type})</div>
+          <input ref={inputRef} style={{ ...S.input, marginBottom:10 }} value={answer} onChange={e => setAnswer(e.target.value)} onKeyDown={e => { if(e.key==='Enter') checkAnswer() }} placeholder="Body of water name..." autoFocus />
           <button style={S.btn} onClick={checkAnswer}>CHECK</button>
         </div>
       )}
       {result && (
         <div style={S.card}>
-          <div style={{ fontSize:16, marginBottom:4 }}>{result.correct ? "✓ Correct!" : "✗ Incorrect"}</div>
-          <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:20, color:"#f5c518", letterSpacing:2 }}>{result.name}</div>
-          <div style={{ fontSize:10, color:"#4060a0", textTransform:"capitalize", marginBottom:10 }}>{WATER_BODY_MAP[result.name]?.type}</div>
-          <div style={{ display:"flex", gap:8 }}>
+          <div style={{ fontSize:16, marginBottom:4 }}>{result.correct ? '✓ Correct!' : '✗ Incorrect'}</div>
+          <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:20, color:'#f5c518', letterSpacing:2 }}>{result.name}</div>
+          <div style={{ fontSize:10, color:'#4060a0', textTransform:'capitalize', marginBottom:10 }}>{WATER_BODY_MAP[result.name]?.type}</div>
+          <div style={{ display:'flex', gap:8 }}>
             <button style={{ ...S.btn, flex:1 }} onClick={() => { setSelected(null); setResult(null) }}>TAP ANOTHER</button>
-            <button style={{ fontSize:10, color:"#4caf7d", border:"1px solid #2e8c50", borderRadius:8, padding:"6px 12px", background:"#0a1e10", cursor:"pointer" }} onClick={() => {
+            <button style={{ fontSize:10, color:'#4caf7d', border:'1px solid #2e8c50', borderRadius:8, padding:'6px 12px', background:'#0a1e10', cursor:'pointer' }} onClick={() => {
               const freshCards = loadCards()
-              if (freshCards.some(c => c.front === result.name)) { alert("Already in deck"); return }
-              const card = makeFlashCard(result.name, `${result.name} (${WATER_BODY_MAP[result.name]?.type})`, "Geography · Water Bodies")
+              if (freshCards.some(c => c.front === result.name)) { alert('Already in deck'); return }
+              const card = makeFlashCard(result.name, `${result.name} (${WATER_BODY_MAP[result.name]?.type})`, 'Geography · Water Bodies')
               const updated = [...freshCards, card]; saveCards(updated); setCards(updated)
-              alert(`Added to deck`)
+              alert('Added to deck')
             }}>＋ Deck</button>
           </div>
         </div>
       )}
-      {!selected && <div style={{ textAlign:"center", fontSize:12, color:"#2a3460", padding:"8px 0" }}>Tap any highlighted area to identify it</div>}
+      {!selected && <div style={{ textAlign:'center', fontSize:12, color:'#2a3460', padding:'8px 0' }}>Tap any highlighted area · zoom/pan to explore</div>}
     </div>
   )
 }
@@ -1359,11 +1322,11 @@ export function DrillsView({ cards = [], setCards = () => {} }) {
     />
   )
   if (drill === 'worldmap') return <WorldMapDrill onBack={() => { setDrill('geography'); setStats(loadDrillStats()) }} preloadedPaths={worldPaths} preloadedCentroids={worldCentroids} />
-  if (drill === 'water-bodies') return <WaterBodiesDrill onBack={() => setDrill('geography')} cards={cards} setCards={setCards} />
-  if (drill?.startsWith('region-')) return <RegionalMapDrill regionKey={drill.replace('region-','')} onBack={() => setDrill('geography')} worldPaths={worldPaths} worldCentroids={worldCentroids} />
-  if (drill === 'us-states') return <SubnationalMapDrill onBack={() => setDrill('geography')} config={{ geojsonUrl:'https://raw.githubusercontent.com/PublicaMundi/MappingAPI/master/data/geojson/us-states.json', data:US_STATES, regionLabel:'State', bounds:[-125,-66,24,50], width:960, height:560 }} cards={cards} setCards={setCards} />
-  if (drill === 'canada') return <SubnationalMapDrill onBack={() => setDrill('geography')} config={{ geojsonUrl:'https://raw.githubusercontent.com/codeforamerica/click_that_hood/master/public/data/canada.geojson', data:CANADA_PROVINCES, regionLabel:'Province', bounds:[-141,-52,41,84], width:960, height:640 }} cards={cards} setCards={setCards} />
-  if (drill === 'mexico') return <SubnationalMapDrill onBack={() => setDrill('geography')} config={{ geojsonUrl:'https://raw.githubusercontent.com/codeforamerica/click_that_hood/master/public/data/mexico.geojson', data:MEXICO_STATES, regionLabel:'State', bounds:[-118,-86,14,33], width:960, height:500 }} cards={cards} setCards={setCards} />
+  if (drill === 'water-bodies') return <WaterBodiesDrill onBack={() => { setDrill('geography'); setStats(loadDrillStats()) }} cards={cards} setCards={setCards} />
+  if (drill?.startsWith('region-')) return <RegionalMapDrill regionKey={drill.replace('region-','')} onBack={() => { setDrill('geography'); setStats(loadDrillStats()) }} worldPaths={worldPaths} worldCentroids={worldCentroids} />
+  if (drill === 'us-states') return <SubnationalMapDrill onBack={() => { setDrill('geography'); setStats(loadDrillStats()) }} config={{ geojsonUrl:'https://raw.githubusercontent.com/PublicaMundi/MappingAPI/master/data/geojson/us-states.json', data:US_STATES, regionLabel:'State', bounds:[-125,-66,24,50], width:960, height:560 }} cards={cards} setCards={setCards} />
+  if (drill === 'canada') return <SubnationalMapDrill onBack={() => { setDrill('geography'); setStats(loadDrillStats()) }} config={{ geojsonUrl:'https://raw.githubusercontent.com/codeforamerica/click_that_hood/master/public/data/canada.geojson', data:CANADA_PROVINCES, regionLabel:'Province', bounds:[-141,-52,41,84], width:960, height:640 }} cards={cards} setCards={setCards} />
+  if (drill === 'mexico') return <SubnationalMapDrill onBack={() => { setDrill('geography'); setStats(loadDrillStats()) }} config={{ geojsonUrl:'https://raw.githubusercontent.com/codeforamerica/click_that_hood/master/public/data/mexico.geojson', data:MEXICO_STATES, regionLabel:'State', bounds:[-118,-86,14,33], width:960, height:500 }} cards={cards} setCards={setCards} />
 
   // Top-level hub
   return (
@@ -1943,7 +1906,7 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
 
       <div style={{ display:'flex', gap:6 }}>
         <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18 }} onClick={() => { const nz=Math.min(zoom*1.5,8); const cx=(480-pan.x)/zoom; const cy=(250-pan.y)/zoom; setPan({x:480-cx*nz,y:250-cy*nz}); setZoom(nz) }}>+</button>
-        <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18, opacity:zoom<=minZoom?0.3:1 }} disabled={zoom<=minZoom} onClick={() => { const nz=Math.max(zoom/1.5,minZoom); setZoom(nz); if(nz<=minZoom){setZoom(minZoom);setPan(initialPan)} }}>−</button>
+        <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18, opacity:zoom<=minZoom?0.3:1 }} disabled={zoom<=minZoom} onClick={() => { const nz=Math.max(zoom/1.5,minZoom); if(nz<=minZoom){setZoom(minZoom);setPan(initialPan)} else { const cx=(480-pan.x)/zoom; const cy=(250-pan.y)/zoom; setPan({x:480-cx*nz,y:250-cy*nz}); setZoom(nz) } }}>−</button>
         <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:12 }} onClick={() => { setZoom(minZoom); setPan(initialPan) }}>Reset</button>
         <button style={{ ...S.btn, flex:1, padding:'6px 0', fontSize:12, background: autoNext ? 'rgba(245,197,24,0.15)' : undefined, border: autoNext ? '1px solid #f5c518' : undefined }} onClick={() => setAutoNext(a => !a)}>Auto Next {autoNext ? '✓' : '→'}</button>
       </div>
@@ -2224,7 +2187,7 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
         <>
           <div style={{ display:'flex', gap:6 }}>
             <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18 }} onClick={() => { const nz=Math.min(zoom*1.5,8); const cx=(480-pan.x)/zoom; const cy=(250-pan.y)/zoom; setPan({x:480-cx*nz,y:250-cy*nz}); setZoom(nz) }}>+</button>
-            <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18, opacity:zoom<=minZoom?0.3:1 }} disabled={zoom<=minZoom} onClick={() => { const nz=Math.max(zoom/1.5,minZoom); setZoom(nz); if(nz<=minZoom){setPan(initialPan)} }}>−</button>
+            <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18, opacity:zoom<=minZoom?0.3:1 }} disabled={zoom<=minZoom} onClick={() => { const nz=Math.max(zoom/1.5,minZoom); if(nz<=minZoom){setZoom(minZoom);setPan(initialPan)} else { const cx=(480-pan.x)/zoom; const cy=(250-pan.y)/zoom; setPan({x:480-cx*nz,y:250-cy*nz}); setZoom(nz) } }}>−</button>
             <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:11 }} onClick={() => { setZoom(minZoom); setPan(initialPan) }}>Reset</button>
             <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:11, color:'#4dd0e1' }} onClick={() => setRevealed(new Set(regionCountries.map(c=>c.id)))}>Show All</button>
             <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:11 }} onClick={() => setRevealed(new Set())}>Hide All</button>
@@ -2356,7 +2319,7 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
       </div>
       <div style={{ display:'flex', gap:6 }}>
         <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18 }} onClick={() => { const nz=Math.min(zoom*1.5,8); const cx=(480-pan.x)/zoom; const cy=(250-pan.y)/zoom; setPan({x:480-cx*nz,y:250-cy*nz}); setZoom(nz) }}>+</button>
-        <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18, opacity:zoom<=minZoom?0.3:1 }} disabled={zoom<=minZoom} onClick={() => { const nz=Math.max(zoom/1.5,minZoom); setZoom(nz); if(nz<=minZoom){setZoom(minZoom);setPan(initialPan)} }}>−</button>
+        <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18, opacity:zoom<=minZoom?0.3:1 }} disabled={zoom<=minZoom} onClick={() => { const nz=Math.max(zoom/1.5,minZoom); if(nz<=minZoom){setZoom(minZoom);setPan(initialPan)} else { const cx=(480-pan.x)/zoom; const cy=(250-pan.y)/zoom; setPan({x:480-cx*nz,y:250-cy*nz}); setZoom(nz) } }}>−</button>
         <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:12 }} onClick={() => { setZoom(minZoom); setPan(initialPan) }}>Reset</button>
         <button style={{ ...S.btn, flex:1, padding:'6px 0', fontSize:12, background: autoNext ? 'rgba(245,197,24,0.15)' : undefined, border: autoNext ? '1px solid #f5c518' : undefined }} onClick={() => setAutoNext(a => !a)}>Auto Next {autoNext ? '✓' : '→'}</button>
       </div>

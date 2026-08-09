@@ -661,7 +661,7 @@ function LabeledMapReference({ onBack, paths, pathCentroids }) {
           {/* Zoom controls */}
           <div style={{ display: 'flex', gap: 8 }}>
             <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18 }} onClick={() => { const nz = Math.min(zoom * 1.5, 8); const cx = (480 - pan.x) / zoom; const cy = (250 - pan.y) / zoom; setPan({ x: 480 - cx * nz, y: 250 - cy * nz }); setZoom(nz) }}>+</button>
-            <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18, opacity: zoom <= minZoom ? 0.3 : 1 }} disabled={zoom <= minZoom} onClick={() => { const nz = Math.max(zoom / 1.5, 1); setZoom(nz); if (nz <= minZoom) { setZoom(minZoom); setPan(initialPan) } }}>−</button>
+            <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18, opacity: zoom <= minZoom ? 0.3 : 1 }} disabled={zoom <= minZoom} onClick={() => { const nz = Math.max(zoom / 1.5, minZoom); if (nz <= minZoom) { setZoom(minZoom); setPan(initialPan) } else { const cx = (480 - pan.x) / zoom; const cy = (250 - pan.y) / zoom; setPan({ x: 480 - cx * nz, y: 250 - cy * nz }); setZoom(nz) } }}>−</button>
             <button style={{ ...S.btnSecondary, flex: 1, padding: '6px 0', fontSize: 12 }} onClick={() => { setZoom(minZoom); setPan(initialPan) }}>Reset View</button>
             <button style={{ ...S.btnSecondary, flex: 1, padding: '6px 0', fontSize: 11, color: '#4dd0e1' }} onClick={() => setRevealed(new Set(COUNTRIES.map(c => c.id)))}>Show All</button>
             <button style={{ ...S.btnSecondary, flex: 1, padding: '6px 0', fontSize: 11 }} onClick={() => setRevealed(new Set())}>Hide All</button>
@@ -770,7 +770,7 @@ function LabeledMapReference({ onBack, paths, pathCentroids }) {
 }
 
 // ─── Water Bodies Map Drill ───────────────────────────────────────────────────
-function WaterBodiesDrill({ onBack, cards = [], setCards = () => {} }) {
+function WaterBodiesDrill({ onBack, cards = [], setCards = () => {}, preloadedPaths = [] }) {
   const [selected, setSelected] = useState(null)
   const [answer, setAnswer] = useState('')
   const [result, setResult] = useState(null)
@@ -783,6 +783,7 @@ function WaterBodiesDrill({ onBack, cards = [], setCards = () => {} }) {
   const [dragStart, setDragStart] = useState(null)
   const [filter, setFilter] = useState('all')
   const [autoNext, setAutoNext] = useState(false)
+  const [showReference, setShowReference] = useState(false)
   const inputRef = useRef(null)
   const drillId = 'water-bodies'
   const [missCounts, setMissCounts] = useState(() => getDrillMissCounts(drillId))
@@ -840,11 +841,17 @@ function WaterBodiesDrill({ onBack, cards = [], setCards = () => {} }) {
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'0 4px' }}>
         <button style={{ fontSize:12, color:'#4060a0', background:'none', border:'none', cursor:'pointer' }} onClick={onBack}>← Back</button>
         <div style={{ display:'flex', gap:10, alignItems:'center' }}>
+          <button style={{ fontSize:11, color:'#4dd0e1', background:'none', border:'none', cursor:'pointer' }} onClick={() => setShowReference(true)}>📋 Reference</button>
           <div style={{ fontSize:11, color:'#4060a0', letterSpacing:2 }}>{score.correct}/{score.total} · {remaining} left</div>
-          <button style={{ fontSize:11, padding:'3px 10px', borderRadius:6, border:`1px solid ${autoNext?'#f5c518':'#1a2460'}`, background:autoNext?'rgba(245,197,24,0.1)':'transparent', color:autoNext?'#f5c518':'#4060a0', cursor:'pointer' }} onClick={() => setAutoNext(a=>!a)}>Auto Next {autoNext?'✓':'→'}</button>
         </div>
       </div>
-      <div style={{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:6 }}>
+      <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+        <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18 }} onClick={() => { const nz=Math.min(zoom*1.5,8); const cx=(480-pan.x)/zoom; const cy=(250-pan.y)/zoom; setPan({x:480-cx*nz,y:250-cy*nz}); setZoom(nz) }}>+</button>
+        <button style={{ ...S.btnSecondary, width:36, padding:'6px 0', fontSize:18, opacity:zoom<=1?0.3:1 }} disabled={zoom<=1} onClick={() => { const nz=Math.max(zoom/1.5,1); if(nz<=1){setZoom(1);setPan({x:0,y:0})} else { const cx=(480-pan.x)/zoom; const cy=(250-pan.y)/zoom; setPan({x:480-cx*nz,y:250-cy*nz}); setZoom(nz) } }}>−</button>
+        <button style={{ ...S.btnSecondary, flex:1, padding:'6px 0', fontSize:12 }} onClick={() => { setZoom(1); setPan({x:0,y:0}) }}>Reset View</button>
+        <button style={{ ...S.btn, flex:1, padding:'6px 0', fontSize:12, background:autoNext?'rgba(245,197,24,0.15)':undefined, border:autoNext?'1px solid #f5c518':undefined }} onClick={() => setAutoNext(a=>!a)}>Auto Next {autoNext?'✓':'→'}</button>
+      </div>
+      <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
         {[['all','All'],['ocean','Oceans'],['sea','Seas'],['gulf','Gulfs & Bays'],['strait','Straits & Channels']].map(([f,l]) => (
           <button key={f} style={{ fontSize:10, padding:'3px 8px', borderRadius:6, border:`1px solid ${filter===f?'#f5c518':'#1a2460'}`, background:filter===f?'rgba(245,197,24,0.1)':'#060b1a', color:filter===f?'#f5c518':'#6070a0', cursor:'pointer' }} onClick={() => { setFilter(f); setSelected(null); setResult(null) }}>{l}</button>
         ))}
@@ -859,6 +866,8 @@ function WaterBodiesDrill({ onBack, cards = [], setCards = () => {} }) {
       >
         <svg viewBox="0 0 960 500" style={{ width:'100%', height:'auto', display:'block' }}>
           <rect width="960" height="500" fill="#04101f" />
+          {/* Brown land masses */}
+          {(preloadedPaths||[]).map(p => <path key={p.id} d={p.d} fill="#3d2b1f" stroke="#2a1f14" strokeWidth={0.3/zoom} style={{ pointerEvents:'none' }} />)}
           <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`} style={{ transformOrigin: '480px 250px' }}>
             {filteredBodies.map((w, i) => (
               <path key={i} d={w.d}
@@ -880,11 +889,7 @@ function WaterBodiesDrill({ onBack, cards = [], setCards = () => {} }) {
           </g>
         </svg>
       </div>
-      <div style={{ display:'flex', gap:8, marginTop:4 }}>
-        <button style={{ ...S.btnSecondary, fontSize:11, padding:'4px 8px' }} onClick={() => { const nz=Math.min(zoom*1.5,8); const cx=(480-pan.x)/zoom; const cy=(250-pan.y)/zoom; setPan({x:480-cx*nz,y:250-cy*nz}); setZoom(nz) }}>＋</button>
-        <button style={{ ...S.btnSecondary, fontSize:11, padding:'4px 8px' }} onClick={() => { setZoom(1); setPan({x:0,y:0}) }}>Reset</button>
-        <button style={{ ...S.btnSecondary, fontSize:11, padding:'4px 8px' }} onClick={() => { const nz=Math.max(zoom/1.5,1); const cx=(480-pan.x)/zoom; const cy=(250-pan.y)/zoom; setPan({x:480-cx*nz,y:250-cy*nz}); setZoom(nz) }}>−</button>
-      </div>
+
       {selected && !result && (
         <div style={S.card}>
           <div style={{ fontSize:11, color:'#4060a0', letterSpacing:2, marginBottom:6 }}>NAME THIS BODY OF WATER</div>
@@ -911,6 +916,28 @@ function WaterBodiesDrill({ onBack, cards = [], setCards = () => {} }) {
         </div>
       )}
       {!selected && <div style={{ textAlign:'center', fontSize:12, color:'#2a3460', padding:'8px 0' }}>Tap any highlighted area · zoom/pan to explore</div>}
+      {showReference && (
+        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.85)', zIndex:100, overflowY:'auto', padding:16 }}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
+            <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:22, color:'#f5c518', letterSpacing:3 }}>WATER BODIES REFERENCE</div>
+            <button style={{ ...S.btnSecondary, padding:'6px 12px' }} onClick={() => setShowReference(false)}>✕ Close</button>
+          </div>
+          {['ocean','sea','gulf','strait'].map(type => (
+            <div key={type} style={{ marginBottom:12 }}>
+              <div style={{ fontSize:10, color:'#4060a0', letterSpacing:2, marginBottom:6, textTransform:'uppercase' }}>{type === 'gulf' ? 'Gulfs & Bays' : type === 'strait' ? 'Straits & Channels' : type + 's'}</div>
+              {WATER_BODIES.filter(w => w.type === type).map(w => {
+                const dots = missCounts[w.name] || [false,false,false]
+                return (
+                  <div key={w.name} style={{ display:'flex', alignItems:'center', gap:6, padding:'4px 0', borderBottom:'1px solid #0a1020' }}>
+                    <div style={{ display:'flex', gap:3 }}>{dots.map((missed,i) => <div key={i} style={{ width:6, height:6, borderRadius:'50%', background:missed?'#e57373':'#1a2460' }} />)}</div>
+                    <div style={{ fontSize:13, color: attempted.has(w.name) ? (correctSet.has(w.name) ? '#4caf7d' : '#e57373') : '#c0c8e8' }}>{w.name}</div>
+                  </div>
+                )
+              })}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -1149,7 +1176,7 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids, card
       {/* Zoom controls */}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18 }} onClick={() => { const nz = Math.min(zoom * 1.5, 8); const cx = (480 - pan.x) / zoom; const cy = (250 - pan.y) / zoom; setPan({ x: 480 - cx * nz, y: 250 - cy * nz }); setZoom(nz) }}>+</button>
-        <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18, opacity: zoom <= minZoom ? 0.3 : 1 }} disabled={zoom <= minZoom} onClick={() => { const nz = Math.max(zoom / 1.5, 1); setZoom(nz); if (nz <= minZoom) { setZoom(minZoom); setPan(initialPan) } }}>−</button>
+        <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18, opacity: zoom <= minZoom ? 0.3 : 1 }} disabled={zoom <= minZoom} onClick={() => { const nz = Math.max(zoom / 1.5, minZoom); if (nz <= minZoom) { setZoom(minZoom); setPan(initialPan) } else { const cx = (480 - pan.x) / zoom; const cy = (250 - pan.y) / zoom; setPan({ x: 480 - cx * nz, y: 250 - cy * nz }); setZoom(nz) } }}>−</button>
         <button style={{ ...S.btnSecondary, flex: 1, padding: '6px 0', fontSize: 12 }} onClick={() => { setZoom(minZoom); setPan(initialPan) }}>Reset View</button>
         <button style={{ ...S.btn, flex: 1, padding: '6px 0', fontSize: 12, background: autoNext ? 'rgba(245,197,24,0.15)' : undefined, border: autoNext ? '1px solid #f5c518' : undefined }} onClick={() => { setAutoNext(a => !a) }}>Auto Next {autoNext ? '✓' : '→'}</button>
       </div>
@@ -1328,7 +1355,7 @@ export function DrillsView({ cards = [], setCards = () => {} }) {
     />
   )
   if (drill === 'worldmap') return <WorldMapDrill onBack={() => { setDrill('geography'); setStats(loadDrillStats()) }} preloadedPaths={worldPaths} preloadedCentroids={worldCentroids} />
-  if (drill === 'water-bodies') return <WaterBodiesDrill onBack={() => { setDrill('geography'); setStats(loadDrillStats()) }} cards={cards} setCards={setCards} />
+  if (drill === 'water-bodies') return <WaterBodiesDrill onBack={() => { setDrill('geography'); setStats(loadDrillStats()) }} cards={cards} setCards={setCards} preloadedPaths={worldPaths} />
   if (drill?.startsWith('region-')) return <RegionalMapDrill regionKey={drill.replace('region-','')} onBack={() => { setDrill('geography'); setStats(loadDrillStats()) }} worldPaths={worldPaths} worldCentroids={worldCentroids} />
   if (drill === 'us-states') return <SubnationalMapDrill onBack={() => { setDrill('geography'); setStats(loadDrillStats()) }} config={{ geojsonUrl:'https://raw.githubusercontent.com/PublicaMundi/MappingAPI/master/data/geojson/us-states.json', data:US_STATES, regionLabel:'State', bounds:[-125,-66,24,50], width:960, height:560 }} cards={cards} setCards={setCards} />
   if (drill === 'canada') return <SubnationalMapDrill onBack={() => { setDrill('geography'); setStats(loadDrillStats()) }} config={{ geojsonUrl:'https://raw.githubusercontent.com/codeforamerica/click_that_hood/master/public/data/canada.geojson', data:CANADA_PROVINCES, regionLabel:'Province', bounds:[-141,-52,41,84], width:960, height:640 }} cards={cards} setCards={setCards} />

@@ -2280,8 +2280,14 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
                   const country = COUNTRY_MAP[p.id]
                   const isRevealed = revealed.has(p.id)
                   const CENTROID_OVERRIDES = {
-                    'NOR': { x: 511, y: 105 },
-                    'RUS': { x: 680, y: 120 },
+                    'NOR': { x: 507, y: 88 },   // Norway - mainland only, avoid Svalbard
+                    'RUS': { x: 660, y: 118 },   // Russia - European part
+                    'FRA': { x: 481, y: 175 },   // France - mainland
+                    'ESP': { x: 456, y: 196 },   // Spain - mainland
+                    'PRT': { x: 451, y: 185 },   // Portugal
+                    'GBR': { x: 471, y: 130 },   // UK - Great Britain island
+                    'ITA': { x: 519, y: 185 },   // Italy - boot
+                    'GRC': { x: 555, y: 210 },   // Greece - mainland
                   }
                   // Leader line targets for truly tiny countries at min zoom (all regions)
                   const LABEL_OVERRIDES = {
@@ -2291,23 +2297,23 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
                     'MCO': { lx: 500, ly: 205 }, 'SMR': { lx: 535, ly: 210 },
                     'VAT': { lx: 525, ly: 222 }, 'XKX': { lx: 600, ly: 250 },
                     // Africa
-                    'GMB': { lx: 419, ly: 227 }, 'RWA': { lx: 585, ly: 247 },
-                    'BDI': { lx: 585, ly: 267 }, 'SWZ': { lx: 584, ly: 334 },
-                    'LSO': { lx: 536, ly: 342 }, 'DJI': { lx: 614, ly: 209 },
-                    'GNQ': { lx: 487, ly: 236 }, 'COM': { lx: 620, ly: 283 },
-                    'STP': { lx: 473, ly: 249 }, 'CPV': { lx: 397, ly: 196 },
+                    'GMB': { lx: 427, ly: 222 }, 'RWA': { lx: 571, ly: 258 },
+                    'BDI': { lx: 571, ly: 264 }, 'SWZ': { lx: 573, ly: 317 },
+                    'LSO': { lx: 544, ly: 333 }, 'DJI': { lx: 605, ly: 219 },
+                    'GNQ': { lx: 496, ly: 239 }, 'COM': { lx: 605, ly: 278 },
+                    'STP': { lx: 485, ly: 244 }, 'CPV': { lx: 408, ly: 200 },
                   }
                   const rawC = CENTROID_OVERRIDES[p.id] || worldCentroids.current[p.id]
                   const labelPos = LABEL_OVERRIDES[p.id] || rawC
                   const c = rawC
-                  const hasLeader = LABEL_OVERRIDES[p.id] && rawC && zoom <= minZoom
+                  const hasLeader = LABEL_OVERRIDES[p.id] && rawC && zoom < minZoom * 2
                   return (
                     <g key={p.id}>
                       <path d={p.d} fill={isRevealed?'#4dd0e1':'#1a3070'} stroke="#0a0f2e" strokeWidth={0.5/zoom}
                         onClick={e => { if(!dragging) { e.stopPropagation(); setRevealed(prev => { const n=new Set(prev); n.has(p.id)?n.delete(p.id):n.add(p.id); return n }) } }}
                         style={{ cursor:'pointer', transition:'fill 0.2s' }}
                       />
-                      {c && country && (isRevealed || zoom >= minZoom * 1.5) && (
+                      {c && country && (
                         <g onClick={e => { if(!dragging){e.stopPropagation();setRevealed(prev => { const n=new Set(prev); n.has(p.id)?n.delete(p.id):n.add(p.id); return n })} }} style={{ cursor:'pointer' }}>
                           {hasLeader && <line x1={c.x} y1={c.y} x2={labelPos.lx} y2={labelPos.ly} stroke="#4060a0" strokeWidth={0.4/zoom} strokeDasharray={`${1/zoom},${1/zoom}`} style={{ pointerEvents:'none' }} />}
                           <text x={hasLeader ? labelPos.lx : c.x} y={(hasLeader ? labelPos.ly : c.y)-(isRevealed?5:0)} textAnchor="middle" fontSize={8/zoom} fill={isRevealed?'#fff':'#8890d0'} style={{ pointerEvents:'none', fontFamily:'sans-serif' }}>{country.name}</text>

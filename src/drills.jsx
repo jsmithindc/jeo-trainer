@@ -1008,21 +1008,22 @@ const GLOBAL_LEADER_TARGETS = {
   'AZE': { lx: 608, ly: 132 }, // Caspian
   // Mediterranean E
   'CYP': { lx: 566, ly: 162 }, // Mediterranean E
-  // Africa - well spaced in open water
-  'CPV': { lx: 436, ly: 197 }, // Atlantic W edge (map boundary)
-  'SEN': { lx: 436, ly: 206 }, // Atlantic 8px gap
-  'GMB': { lx: 436, ly: 214 }, // Atlantic 8px gap
-  'GNB': { lx: 436, ly: 222 }, // Atlantic 8px gap
-  'GIN': { lx: 436, ly: 230 }, // Atlantic 8px gap
-  'SLE': { lx: 436, ly: 238 }, // Atlantic 8px gap
-  'LBR': { lx: 436, ly: 246 }, // Atlantic 8px gap
-  'GNQ': { lx: 491, ly: 248 }, // Gulf of Guinea
-  'STP': { lx: 491, ly: 256 }, // Gulf of Guinea
-  'RWA': { lx: 568, ly: 253 }, // Lake Victoria
-  'BDI': { lx: 560, ly: 263 }, // Lake Tanganyika
-  'MWI': { lx: 579, ly: 283 }, // Indian Ocean/Lake Malawi
-  'SWZ': { lx: 576, ly: 319 }, // Indian Ocean E
-  'LSO': { lx: 576, ly: 328 }, // Indian Ocean SE
+  // Africa - 18px gaps, all in open Atlantic at map W edge
+  'CPV': { lx: 432, ly: 188 }, // Atlantic W edge
+  'SEN': { lx: 432, ly: 206 }, // +18
+  'GMB': { lx: 432, ly: 224 }, // +18
+  'GNB': { lx: 432, ly: 242 }, // +18
+  'GIN': { lx: 432, ly: 260 }, // +18
+  'SLE': { lx: 432, ly: 278 }, // +18
+  'LBR': { lx: 432, ly: 296 }, // +18
+  'GNQ': { lx: 476, ly: 248 }, // Gulf of Guinea W
+  'COG': { lx: 476, ly: 258 }, // Gulf of Guinea W (Republic of Congo)
+  'STP': { lx: 476, ly: 268 }, // Gulf of Guinea W
+  'RWA': { lx: 592, ly: 253 }, // Indian Ocean E
+  'BDI': { lx: 592, ly: 261 }, // Indian Ocean E
+  'MWI': { lx: 592, ly: 289 }, // Indian Ocean E
+  'SWZ': { lx: 581, ly: 322 }, // Indian Ocean E
+  'LSO': { lx: 581, ly: 333 }, // Indian Ocean SE
   'DJI': { lx: 597, ly: 218 }, // Gulf of Aden
   'COM': { lx: 605, ly: 278 }, // Indian Ocean N
   // Caribbean/Central America

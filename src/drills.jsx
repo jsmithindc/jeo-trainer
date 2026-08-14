@@ -703,23 +703,26 @@ function LabeledMapReference({ onBack, paths, pathCentroids }) {
                   const centroid = pathCentroids.current[p.id]
                   if (!country || !centroid) return null
                   const isRevealed = revealed.has(p.id)
-                  if (!isRevealed && zoom < minZoom * 1.5) return null // hide unselected labels when zoomed out
+                  const bw = centroid.bw || 0, bh = centroid.bh || 0
+                  const labelFits = (bw * zoom) > (country.name.length * 5) && (bh * zoom) > 8
+                  const lx = centroid.x, ly = centroid.y
                   return (
                     <g key={`label-${p.id}`} onClick={e => { if (!dragging) { e.stopPropagation(); toggleReveal(p.id) } }} style={{ cursor: 'pointer' }}>
+                      {!labelFits && isRevealed && <line x1={lx} y1={ly} x2={lx} y2={ly} stroke="#4060a0" strokeWidth={0.4/zoom} style={{ pointerEvents:'none' }} />}
                       <text
-                        x={centroid.x}
-                        y={centroid.y - (isRevealed ? 5 : 0)}
+                        x={lx}
+                        y={ly - (isRevealed ? 5 : 0)}
                         textAnchor="middle"
-                        fontSize={10 / zoom}
-                        fill={isRevealed ? '#fff' : '#8890d0'}
+                        fontSize={labelFits ? 10/zoom : Math.max(6/zoom, 10/zoom)}
+                        fill={isRevealed ? '#fff' : (labelFits ? '#8890d0' : '#6070b0')}
                         style={{ pointerEvents: 'none', fontFamily: 'sans-serif' }}
                       >
                         {country.name}
                       </text>
                       {isRevealed && (
                         <text
-                          x={centroid.x}
-                          y={centroid.y + 8 / zoom}
+                          x={lx}
+                          y={ly + 8 / zoom}
                           textAnchor="middle"
                           fontSize={8 / zoom}
                           fill="#f5c518"
@@ -1366,7 +1369,14 @@ export function DrillsView({ cards = [], setCards = () => {} }) {
           let d='', centroid=null
           if (f.geometry?.type==='Polygon') { d=toPath(f.geometry.coordinates); centroid=getCentroid(f.geometry.coordinates) }
           else if (f.geometry?.type==='MultiPolygon') { d=f.geometry.coordinates.map(p=>toPath(p)).join(' '); const lg=f.geometry.coordinates.reduce((a,b)=>b[0].length>a[0].length?b:a); centroid=getCentroid(lg) }
-          if (centroid) centroids[id]=centroid
+          if (centroid) {
+            // Also store bbox dimensions for label fitting
+            const ring = f.geometry?.type==='Polygon' ? f.geometry.coordinates[0] :
+              f.geometry?.coordinates?.reduce((a,b)=>b[0].length>a[0].length?b:a)?.[0] || []
+            const pts = ring.map(([lon,lat]) => [(lon+180)*(960/360),(90-lat)*(500/180)])
+            const xs = pts.map(p=>p[0]), ys = pts.map(p=>p[1])
+            centroids[id] = { ...centroid, bw: Math.max(...xs)-Math.min(...xs), bh: Math.max(...ys)-Math.min(...ys) }
+          }
           return { id, name: f.properties?.name, d }
         }).filter(p=>p.d)
         worldCentroids.current = centroids
@@ -1753,7 +1763,13 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
             const largest = transformed.reduce((a,b) => b[0].length > a[0].length ? b : a)
             centroid = getCentroid(largest)
           }
-          if (centroid) newCentroids[name] = centroid
+          if (centroid) {
+            const ring = f.geometry?.type === 'Polygon'
+              ? transformCoords(f.geometry.coordinates, name)[0]
+              : transformMultiCoords(f.geometry.coordinates, name).reduce((a,b)=>b[0].length>a[0].length?b:a)[0] || []
+            const xs = ring.map(p=>p[0]), ys = ring.map(p=>p[1])
+            newCentroids[name] = { ...centroid, bw: Math.max(...xs)-Math.min(...xs), bh: Math.max(...ys)-Math.min(...ys) }
+          }
           return { name, d }
         }).filter(p => p.d)
         setPaths(built)
@@ -1895,10 +1911,11 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
                   const c = centroids[p.name]
                   if (!data || !c) return null
                   const isRevealed = revealed.has(p.name)
-                  if (!isRevealed && zoom < minZoom * 1.5) return null
+                  const bw = c.bw || 0, bh = c.bh || 0
+                  const labelFits = (bw * zoom) > (p.name.length * 5) && (bh * zoom) > 8
                   return (
                     <g key={`l-${p.name}`} onClick={e => { if(!dragging){e.stopPropagation();setRevealed(prev=>{const n=new Set(prev);n.has(p.name)?n.delete(p.name):n.add(p.name);return n})} }} style={{ cursor:'pointer' }}>
-                      <text x={c.x} y={c.y-(isRevealed?5:0)} textAnchor="middle" fontSize={10/zoom} fill={isRevealed?'#fff':'#8890d0'} style={{ pointerEvents:'none', fontFamily:'sans-serif' }}>{p.name}</text>
+                      <text x={c.x} y={c.y-(isRevealed?5:0)} textAnchor="middle" fontSize={10/zoom} fill={isRevealed?'#fff':(labelFits?'#8890d0':'#6070b0')} style={{ pointerEvents:'none', fontFamily:'sans-serif' }}>{p.name}</text>
                       {isRevealed && <text x={c.x} y={c.y+8/zoom} textAnchor="middle" fontSize={8/zoom} fill="#f5c518" style={{ pointerEvents:'none', fontFamily:'sans-serif' }}>{data.capital}</text>}
                     </g>
                   )
@@ -2280,22 +2297,32 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
                   const country = COUNTRY_MAP[p.id]
                   const isRevealed = revealed.has(p.id)
                   const CENTROID_OVERRIDES = {
-                    'NOR': { x: 507, y: 88 },   // Norway - mainland only, avoid Svalbard
-                    'RUS': { x: 660, y: 118 },   // Russia - European part
-                    'FRA': { x: 481, y: 175 },   // France - mainland
-                    'ESP': { x: 456, y: 196 },   // Spain - mainland
-                    'PRT': { x: 451, y: 185 },   // Portugal
-                    'GBR': { x: 471, y: 130 },   // UK - Great Britain island
-                    'ITA': { x: 519, y: 185 },   // Italy - boot
-                    'GRC': { x: 555, y: 210 },   // Greece - mainland
+                    'NOR': { x: 507, y: 88 },
+                    'RUS': { x: 660, y: 118 },
+                    'FRA': { x: 481, y: 175 },
+                    'ESP': { x: 456, y: 196 },
+                    'GBR': { x: 471, y: 130 },
+                    'ITA': { x: 519, y: 185 },
+                    'GRC': { x: 555, y: 210 },
                   }
-                  // Leader line targets for truly tiny countries at min zoom (all regions)
-                  const LABEL_OVERRIDES = {
+                  // Label offsets for open-water placement (used when country too small to label)
+                  const LEADER_TARGETS = {
                     // Europe
-                    'AND': { lx: 458, ly: 198 }, 'LIE': { lx: 510, ly: 178 },
-                    'LUX': { lx: 478, ly: 162 }, 'MLT': { lx: 560, ly: 280 },
-                    'MCO': { lx: 500, ly: 205 }, 'SMR': { lx: 535, ly: 210 },
-                    'VAT': { lx: 525, ly: 222 }, 'XKX': { lx: 600, ly: 250 },
+                    'AND': { lx: 458, ly: 135 }, 'LIE': { lx: 520, ly: 112 },
+                    'LUX': { lx: 465, ly: 142 }, 'MLT': { lx: 525, ly: 162 },
+                    'MCO': { lx: 462, ly: 120 }, 'SMR': { lx: 530, ly: 170 },
+                    'VAT': { lx: 530, ly: 175 }, 'XKX': { lx: 555, ly: 140 },
+                    'ALB': { lx: 570, ly: 145 }, 'MNE': { lx: 548, ly: 140 },
+                    'MKD': { lx: 570, ly: 150 }, 'BIH': { lx: 530, ly: 135 },
+                    'SVN': { lx: 508, ly: 148 }, 'HRV': { lx: 520, ly: 138 },
+                    'CZE': { lx: 505, ly: 132 }, 'SVK': { lx: 535, ly: 140 },
+                    'HUN': { lx: 540, ly: 148 }, 'AUT': { lx: 515, ly: 140 },
+                    'BEL': { lx: 458, ly: 132 }, 'NLD': { lx: 460, ly: 120 },
+                    'DNK': { lx: 490, ly: 108 }, 'EST': { lx: 560, ly: 98 },
+                    'LVA': { lx: 558, ly: 108 }, 'LTU': { lx: 550, ly: 118 },
+                    'BLR': { lx: 580, ly: 118 }, 'MDA': { lx: 580, ly: 148 },
+                    'ARM': { lx: 638, ly: 158 }, 'AZE': { lx: 655, ly: 162 },
+                    'GEO': { lx: 638, ly: 148 }, 'CYP': { lx: 600, ly: 168 },
                     // Africa
                     'GMB': { lx: 427, ly: 222 }, 'RWA': { lx: 571, ly: 258 },
                     'BDI': { lx: 571, ly: 264 }, 'SWZ': { lx: 573, ly: 317 },
@@ -2304,9 +2331,15 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
                     'STP': { lx: 485, ly: 244 }, 'CPV': { lx: 408, ly: 200 },
                   }
                   const rawC = CENTROID_OVERRIDES[p.id] || worldCentroids.current[p.id]
-                  const labelPos = LABEL_OVERRIDES[p.id] || rawC
                   const c = rawC
-                  const hasLeader = LABEL_OVERRIDES[p.id] && rawC && zoom < minZoom * 2
+                  // Label fits inside country when its rendered width > ~label pixel width
+                  const bw = worldCentroids.current[p.id]?.bw || 0
+                  const bh = worldCentroids.current[p.id]?.bh || 0
+                  const labelCharWidth = (country.name.length * 5) // ~5px per char at fontSize 8
+                  const labelFits = (bw * zoom) > labelCharWidth && (bh * zoom) > 8
+                  const leaderTarget = LEADER_TARGETS[p.id]
+                  const hasLeader = leaderTarget && !labelFits
+                  const labelPos = hasLeader ? leaderTarget : rawC
                   return (
                     <g key={p.id}>
                       <path d={p.d} fill={isRevealed?'#4dd0e1':'#1a3070'} stroke="#0a0f2e" strokeWidth={0.5/zoom}

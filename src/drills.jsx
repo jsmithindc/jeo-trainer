@@ -661,7 +661,7 @@ function LabeledMapReference({ onBack, paths, pathCentroids }) {
           {/* Zoom controls */}
           <div style={{ display: 'flex', gap: 8 }}>
             <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18 }} onClick={() => { const nz = Math.min(zoom * 1.5, 8); const cx = (480 - pan.x) / zoom; const cy = (250 - pan.y) / zoom; setPan({ x: 480 - cx * nz, y: 250 - cy * nz }); setZoom(nz) }}>+</button>
-            <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18, opacity: zoom <= minZoom ? 0.3 : 1 }} disabled={zoom <= minZoom} onClick={() => { const nz = Math.max(zoom / 1.5, minZoom); if (nz <= minZoom) { setZoom(minZoom); setPan(initialPan) } else { const cx = (480 - pan.x) / zoom; const cy = (250 - pan.y) / zoom; setPan({ x: 480 - cx * nz, y: 250 - cy * nz }); setZoom(nz) } }}>−</button>
+            <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18, opacity: zoom <= minZoom ? 0.3 : 1 }} disabled={zoom <= minZoom} onClick={() => { const nz=Math.max(zoom/1.5,minZoom); if(nz<=minZoom){setZoom(minZoom);setPan(initialPan)} else { const cx=(480-pan.x)/zoom; const cy=(250-pan.y)/zoom; setPan({x:480-cx*nz,y:250-cy*nz}); setZoom(nz) } }}>−</button>
             <button style={{ ...S.btnSecondary, flex: 1, padding: '6px 0', fontSize: 12 }} onClick={() => { setZoom(minZoom); setPan(initialPan) }}>Reset View</button>
             <button style={{ ...S.btnSecondary, flex: 1, padding: '6px 0', fontSize: 11, color: '#4dd0e1' }} onClick={() => setRevealed(new Set(COUNTRIES.map(c => c.id)))}>Show All</button>
             <button style={{ ...S.btnSecondary, flex: 1, padding: '6px 0', fontSize: 11 }} onClick={() => setRevealed(new Set())}>Hide All</button>
@@ -680,7 +680,7 @@ function LabeledMapReference({ onBack, paths, pathCentroids }) {
           >
             <svg viewBox="0 0 960 500" style={{ width: '100%', height: 'auto', display: 'block' }}>
               <rect width="960" height="500" fill="#060b1a" />
-              <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`} style={{ transformOrigin: '480px 250px' }}>
+              <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
                 {/* Country shapes */}
                 {paths.map(p => {
                   const country = COUNTRY_MAP[p.id]
@@ -868,7 +868,7 @@ function WaterBodiesDrill({ onBack, cards = [], setCards = () => {}, preloadedPa
           <rect width="960" height="500" fill="#04101f" />
           {/* Brown land masses */}
           {(preloadedPaths||[]).map(p => <path key={p.id} d={p.d} fill="#3d2b1f" stroke="#2a1f14" strokeWidth={0.3/zoom} style={{ pointerEvents:'none' }} />)}
-          <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`} style={{ transformOrigin: '480px 250px' }}>
+          <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
             {filteredBodies.map((w, i) => (
               <path key={i} d={w.d}
                 fill={getColor(w.name)}
@@ -917,25 +917,43 @@ function WaterBodiesDrill({ onBack, cards = [], setCards = () => {}, preloadedPa
       )}
       {!selected && <div style={{ textAlign:'center', fontSize:12, color:'#2a3460', padding:'8px 0' }}>Tap any highlighted area · zoom/pan to explore</div>}
       {showReference && (
-        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.85)', zIndex:100, overflowY:'auto', padding:16 }}>
-          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
-            <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:22, color:'#f5c518', letterSpacing:3 }}>WATER BODIES REFERENCE</div>
-            <button style={{ ...S.btnSecondary, padding:'6px 12px' }} onClick={() => setShowReference(false)}>✕ Close</button>
+        <div style={{ position:'fixed', inset:0, background:'#04101f', zIndex:100, display:'flex', flexDirection:'column' }}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'10px 12px', borderBottom:'1px solid #1a2460' }}>
+            <div style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:20, color:'#f5c518', letterSpacing:3 }}>WATER BODIES REFERENCE</div>
+            <button style={{ ...S.btnSecondary, padding:'4px 10px' }} onClick={() => setShowReference(false)}>✕ Close</button>
           </div>
-          {['ocean','sea','gulf','strait'].map(type => (
-            <div key={type} style={{ marginBottom:12 }}>
-              <div style={{ fontSize:10, color:'#4060a0', letterSpacing:2, marginBottom:6, textTransform:'uppercase' }}>{type === 'gulf' ? 'Gulfs & Bays' : type === 'strait' ? 'Straits & Channels' : type + 's'}</div>
-              {WATER_BODIES.filter(w => w.type === type).map(w => {
-                const dots = missCounts[w.name] || [false,false,false]
-                return (
-                  <div key={w.name} style={{ display:'flex', alignItems:'center', gap:6, padding:'4px 0', borderBottom:'1px solid #0a1020' }}>
-                    <div style={{ display:'flex', gap:3 }}>{dots.map((missed,i) => <div key={i} style={{ width:6, height:6, borderRadius:'50%', background:missed?'#e57373':'#1a2460' }} />)}</div>
-                    <div style={{ fontSize:13, color: attempted.has(w.name) ? (correctSet.has(w.name) ? '#4caf7d' : '#e57373') : '#c0c8e8' }}>{w.name}</div>
-                  </div>
-                )
+          <div style={{ width:'100%', flex:'0 0 auto' }}>
+            <svg viewBox="0 0 960 500" style={{ width:'100%', height:'auto', display:'block' }}>
+              <rect width="960" height="500" fill="#04101f" />
+              {(preloadedPaths||[]).map(p => <path key={p.id} d={p.d} fill="#3d2b1f" stroke="#2a1f14" strokeWidth={0.3} style={{ pointerEvents:'none' }} />)}
+              {WATER_BODIES.map((w, i) => {
+                const colors = { ocean:'rgba(10,40,100,0.7)', sea:'rgba(13,52,120,0.65)', gulf:'rgba(10,46,110,0.65)', strait:'rgba(18,40,110,0.65)' }
+                return <path key={i} d={w.d} fill={colors[w.type]||'rgba(20,48,115,0.6)'} stroke="#1a3580" strokeWidth={0.4} />
               })}
-            </div>
-          ))}
+              {WATER_BODIES.map(w => (
+                <text key={w.name} x={w.cx} y={w.cy} textAnchor="middle" fontSize={6} fill="#a0c8e8"
+                  style={{ pointerEvents:'none', fontFamily:'sans-serif' }}>{w.name}</text>
+              ))}
+            </svg>
+          </div>
+          <div style={{ overflowY:'auto', flex:1, padding:'8px 12px' }}>
+            {['ocean','sea','gulf','strait'].map(type => (
+              <div key={type} style={{ marginBottom:10 }}>
+                <div style={{ fontSize:10, color:'#4060a0', letterSpacing:2, marginBottom:4, textTransform:'uppercase' }}>{type === 'gulf' ? 'Gulfs & Bays' : type === 'strait' ? 'Straits & Channels' : type + 's'}</div>
+                <div style={{ display:'flex', flexWrap:'wrap', gap:'2px 0' }}>
+                  {WATER_BODIES.filter(w => w.type === type).map(w => {
+                    const dots = missCounts[w.name] || [false,false,false]
+                    return (
+                      <div key={w.name} style={{ display:'flex', alignItems:'center', gap:5, padding:'3px 0', width:'50%' }}>
+                        <div style={{ display:'flex', gap:2 }}>{dots.map((missed,i) => <div key={i} style={{ width:5, height:5, borderRadius:'50%', background:missed?'#e57373':'#1a2460' }} />)}</div>
+                        <div style={{ fontSize:12, color: attempted.has(w.name) ? (correctSet.has(w.name) ? '#4caf7d' : '#e57373') : '#c0c8e8' }}>{w.name}</div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>
@@ -1176,7 +1194,7 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids, card
       {/* Zoom controls */}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18 }} onClick={() => { const nz = Math.min(zoom * 1.5, 8); const cx = (480 - pan.x) / zoom; const cy = (250 - pan.y) / zoom; setPan({ x: 480 - cx * nz, y: 250 - cy * nz }); setZoom(nz) }}>+</button>
-        <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18, opacity: zoom <= minZoom ? 0.3 : 1 }} disabled={zoom <= minZoom} onClick={() => { const nz = Math.max(zoom / 1.5, minZoom); if (nz <= minZoom) { setZoom(minZoom); setPan(initialPan) } else { const cx = (480 - pan.x) / zoom; const cy = (250 - pan.y) / zoom; setPan({ x: 480 - cx * nz, y: 250 - cy * nz }); setZoom(nz) } }}>−</button>
+        <button style={{ ...S.btnSecondary, width: 36, padding: '6px 0', fontSize: 18, opacity: zoom <= minZoom ? 0.3 : 1 }} disabled={zoom <= minZoom} onClick={() => { const nz=Math.max(zoom/1.5,minZoom); if(nz<=minZoom){setZoom(minZoom);setPan(initialPan)} else { const cx=(480-pan.x)/zoom; const cy=(250-pan.y)/zoom; setPan({x:480-cx*nz,y:250-cy*nz}); setZoom(nz) } }}>−</button>
         <button style={{ ...S.btnSecondary, flex: 1, padding: '6px 0', fontSize: 12 }} onClick={() => { setZoom(minZoom); setPan(initialPan) }}>Reset View</button>
         <button style={{ ...S.btn, flex: 1, padding: '6px 0', fontSize: 12, background: autoNext ? 'rgba(245,197,24,0.15)' : undefined, border: autoNext ? '1px solid #f5c518' : undefined }} onClick={() => { setAutoNext(a => !a) }}>Auto Next {autoNext ? '✓' : '→'}</button>
       </div>
@@ -1198,7 +1216,7 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids, card
           style={{ width: '100%', height: 'auto', display: 'block' }}
         >
           <rect width="960" height="500" fill="#060b1a" />
-          <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`} style={{ transformOrigin: '480px 250px' }}>
+          <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
             {paths.map(p => (
               <path
                 key={p.id}
@@ -1838,7 +1856,7 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
           >
             <svg viewBox={`0 0 ${vw} ${vh}`} style={{ width:'100%', height:'auto', display:'block' }}>
               <rect width={vw} height={vh} fill="#060b1a" />
-              <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`} style={{ transformOrigin: '480px 250px' }}>
+              <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
                 {paths.map(p => {
                   const data = getRegionData(p.name)
                   const isRevealed = revealed.has(p.name)
@@ -1955,7 +1973,7 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
       >
         <svg viewBox={`0 0 ${vw} ${vh}`} style={{ width:'100%', height:'auto', display:'block' }}>
           <rect width={vw} height={vh} fill="#060b1a" />
-          <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`} style={{ transformOrigin: '480px 250px' }}>
+          <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
             {paths.map(p => {
               const data = getRegionData(p.name)
               const isAttempted = attempted.has(p.name)
@@ -2236,7 +2254,7 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
           >
             <svg viewBox="0 0 960 500" style={{ width:'100%', height:'auto', display:'block' }}>
               <rect width="960" height="500" fill="#060b1a" />
-              <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`} style={{ transformOrigin: '480px 250px' }}>
+              <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
                 {regionPaths.map(p => {
                   const country = COUNTRY_MAP[p.id]
                   const isRevealed = revealed.has(p.id)
@@ -2368,7 +2386,7 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
 
         <svg viewBox="0 0 960 500" style={{ width:'100%', height:'auto', display:'block' }}>
           <rect width="960" height="500" fill="#060b1a" />
-          <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`} style={{ transformOrigin: '480px 250px' }}>
+          <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
             {regionPaths.map(p => (
               <path key={p.id} d={p.d}
                 fill={p.id===selected?'#f5c518':attempted.has(p.id)?'#e0e0e0':'#1a3070'}

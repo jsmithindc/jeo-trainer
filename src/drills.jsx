@@ -983,6 +983,9 @@ const GLOBAL_LEADER_TARGETS = {
   'CZE': { lx: 425, ly: 125 }, // Atlantic
   'SVK': { lx: 425, ly: 139 }, // Atlantic
   'HUN': { lx: 425, ly: 153 }, // Atlantic S
+  // Scandinavia - Norwegian Sea (above their territory)
+  'SWE': { lx: 493, ly: 56 }, // Norwegian Sea N of Sweden
+  'FIN': { lx: 533, ly: 50 }, // Arctic N of Finland
   // Baltic states - Atlantic W of UK, stacked vertically
   'EST': { lx: 440, ly: 83 },  // Atlantic (lat 60°)
   'LVA': { lx: 440, ly: 97 },  // Atlantic (lat 55°)
@@ -1001,10 +1004,10 @@ const GLOBAL_LEADER_TARGETS = {
   'XKX': { lx: 548, ly: 160 }, // Aegean
   'MKD': { lx: 548, ly: 170 }, // Aegean S
   // Black Sea
-  'MDA': { lx: 556, ly: 126 }, // Black Sea W
+  'MDA': { lx: 565, ly: 126 }, // Black Sea W
   'GEO': { lx: 570, ly: 120 }, // Black Sea N
   'ARM': { lx: 616, ly: 138 }, // Caspian W (east of Armenia)
-  'AZE': { lx: 616, ly: 126 }, // Caspian W
+  'AZE': { lx: 619, ly: 144 }, // Caspian S (lon 52, lat 38)
   // Mediterranean E
   'CYP': { lx: 562, ly: 160 }, // E Mediterranean
   // Africa - 18px gaps, all in open Atlantic at map W edge
@@ -1018,13 +1021,14 @@ const GLOBAL_LEADER_TARGETS = {
   'GNQ': { lx: 490, ly: 258 }, // Gulf of Guinea W
   'STP': { lx: 476, ly: 280 }, // Gulf of Guinea SW
   'COG': { lx: 504, ly: 275 }, // Gulf of Guinea S
-  'RWA': { lx: 600, ly: 250 }, // Indian Ocean (lon 43)
-  'BDI': { lx: 600, ly: 264 }, // Indian Ocean
+  'RWA': { lx: 610, ly: 248 }, // Indian Ocean (lon 46, past Madagascar N)
+  'BDI': { lx: 610, ly: 262 }, // Indian Ocean
   'MWI': { lx: 600, ly: 284 }, // Indian Ocean
   'SWZ': { lx: 600, ly: 316 }, // Indian Ocean
   'LSO': { lx: 600, ly: 330 }, // Indian Ocean S
   // Gulf of Guinea - south of coast, well spread
-  'GHA': { lx: 462, ly: 260 }, // Gulf of Guinea S
+  'BFA': { lx: 462, ly: 248 }, // Gulf of Guinea N (Burkina Faso)
+  'GHA': { lx: 462, ly: 263 }, // Gulf of Guinea S
   'TGO': { lx: 476, ly: 268 }, // Gulf of Guinea S
   'BEN': { lx: 490, ly: 268 }, // Gulf of Guinea SE
   'DJI': { lx: 597, ly: 218 }, // Gulf of Aden
@@ -1045,10 +1049,11 @@ const GLOBAL_LEADER_TARGETS = {
   'BHR': { lx: 629, ly: 183 }, // Arabian Sea
   'QAT': { lx: 635, ly: 189 }, // Arabian Sea
   'ARE': { lx: 640, ly: 194 }, // Arabian Sea
-  'OMN': { lx: 645, ly: 200 }, // Arabian Sea S
+  'OMN': { lx: 645, ly: 205 }, // Arabian Sea S
+  'OMN': { lx: 640, ly: 200 }, // Arabian Sea S
   // South Asia - Bay of Bengal, diagonal spread
-  'BTN': { lx: 733, ly: 189 }, // Bay of Bengal E (Bhutan)
-  'BGD': { lx: 715, ly: 200 }, // Bay of Bengal W (Bangladesh)
+  'BTN': { lx: 715, ly: 216 }, // Bay of Bengal S (Bhutan, lat 12°)
+  'BGD': { lx: 725, ly: 230 }, // Bay of Bengal S (Bangladesh, lat 9°)
   'LKA': { lx: 688, ly: 234 }, // Indian Ocean
   'MDV': { lx: 672, ly: 234 }, // Indian Ocean W
   // SE Asia - South China Sea
@@ -2406,18 +2411,19 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
                   const country = COUNTRY_MAP[p.id]
                   const isRevealed = revealed.has(p.id)
                   const CENTROID_OVERRIDES = {
-                    'NOR': { x: 504, y: 78 },   // S Norway mainland
-                    'RUS': { x: 587, y: 89 },   // European Russia
+                    'NOR': { x: 504, y: 78 },
+                    'RUS': { x: 587, y: 89 },
                     'FRA': { x: 487, y: 121 },
                     'ESP': { x: 471, y: 139 },
-                    'GBR': { x: 475, y: 100 },  // Central England
+                    'GBR': { x: 475, y: 100 },
                     'ITA': { x: 513, y: 132 },
                     'GRC': { x: 539, y: 140 },
                     'TUR': { x: 605, y: 140 },
                     'UKR': { x: 572, y: 122 },
                     'POL': { x: 528, y: 111 },
-                    'SWE': { x: 515, y: 80 },
-                    'FIN': { x: 540, y: 70 },
+                    'SWE': { x: 520, y: 78 },   // S Sweden
+                    'FIN': { x: 549, y: 75 },   // S Finland
+                    'NOR': { x: 497, y: 82 },   // S Norway
                   }
                   // Label offsets → use global targets
                   const LEADER_TARGETS = GLOBAL_LEADER_TARGETS

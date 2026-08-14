@@ -866,9 +866,9 @@ function WaterBodiesDrill({ onBack, cards = [], setCards = () => {}, preloadedPa
       >
         <svg viewBox="0 0 960 500" style={{ width:'100%', height:'auto', display:'block' }}>
           <rect width="960" height="500" fill="#04101f" />
+          <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
           {/* Brown land masses */}
           {(preloadedPaths||[]).map(p => <path key={p.id} d={p.d} fill="#3d2b1f" stroke="#2a1f14" strokeWidth={0.3/zoom} style={{ pointerEvents:'none' }} />)}
-          <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
             {filteredBodies.map((w, i) => (
               <path key={i} d={w.d}
                 fill={getColor(w.name)}

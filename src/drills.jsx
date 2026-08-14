@@ -968,32 +968,63 @@ function WaterBodiesDrill({ onBack, cards = [], setCards = () => {}, preloadedPa
 
 // ─── Global leader line targets for tiny countries (open water positions) ─────
 const GLOBAL_LEADER_TARGETS = {
-  // Europe
-  'AND': { lx: 475, ly: 139 }, 'LIE': { lx: 507, ly: 106 },
-  'LUX': { lx: 488, ly: 103 }, 'MLT': { lx: 523, ly: 153 },
-  'MCO': { lx: 496, ly: 136 }, 'SMR': { lx: 520, ly: 139 },
-  'VAT': { lx: 515, ly: 142 }, 'XKX': { lx: 544, ly: 144 },
-  'CHE': { lx: 491, ly: 106 }, 'BEL': { lx: 485, ly: 103 },
-  'NLD': { lx: 488, ly: 100 }, 'BIH': { lx: 517, ly: 131 },
-  'ALB': { lx: 525, ly: 142 }, 'MNE': { lx: 520, ly: 133 },
-  'MKD': { lx: 544, ly: 142 }, 'SVN': { lx: 512, ly: 119 },
-  'HRV': { lx: 517, ly: 128 }, 'CZE': { lx: 512, ly: 103 },
-  'SVK': { lx: 528, ly: 103 }, 'HUN': { lx: 544, ly: 111 },
-  'AUT': { lx: 515, ly: 103 }, 'DNK': { lx: 479, ly: 86 },
-  'EST': { lx: 549, ly: 81 }, 'LVA': { lx: 541, ly: 86 },
-  'LTU': { lx: 528, ly: 89 }, 'BLR': { lx: 544, ly: 92 },
-  'MDA': { lx: 565, ly: 128 }, 'ARM': { lx: 597, ly: 133 },
-  'AZE': { lx: 616, ly: 131 }, 'GEO': { lx: 581, ly: 128 },
-  'CYP': { lx: 571, ly: 158 },
-  // Africa
-  'CPV': { lx: 437, ly: 203 }, 'SEN': { lx: 437, ly: 208 },
-  'GMB': { lx: 437, ly: 213 }, 'GNB': { lx: 437, ly: 217 },
-  'GIN': { lx: 437, ly: 221 }, 'SLE': { lx: 437, ly: 225 },
-  'LBR': { lx: 437, ly: 231 }, 'GNQ': { lx: 491, ly: 244 },
-  'STP': { lx: 491, ly: 247 }, 'RWA': { lx: 568, ly: 253 },
-  'BDI': { lx: 560, ly: 263 }, 'MWI': { lx: 579, ly: 283 },
-  'SWZ': { lx: 576, ly: 319 }, 'LSO': { lx: 576, ly: 328 },
-  'DJI': { lx: 597, ly: 218 }, 'COM': { lx: 605, ly: 278 },
+  // Europe W - Atlantic/Channel/North Sea, well spaced
+  'AND': { lx: 452, ly: 152 }, // Bay of Biscay
+  'MCO': { lx: 452, ly: 140 }, // Gulf of Lion / Atlantic
+  'LUX': { lx: 452, ly: 122 }, // Atlantic/Channel
+  'BEL': { lx: 452, ly: 110 }, // English Channel
+  'NLD': { lx: 464, ly: 96 },  // N North Sea
+  'DNK': { lx: 464, ly: 82 },  // Skagerrak
+  // Europe C - Baltic approaches, stacked
+  'CHE': { lx: 492, ly: 82 },  // Baltic SW
+  'LIE': { lx: 492, ly: 92 },  // Baltic S
+  'AUT': { lx: 504, ly: 82 },  // Baltic
+  'CZE': { lx: 516, ly: 82 },  // Baltic
+  'SVK': { lx: 528, ly: 82 },  // Baltic E
+  'HUN': { lx: 540, ly: 82 },  // Baltic SE
+  // Europe NE - Baltic Sea
+  'EST': { lx: 554, ly: 78 },  // Baltic N
+  'LVA': { lx: 554, ly: 88 },  // Baltic
+  'LTU': { lx: 554, ly: 98 },  // Baltic S
+  'BLR': { lx: 554, ly: 108 }, // Baltic S
+  // Balkans - 3 columns, well separated
+  // Col A: Tyrrhenian/Ligurian (far W)
+  'VAT': { lx: 480, ly: 148 }, // Tyrrhenian W
+  'SMR': { lx: 480, ly: 158 }, // Tyrrhenian W
+  'MLT': { lx: 480, ly: 168 }, // Mediterranean W
+  // Col B: Adriatic (center)
+  'SVN': { lx: 500, ly: 144 }, // Adriatic N
+  'HRV': { lx: 500, ly: 154 }, // Adriatic
+  'BIH': { lx: 500, ly: 164 }, // Adriatic S
+  'MNE': { lx: 500, ly: 174 }, // Adriatic S
+  // Col C: Ionian/Aegean (E)
+  'ALB': { lx: 526, ly: 152 }, // Ionian
+  'XKX': { lx: 526, ly: 162 }, // Ionian/Aegean
+  'MKD': { lx: 526, ly: 172 }, // Aegean
+  // Black Sea / Caspian
+  'MDA': { lx: 560, ly: 130 }, // Black Sea W
+  'GEO': { lx: 574, ly: 124 }, // Black Sea E
+  'ARM': { lx: 590, ly: 136 }, // Caspian
+  'AZE': { lx: 608, ly: 132 }, // Caspian
+  // Mediterranean E
+  'CYP': { lx: 566, ly: 162 }, // Mediterranean E
+  // Africa - well spaced in open water
+  'CPV': { lx: 436, ly: 197 }, // Atlantic W edge (map boundary)
+  'SEN': { lx: 436, ly: 206 }, // Atlantic 8px gap
+  'GMB': { lx: 436, ly: 214 }, // Atlantic 8px gap
+  'GNB': { lx: 436, ly: 222 }, // Atlantic 8px gap
+  'GIN': { lx: 436, ly: 230 }, // Atlantic 8px gap
+  'SLE': { lx: 436, ly: 238 }, // Atlantic 8px gap
+  'LBR': { lx: 436, ly: 246 }, // Atlantic 8px gap
+  'GNQ': { lx: 491, ly: 248 }, // Gulf of Guinea
+  'STP': { lx: 491, ly: 256 }, // Gulf of Guinea
+  'RWA': { lx: 568, ly: 253 }, // Lake Victoria
+  'BDI': { lx: 560, ly: 263 }, // Lake Tanganyika
+  'MWI': { lx: 579, ly: 283 }, // Indian Ocean/Lake Malawi
+  'SWZ': { lx: 576, ly: 319 }, // Indian Ocean E
+  'LSO': { lx: 576, ly: 328 }, // Indian Ocean SE
+  'DJI': { lx: 597, ly: 218 }, // Gulf of Aden
+  'COM': { lx: 605, ly: 278 }, // Indian Ocean N
   // Caribbean/Central America
   'BRB': { lx: 330, ly: 215 }, 'LCA': { lx: 318, ly: 210 },
   'VCT': { lx: 320, ly: 213 }, 'GRD': { lx: 315, ly: 218 },

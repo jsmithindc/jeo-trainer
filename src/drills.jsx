@@ -706,6 +706,8 @@ function LabeledMapReference({ onBack, paths, pathCentroids }) {
                   const bw = centroid.bw || 0, bh = centroid.bh || 0
                   const labelFits = (bw * zoom) > (country.name.length * 8) && (bh * zoom) > 12
                   const leaderTarget = !labelFits ? GLOBAL_LEADER_TARGETS[p.id] : null
+                  // On world map, hide label if too small AND no leader target defined
+                  if (!labelFits && !leaderTarget) return null
                   const lx = leaderTarget ? leaderTarget.lx : centroid.x
                   const ly = leaderTarget ? leaderTarget.ly : centroid.y
                   return (
@@ -976,21 +978,16 @@ const GLOBAL_LEADER_TARGETS = {
   'BEL': { lx: 448, ly: 106 }, // English Channel
   'NLD': { lx: 460, ly: 94 },  // S North Sea
   'DNK': { lx: 460, ly: 80 },  // Skagerrak
-  // Landlocked C Europe - Atlantic column (x=425), separated from Baltic column
-  'LIE': { lx: 425, ly: 83 },  // Atlantic N
-  'CHE': { lx: 425, ly: 97 },  // Atlantic
-  'AUT': { lx: 425, ly: 111 }, // Atlantic
-  'CZE': { lx: 425, ly: 125 }, // Atlantic
-  'SVK': { lx: 425, ly: 139 }, // Atlantic
-  'HUN': { lx: 425, ly: 153 }, // Atlantic S
-  // Scandinavia - Norwegian Sea (above their territory)
-  'SWE': { lx: 493, ly: 56 }, // Norwegian Sea N of Sweden
-  'FIN': { lx: 533, ly: 50 }, // Arctic N of Finland
-  // Baltic states - Atlantic W of UK, stacked vertically
-  'EST': { lx: 440, ly: 83 },  // Atlantic (lat 60°)
-  'LVA': { lx: 440, ly: 97 },  // Atlantic (lat 55°)
-  'LTU': { lx: 440, ly: 111 }, // Atlantic (lat 50°)
-  'BLR': { lx: 440, ly: 125 }, // Atlantic (lat 45°)
+  // C Europe + Baltic - two well-separated columns (90px apart)
+  // Col A (x=405): EST LIE AUT CZE HUN
+  'EST': { lx: 405, ly: 62 }, 'LIE': { lx: 405, ly: 82 },
+  'AUT': { lx: 405, ly: 102 }, 'CZE': { lx: 405, ly: 122 }, 'HUN': { lx: 405, ly: 142 },
+  // Col B (x=495): LVA LTU BLR CHE SVK DNK
+  'LVA': { lx: 495, ly: 62 }, 'LTU': { lx: 495, ly: 82 },
+  'BLR': { lx: 495, ly: 102 }, 'CHE': { lx: 495, ly: 122 },
+  'SVK': { lx: 495, ly: 142 }, 'DNK': { lx: 495, ly: 162 },
+  // Scandinavia - Norwegian Sea
+  'SWE': { lx: 493, ly: 56 }, 'FIN': { lx: 533, ly: 50 },
   // Balkans W - Tyrrhenian Sea (far left of Italy)
   'VAT': { lx: 470, ly: 148 }, // Tyrrhenian W
   'SMR': { lx: 470, ly: 158 }, // Tyrrhenian W
@@ -1025,8 +1022,8 @@ const GLOBAL_LEADER_TARGETS = {
   'GHA': { lx: 452, ly: 258 }, // lon -7°, lat -3° ✓
   'TGO': { lx: 466, ly: 258 }, // lon -3°, lat -3° ✓
   'BEN': { lx: 480, ly: 258 }, // lon 0°, lat -3° ✓
-  'GNQ': { lx: 494, ly: 258 }, // lon 4°, lat -3° ✓
-  'CAF': { lx: 508, ly: 258 }, // lon 7°, lat -3° ✓ (open Gulf)
+  'GNQ': { lx: 480, ly: 258 }, // Gulf of Guinea (lon 1°, lat -3°)
+  'CAF': { lx: 493, ly: 283 }, // Gulf of Guinea S (lon 5°, lat -12°) - alone
   // Row 3 (ly=272): STP COG
   'STP': { lx: 466, ly: 272 }, // lon -3°, lat -7° ✓
   'COG': { lx: 494, ly: 272 }, // lon 4°, lat -7° ✓
@@ -1055,8 +1052,7 @@ const GLOBAL_LEADER_TARGETS = {
   'BHR': { lx: 629, ly: 183 }, // Arabian Sea
   'QAT': { lx: 635, ly: 189 }, // Arabian Sea
   'ARE': { lx: 640, ly: 194 }, // Arabian Sea
-  'OMN': { lx: 634, ly: 183 }, // Gulf of Oman N (lon 58, lat 24)
-  'OMN': { lx: 640, ly: 200 }, // Arabian Sea S
+  'OMN': { lx: 635, ly: 214 }, // Arabian Sea S (lon 58°, lat 13°) - south of Oman's S coast
   // South Asia - Bay of Bengal, diagonal spread
   'BTN': { lx: 715, ly: 216 }, // Bay of Bengal S (Bhutan, lat 12°)
   'BGD': { lx: 725, ly: 230 }, // Bay of Bengal S (Bangladesh, lat 9°)
@@ -2425,6 +2421,7 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
                     'ITA': { x: 513, y: 132 },
                     'GRC': { x: 539, y: 140 },
                     'TUR': { x: 582, y: 140 },  // C Turkey (lon 34)
+                    'AZE': { x: 607, y: 139 },  // Azerbaijan main body (lon 47°)
                     'UKR': { x: 572, y: 122 },
                     'POL': { x: 528, y: 111 },
                     'SWE': { x: 520, y: 78 },   // S Sweden

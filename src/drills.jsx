@@ -705,16 +705,18 @@ function LabeledMapReference({ onBack, paths, pathCentroids }) {
                   const isRevealed = revealed.has(p.id)
                   const bw = centroid.bw || 0, bh = centroid.bh || 0
                   const labelFits = (bw * zoom) > (country.name.length * 5) && (bh * zoom) > 8
-                  const lx = centroid.x, ly = centroid.y
+                  const leaderTarget = !labelFits ? GLOBAL_LEADER_TARGETS[p.id] : null
+                  const lx = leaderTarget ? leaderTarget.lx : centroid.x
+                  const ly = leaderTarget ? leaderTarget.ly : centroid.y
                   return (
                     <g key={`label-${p.id}`} onClick={e => { if (!dragging) { e.stopPropagation(); toggleReveal(p.id) } }} style={{ cursor: 'pointer' }}>
-                      {!labelFits && isRevealed && <line x1={lx} y1={ly} x2={lx} y2={ly} stroke="#4060a0" strokeWidth={0.4/zoom} style={{ pointerEvents:'none' }} />}
+                      {leaderTarget && <line x1={centroid.x} y1={centroid.y} x2={lx} y2={ly} stroke="#4060a0" strokeWidth={0.4/zoom} strokeDasharray={`${1/zoom},${1/zoom}`} style={{ pointerEvents:'none' }} />}
                       <text
                         x={lx}
                         y={ly - (isRevealed ? 5 : 0)}
                         textAnchor="middle"
-                        fontSize={labelFits ? 10/zoom : Math.max(6/zoom, 10/zoom)}
-                        fill={isRevealed ? '#fff' : (labelFits ? '#8890d0' : '#6070b0')}
+                        fontSize={10/zoom}
+                        fill={isRevealed ? '#fff' : '#8890d0'}
                         style={{ pointerEvents: 'none', fontFamily: 'sans-serif' }}
                       >
                         {country.name}
@@ -961,6 +963,49 @@ function WaterBodiesDrill({ onBack, cards = [], setCards = () => {}, preloadedPa
       )}
     </div>
   )
+}
+
+
+// ─── Global leader line targets for tiny countries (open water positions) ─────
+const GLOBAL_LEADER_TARGETS = {
+  // Europe
+  'AND': { lx: 475, ly: 139 }, 'LIE': { lx: 507, ly: 106 },
+  'LUX': { lx: 488, ly: 103 }, 'MLT': { lx: 523, ly: 153 },
+  'MCO': { lx: 496, ly: 136 }, 'SMR': { lx: 520, ly: 139 },
+  'VAT': { lx: 515, ly: 142 }, 'XKX': { lx: 544, ly: 144 },
+  'CHE': { lx: 491, ly: 106 }, 'BEL': { lx: 485, ly: 103 },
+  'NLD': { lx: 488, ly: 100 }, 'BIH': { lx: 517, ly: 131 },
+  'ALB': { lx: 525, ly: 142 }, 'MNE': { lx: 520, ly: 133 },
+  'MKD': { lx: 544, ly: 142 }, 'SVN': { lx: 512, ly: 119 },
+  'HRV': { lx: 517, ly: 128 }, 'CZE': { lx: 512, ly: 103 },
+  'SVK': { lx: 528, ly: 103 }, 'HUN': { lx: 544, ly: 111 },
+  'AUT': { lx: 515, ly: 103 }, 'DNK': { lx: 479, ly: 86 },
+  'EST': { lx: 549, ly: 81 }, 'LVA': { lx: 541, ly: 86 },
+  'LTU': { lx: 528, ly: 89 }, 'BLR': { lx: 544, ly: 92 },
+  'MDA': { lx: 565, ly: 128 }, 'ARM': { lx: 597, ly: 133 },
+  'AZE': { lx: 616, ly: 131 }, 'GEO': { lx: 581, ly: 128 },
+  'CYP': { lx: 571, ly: 158 },
+  // Africa
+  'CPV': { lx: 437, ly: 203 }, 'SEN': { lx: 437, ly: 208 },
+  'GMB': { lx: 437, ly: 213 }, 'GNB': { lx: 437, ly: 217 },
+  'GIN': { lx: 437, ly: 221 }, 'SLE': { lx: 437, ly: 225 },
+  'LBR': { lx: 437, ly: 231 }, 'GNQ': { lx: 491, ly: 244 },
+  'STP': { lx: 491, ly: 247 }, 'RWA': { lx: 568, ly: 253 },
+  'BDI': { lx: 560, ly: 263 }, 'MWI': { lx: 579, ly: 283 },
+  'SWZ': { lx: 576, ly: 319 }, 'LSO': { lx: 576, ly: 328 },
+  'DJI': { lx: 597, ly: 218 }, 'COM': { lx: 605, ly: 278 },
+  // Caribbean/Central America
+  'BRB': { lx: 330, ly: 215 }, 'LCA': { lx: 318, ly: 210 },
+  'VCT': { lx: 320, ly: 213 }, 'GRD': { lx: 315, ly: 218 },
+  'ATG': { lx: 308, ly: 200 }, 'DMA': { lx: 312, ly: 205 },
+  'KNA': { lx: 305, ly: 197 }, 'TTO': { lx: 325, ly: 222 },
+  'JAM': { lx: 268, ly: 200 }, 'PRI': { lx: 298, ly: 192 },
+  'BHS': { lx: 268, ly: 183 },
+  // Oceania
+  'KIR': { lx: 870, ly: 260 }, 'MHL': { lx: 860, ly: 230 },
+  'FSM': { lx: 845, ly: 245 }, 'NRU': { lx: 868, ly: 242 },
+  'PLW': { lx: 830, ly: 248 }, 'WSM': { lx: 895, ly: 280 },
+  'TON': { lx: 905, ly: 295 }, 'TUV': { lx: 910, ly: 268 },
 }
 
 // ─── World Map Drill ──────────────────────────────────────────────────────────
@@ -1913,10 +1958,11 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
                   const isRevealed = revealed.has(p.name)
                   const bw = c.bw || 0, bh = c.bh || 0
                   const labelFits = (bw * zoom) > (p.name.length * 5) && (bh * zoom) > 8
+                  const lx3 = c.x, ly3 = c.y
                   return (
                     <g key={`l-${p.name}`} onClick={e => { if(!dragging){e.stopPropagation();setRevealed(prev=>{const n=new Set(prev);n.has(p.name)?n.delete(p.name):n.add(p.name);return n})} }} style={{ cursor:'pointer' }}>
-                      <text x={c.x} y={c.y-(isRevealed?5:0)} textAnchor="middle" fontSize={10/zoom} fill={isRevealed?'#fff':(labelFits?'#8890d0':'#6070b0')} style={{ pointerEvents:'none', fontFamily:'sans-serif' }}>{p.name}</text>
-                      {isRevealed && <text x={c.x} y={c.y+8/zoom} textAnchor="middle" fontSize={8/zoom} fill="#f5c518" style={{ pointerEvents:'none', fontFamily:'sans-serif' }}>{data.capital}</text>}
+                      <text x={lx3} y={ly3-(isRevealed?5:0)} textAnchor="middle" fontSize={10/zoom} fill={isRevealed?'#fff':'#8890d0'} style={{ pointerEvents:'none', fontFamily:'sans-serif' }}>{p.name}</text>
+                      {isRevealed && <text x={lx3} y={ly3+8/zoom} textAnchor="middle" fontSize={8/zoom} fill="#f5c518" style={{ pointerEvents:'none', fontFamily:'sans-serif' }}>{data.capital}</text>}
                     </g>
                   )
                 })}
@@ -2297,39 +2343,21 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
                   const country = COUNTRY_MAP[p.id]
                   const isRevealed = revealed.has(p.id)
                   const CENTROID_OVERRIDES = {
-                    'NOR': { x: 507, y: 88 },
-                    'RUS': { x: 660, y: 118 },
-                    'FRA': { x: 481, y: 175 },
-                    'ESP': { x: 456, y: 196 },
-                    'GBR': { x: 471, y: 130 },
-                    'ITA': { x: 519, y: 185 },
-                    'GRC': { x: 555, y: 210 },
+                    'NOR': { x: 504, y: 78 },   // S Norway mainland
+                    'RUS': { x: 587, y: 89 },   // European Russia
+                    'FRA': { x: 487, y: 121 },
+                    'ESP': { x: 471, y: 139 },
+                    'GBR': { x: 475, y: 100 },  // Central England
+                    'ITA': { x: 513, y: 132 },
+                    'GRC': { x: 539, y: 140 },
+                    'TUR': { x: 605, y: 140 },
+                    'UKR': { x: 572, y: 122 },
+                    'POL': { x: 528, y: 111 },
+                    'SWE': { x: 515, y: 80 },
+                    'FIN': { x: 540, y: 70 },
                   }
-                  // Label offsets for open-water placement (used when country too small to label)
-                  const LEADER_TARGETS = {
-                    // Europe
-                    'AND': { lx: 458, ly: 135 }, 'LIE': { lx: 520, ly: 112 },
-                    'LUX': { lx: 465, ly: 142 }, 'MLT': { lx: 525, ly: 162 },
-                    'MCO': { lx: 462, ly: 120 }, 'SMR': { lx: 530, ly: 170 },
-                    'VAT': { lx: 530, ly: 175 }, 'XKX': { lx: 555, ly: 140 },
-                    'ALB': { lx: 570, ly: 145 }, 'MNE': { lx: 548, ly: 140 },
-                    'MKD': { lx: 570, ly: 150 }, 'BIH': { lx: 530, ly: 135 },
-                    'SVN': { lx: 508, ly: 148 }, 'HRV': { lx: 520, ly: 138 },
-                    'CZE': { lx: 505, ly: 132 }, 'SVK': { lx: 535, ly: 140 },
-                    'HUN': { lx: 540, ly: 148 }, 'AUT': { lx: 515, ly: 140 },
-                    'BEL': { lx: 458, ly: 132 }, 'NLD': { lx: 460, ly: 120 },
-                    'DNK': { lx: 490, ly: 108 }, 'EST': { lx: 560, ly: 98 },
-                    'LVA': { lx: 558, ly: 108 }, 'LTU': { lx: 550, ly: 118 },
-                    'BLR': { lx: 580, ly: 118 }, 'MDA': { lx: 580, ly: 148 },
-                    'ARM': { lx: 638, ly: 158 }, 'AZE': { lx: 655, ly: 162 },
-                    'GEO': { lx: 638, ly: 148 }, 'CYP': { lx: 600, ly: 168 },
-                    // Africa
-                    'GMB': { lx: 427, ly: 222 }, 'RWA': { lx: 571, ly: 258 },
-                    'BDI': { lx: 571, ly: 264 }, 'SWZ': { lx: 573, ly: 317 },
-                    'LSO': { lx: 544, ly: 333 }, 'DJI': { lx: 605, ly: 219 },
-                    'GNQ': { lx: 496, ly: 239 }, 'COM': { lx: 605, ly: 278 },
-                    'STP': { lx: 485, ly: 244 }, 'CPV': { lx: 408, ly: 200 },
-                  }
+                  // Label offsets → use global targets
+                  const LEADER_TARGETS = GLOBAL_LEADER_TARGETS
                   const rawC = CENTROID_OVERRIDES[p.id] || worldCentroids.current[p.id]
                   const c = rawC
                   // Label fits inside country when its rendered width > ~label pixel width

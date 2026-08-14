@@ -1023,14 +1023,19 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids, card
     }
 
     function getCentroid(coords) {
-      // Use bounding box center (more accurate than vertex average for irregular shapes)
       const ring = coords[0]
       const pts = ring.map(p => project(p))
-      const xs = pts.map(p => p[0]), ys = pts.map(p => p[1])
-      return {
-        x: (Math.min(...xs) + Math.max(...xs)) / 2,
-        y: (Math.min(...ys) + Math.max(...ys)) / 2,
+      let area = 0, cx = 0, cy = 0
+      for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+        const cross = pts[j][0] * pts[i][1] - pts[i][0] * pts[j][1]
+        area += cross; cx += (pts[j][0] + pts[i][0]) * cross; cy += (pts[j][1] + pts[i][1]) * cross
       }
+      area /= 2
+      if (Math.abs(area) < 0.001) {
+        const xs = pts.map(p => p[0]), ys = pts.map(p => p[1])
+        return { x: (Math.min(...xs) + Math.max(...xs)) / 2, y: (Math.min(...ys) + Math.max(...ys)) / 2 }
+      }
+      return { x: cx / (6 * area), y: cy / (6 * area) }
     }
 
     const centroids = {}
@@ -1338,12 +1343,22 @@ export function DrillsView({ cards = [], setCards = () => {} }) {
           return coords.map(ring => ring.map((pt, pi) => { const [x,y]=project(pt); return `${pi===0?'M':'L'}${x.toFixed(1)},${y.toFixed(1)}` }).join(' ') + ' Z').join(' ')
         }
         function getCentroid(coords) {
-          const pts = coords[0].map(p => project(p))
-          const xs = pts.map(p => p[0]), ys = pts.map(p => p[1])
-          return {
-            x: (Math.min(...xs) + Math.max(...xs)) / 2,
-            y: (Math.min(...ys) + Math.max(...ys)) / 2,
+          const ring = coords[0]
+          const pts = ring.map(p => project(p))
+          let area = 0, cx = 0, cy = 0
+          for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+            const cross = pts[j][0] * pts[i][1] - pts[i][0] * pts[j][1]
+            area += cross
+            cx += (pts[j][0] + pts[i][0]) * cross
+            cy += (pts[j][1] + pts[i][1]) * cross
           }
+          area /= 2
+          if (Math.abs(area) < 0.001) {
+            // Fallback to bbox center for degenerate polygons
+            const xs = pts.map(p => p[0]), ys = pts.map(p => p[1])
+            return { x: (Math.min(...xs) + Math.max(...xs)) / 2, y: (Math.min(...ys) + Math.max(...ys)) / 2 }
+          }
+          return { x: cx / (6 * area), y: cy / (6 * area) }
         }
         const centroids = {}
         const built = data.features.map(f => {
@@ -1675,11 +1690,17 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
         function getCentroid(coords) {
           const ring = coords[0]
           const pts = ring.map(p => project(p))
-          const xs = pts.map(p => p[0]), ys = pts.map(p => p[1])
-          return {
-            x: (Math.min(...xs) + Math.max(...xs)) / 2,
-            y: (Math.min(...ys) + Math.max(...ys)) / 2,
+          let area = 0, cx = 0, cy = 0
+          for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+            const cross = pts[j][0] * pts[i][1] - pts[i][0] * pts[j][1]
+            area += cross; cx += (pts[j][0] + pts[i][0]) * cross; cy += (pts[j][1] + pts[i][1]) * cross
           }
+          area /= 2
+          if (Math.abs(area) < 0.001) {
+            const xs = pts.map(p => p[0]), ys = pts.map(p => p[1])
+            return { x: (Math.min(...xs) + Math.max(...xs)) / 2, y: (Math.min(...ys) + Math.max(...ys)) / 2 }
+          }
+          return { x: cx / (6 * area), y: cy / (6 * area) }
         }
         // For US states: reposition Alaska and Hawaii as insets
         const isUS = config.regionLabel === 'State' && config.bounds?.[0] === -125

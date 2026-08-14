@@ -703,7 +703,7 @@ function LabeledMapReference({ onBack, paths, pathCentroids }) {
                   const centroid = pathCentroids.current[p.id]
                   if (!country || !centroid) return null
                   const isRevealed = revealed.has(p.id)
-                  if (!isRevealed && zoom < 1.5) return null // hide unselected labels when zoomed out
+                  if (!isRevealed && zoom < minZoom * 1.5) return null // hide unselected labels when zoomed out
                   return (
                     <g key={`label-${p.id}`} onClick={e => { if (!dragging) { e.stopPropagation(); toggleReveal(p.id) } }} style={{ cursor: 'pointer' }}>
                       <text
@@ -2282,31 +2282,25 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
                   const CENTROID_OVERRIDES = {
                     'NOR': { x: 511, y: 105 },
                     'RUS': { x: 680, y: 120 },
-                    'FRA': { x: 480, y: 178 },
-                    'ESP': { x: 455, y: 210 },
-                    'NLD': { x: 488, y: 148 },
                   }
-                  // Leader line targets for small/crowded countries (label moved to open water/space)
+                  // Leader line targets for truly tiny countries at min zoom (all regions)
                   const LABEL_OVERRIDES = {
-                    'ALB': { lx: 585, ly: 235 }, 'AND': { lx: 458, ly: 198 },
-                    'ARM': { lx: 680, ly: 200 }, 'AZE': { lx: 700, ly: 210 },
-                    'BIH': { lx: 558, ly: 238 }, 'BGR': { lx: 620, ly: 248 },
-                    'HRV': { lx: 545, ly: 242 }, 'CYP': { lx: 670, ly: 270 },
-                    'CZE': { lx: 535, ly: 158 }, 'EST': { lx: 590, ly: 100 },
-                    'GEO': { lx: 700, ly: 195 }, 'HUN': { lx: 570, ly: 188 },
-                    'XKX': { lx: 600, ly: 250 }, 'LVA': { lx: 590, ly: 112 },
-                    'LIE': { lx: 510, ly: 178 }, 'LTU': { lx: 575, ly: 128 },
+                    // Europe
+                    'AND': { lx: 458, ly: 198 }, 'LIE': { lx: 510, ly: 178 },
                     'LUX': { lx: 478, ly: 162 }, 'MLT': { lx: 560, ly: 280 },
-                    'MDA': { lx: 635, ly: 188 }, 'MCO': { lx: 500, ly: 205 },
-                    'MNE': { lx: 575, ly: 248 }, 'MKD': { lx: 600, ly: 258 },
-                    'SMR': { lx: 535, ly: 210 }, 'SVK': { lx: 565, ly: 168 },
-                    'SVN': { lx: 535, ly: 178 }, 'VAT': { lx: 525, ly: 222 },
-                    'BLR': { lx: 620, ly: 140 }, 'BEL': { lx: 468, ly: 148 },
+                    'MCO': { lx: 500, ly: 205 }, 'SMR': { lx: 535, ly: 210 },
+                    'VAT': { lx: 525, ly: 222 }, 'XKX': { lx: 600, ly: 250 },
+                    // Africa
+                    'GMB': { lx: 419, ly: 227 }, 'RWA': { lx: 585, ly: 247 },
+                    'BDI': { lx: 585, ly: 267 }, 'SWZ': { lx: 584, ly: 334 },
+                    'LSO': { lx: 536, ly: 342 }, 'DJI': { lx: 614, ly: 209 },
+                    'GNQ': { lx: 487, ly: 236 }, 'COM': { lx: 620, ly: 283 },
+                    'STP': { lx: 473, ly: 249 }, 'CPV': { lx: 397, ly: 196 },
                   }
                   const rawC = CENTROID_OVERRIDES[p.id] || worldCentroids.current[p.id]
                   const labelPos = LABEL_OVERRIDES[p.id] || rawC
                   const c = rawC
-                  const hasLeader = LABEL_OVERRIDES[p.id] && rawC && zoom <= minZoom * 1.2
+                  const hasLeader = LABEL_OVERRIDES[p.id] && rawC && zoom <= minZoom
                   return (
                     <g key={p.id}>
                       <path d={p.d} fill={isRevealed?'#4dd0e1':'#1a3070'} stroke="#0a0f2e" strokeWidth={0.5/zoom}

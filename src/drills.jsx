@@ -704,7 +704,7 @@ function LabeledMapReference({ onBack, paths, pathCentroids }) {
                   if (!country || !centroid) return null
                   const isRevealed = revealed.has(p.id)
                   const bw = centroid.bw || 0, bh = centroid.bh || 0
-                  const labelFits = (bw * zoom) > (country.name.length * 5) && (bh * zoom) > 8
+                  const labelFits = (bw * zoom) > (country.name.length * 8) && (bh * zoom) > 12
                   const leaderTarget = !labelFits ? GLOBAL_LEADER_TARGETS[p.id] : null
                   const lx = leaderTarget ? leaderTarget.lx : centroid.x
                   const ly = leaderTarget ? leaderTarget.ly : centroid.y
@@ -968,46 +968,45 @@ function WaterBodiesDrill({ onBack, cards = [], setCards = () => {}, preloadedPa
 
 // ─── Global leader line targets for tiny countries (open water positions) ─────
 const GLOBAL_LEADER_TARGETS = {
-  // Europe W - Atlantic/Channel/North Sea, well spaced
-  'AND': { lx: 452, ly: 152 }, // Bay of Biscay
-  'MCO': { lx: 452, ly: 140 }, // Gulf of Lion / Atlantic
-  'LUX': { lx: 452, ly: 122 }, // Atlantic/Channel
-  'BEL': { lx: 452, ly: 110 }, // English Channel
-  'NLD': { lx: 464, ly: 96 },  // N North Sea
-  'DNK': { lx: 464, ly: 82 },  // Skagerrak
-  // Europe C - Baltic approaches, stacked
-  'CHE': { lx: 492, ly: 82 },  // Baltic SW
-  'LIE': { lx: 492, ly: 92 },  // Baltic S
-  'AUT': { lx: 504, ly: 82 },  // Baltic
-  'CZE': { lx: 516, ly: 82 },  // Baltic
-  'SVK': { lx: 528, ly: 82 },  // Baltic E
-  'HUN': { lx: 540, ly: 82 },  // Baltic SE
-  // Europe NE - Baltic Sea
-  'EST': { lx: 554, ly: 78 },  // Baltic N
-  'LVA': { lx: 554, ly: 88 },  // Baltic
-  'LTU': { lx: 554, ly: 98 },  // Baltic S
-  'BLR': { lx: 554, ly: 108 }, // Baltic S
-  // Balkans - 3 columns, well separated
-  // Col A: Tyrrhenian/Ligurian (far W)
-  'VAT': { lx: 480, ly: 148 }, // Tyrrhenian W
-  'SMR': { lx: 480, ly: 158 }, // Tyrrhenian W
-  'MLT': { lx: 480, ly: 168 }, // Mediterranean W
-  // Col B: Adriatic (center)
-  'SVN': { lx: 500, ly: 144 }, // Adriatic N
-  'HRV': { lx: 500, ly: 154 }, // Adriatic
-  'BIH': { lx: 500, ly: 164 }, // Adriatic S
-  'MNE': { lx: 500, ly: 174 }, // Adriatic S
-  // Col C: Ionian/Aegean (E)
-  'ALB': { lx: 526, ly: 152 }, // Ionian
-  'XKX': { lx: 526, ly: 162 }, // Ionian/Aegean
-  'MKD': { lx: 526, ly: 172 }, // Aegean
-  // Black Sea / Caspian
-  'MDA': { lx: 560, ly: 130 }, // Black Sea W
-  'GEO': { lx: 574, ly: 124 }, // Black Sea E
-  'ARM': { lx: 590, ly: 136 }, // Caspian
-  'AZE': { lx: 608, ly: 132 }, // Caspian
+  // Europe W - stacked in Atlantic (far left), well separated
+  'AND': { lx: 435, ly: 150 }, // Atlantic W
+  'MCO': { lx: 435, ly: 140 }, // Atlantic W
+  'MLT': { lx: 435, ly: 162 }, // Atlantic W
+  'LUX': { lx: 448, ly: 116 }, // Atlantic/Channel
+  'BEL': { lx: 448, ly: 106 }, // English Channel
+  'NLD': { lx: 460, ly: 94 },  // S North Sea
+  'DNK': { lx: 460, ly: 80 },  // Skagerrak
+  // Landlocked C Europe - stacked in Norwegian Sea (far N)
+  'CHE': { lx: 476, ly: 68 },  // Norwegian Sea
+  'LIE': { lx: 488, ly: 68 },  // Norwegian Sea
+  'AUT': { lx: 500, ly: 68 },  // Norwegian Sea
+  'CZE': { lx: 512, ly: 68 },  // Norwegian Sea
+  'SVK': { lx: 524, ly: 68 },  // Norwegian Sea
+  'HUN': { lx: 536, ly: 68 },  // Norwegian Sea E
+  // Baltic states - in Gulf of Bothnia/Baltic
+  'EST': { lx: 536, ly: 80 },  // Gulf of Finland
+  'LVA': { lx: 528, ly: 88 },  // Baltic
+  'LTU': { lx: 520, ly: 96 },  // Baltic S
+  'BLR': { lx: 520, ly: 106 }, // Baltic S
+  // Balkans W - Tyrrhenian Sea (far left of Italy)
+  'VAT': { lx: 470, ly: 148 }, // Tyrrhenian W
+  'SMR': { lx: 470, ly: 158 }, // Tyrrhenian W
+  // Balkans center - Adriatic (well into sea)
+  'SVN': { lx: 488, ly: 140 }, // Adriatic N
+  'HRV': { lx: 488, ly: 150 }, // Adriatic
+  'BIH': { lx: 488, ly: 160 }, // Adriatic S
+  'MNE': { lx: 488, ly: 170 }, // Adriatic S
+  // Balkans E - Aegean (far right)
+  'ALB': { lx: 548, ly: 150 }, // Ionian/Aegean
+  'XKX': { lx: 548, ly: 160 }, // Aegean
+  'MKD': { lx: 548, ly: 170 }, // Aegean S
+  // Black Sea
+  'MDA': { lx: 558, ly: 128 }, // Black Sea W
+  'GEO': { lx: 572, ly: 124 }, // Black Sea N
+  'ARM': { lx: 566, ly: 136 }, // Black Sea S
+  'AZE': { lx: 614, ly: 130 }, // Caspian
   // Mediterranean E
-  'CYP': { lx: 566, ly: 162 }, // Mediterranean E
+  'CYP': { lx: 562, ly: 160 }, // E Mediterranean
   // Africa - 18px gaps, all in open Atlantic at map W edge
   'CPV': { lx: 432, ly: 188 }, // Atlantic W edge
   'SEN': { lx: 432, ly: 206 }, // +18
@@ -1019,13 +1018,45 @@ const GLOBAL_LEADER_TARGETS = {
   'GNQ': { lx: 476, ly: 248 }, // Gulf of Guinea W
   'COG': { lx: 476, ly: 258 }, // Gulf of Guinea W (Republic of Congo)
   'STP': { lx: 476, ly: 268 }, // Gulf of Guinea W
-  'RWA': { lx: 592, ly: 253 }, // Indian Ocean E
-  'BDI': { lx: 592, ly: 261 }, // Indian Ocean E
-  'MWI': { lx: 592, ly: 289 }, // Indian Ocean E
-  'SWZ': { lx: 581, ly: 322 }, // Indian Ocean E
-  'LSO': { lx: 581, ly: 333 }, // Indian Ocean SE
+  'RWA': { lx: 597, ly: 248 }, // Indian Ocean W channel (lon 44)
+  'BDI': { lx: 597, ly: 260 }, // Indian Ocean W channel
+  'MWI': { lx: 597, ly: 285 }, // Indian Ocean W channel
+  'SWZ': { lx: 594, ly: 318 }, // Indian Ocean W channel
+  'LSO': { lx: 594, ly: 330 }, // Indian Ocean SE channel
+  // W Africa gulf countries
+  'TGO': { lx: 476, ly: 242 }, // Gulf of Guinea S
+  'BEN': { lx: 480, ly: 250 }, // Gulf of Guinea S
+  'GHA': { lx: 468, ly: 248 }, // Gulf of Guinea SW
   'DJI': { lx: 597, ly: 218 }, // Gulf of Aden
   'COM': { lx: 605, ly: 278 }, // Indian Ocean N
+  // South America small
+  'GUY': { lx: 320, ly: 231 }, // Atlantic N
+  'SUR': { lx: 331, ly: 231 }, // Atlantic N
+  'GUF': { lx: 341, ly: 231 }, // Atlantic N
+  'TTO': { lx: 309, ly: 217 }, // Caribbean
+  'BLZ': { lx: 243, ly: 197 }, // Caribbean W
+  // Middle East - two columns in E Mediterranean
+  'LBN': { lx: 542, ly: 144 }, // E Med (col A)
+  'ISR': { lx: 542, ly: 156 }, // E Med (col A)
+  'PSE': { lx: 542, ly: 166 }, // E Med (col A)
+  'JOR': { lx: 554, ly: 166 }, // E Med (col B)
+  // Persian Gulf - stacked with 14px gaps
+  'KWT': { lx: 616, ly: 154 }, // Persian Gulf N
+  'BHR': { lx: 616, ly: 168 }, // Persian Gulf
+  'QAT': { lx: 616, ly: 180 }, // Persian Gulf S
+  'ARE': { lx: 628, ly: 180 }, // Arabian Sea
+  'OMN': { lx: 638, ly: 190 }, // Arabian Sea S
+  // South Asia - Bay of Bengal, well spaced
+  'BTN': { lx: 725, ly: 160 }, // Bay of Bengal N (Bhutan)
+  'BGD': { lx: 725, ly: 178 }, // Bay of Bengal (Bangladesh)
+  'LKA': { lx: 688, ly: 234 }, // Indian Ocean
+  'MDV': { lx: 672, ly: 234 }, // Indian Ocean W
+  // SE Asia - South China Sea
+  'LAO': { lx: 787, ly: 192 }, // S China Sea W
+  'KHM': { lx: 779, ly: 220 }, // Gulf of Thailand
+  'BRN': { lx: 789, ly: 231 }, // S China Sea W
+  'SGP': { lx: 763, ly: 239 }, // Malacca Strait
+  'TLS': { lx: 821, ly: 273 }, // Timor Sea
   // Caribbean/Central America
   'BRB': { lx: 330, ly: 215 }, 'LCA': { lx: 318, ly: 210 },
   'VCT': { lx: 320, ly: 213 }, 'GRD': { lx: 315, ly: 218 },
@@ -1989,7 +2020,7 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
                   if (!data || !c) return null
                   const isRevealed = revealed.has(p.name)
                   const bw = c.bw || 0, bh = c.bh || 0
-                  const labelFits = (bw * zoom) > (p.name.length * 5) && (bh * zoom) > 8
+                  const labelFits = (bw * zoom) > (p.name.length * 8) && (bh * zoom) > 12
                   const lx3 = c.x, ly3 = c.y
                   return (
                     <g key={`l-${p.name}`} onClick={e => { if(!dragging){e.stopPropagation();setRevealed(prev=>{const n=new Set(prev);n.has(p.name)?n.delete(p.name):n.add(p.name);return n})} }} style={{ cursor:'pointer' }}>
@@ -2395,8 +2426,8 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
                   // Label fits inside country when its rendered width > ~label pixel width
                   const bw = worldCentroids.current[p.id]?.bw || 0
                   const bh = worldCentroids.current[p.id]?.bh || 0
-                  const labelCharWidth = (country.name.length * 5) // ~5px per char at fontSize 8
-                  const labelFits = (bw * zoom) > labelCharWidth && (bh * zoom) > 8
+                  const labelCharWidth = (country.name.length * 8)
+                  const labelFits = (bw * zoom) > labelCharWidth && (bh * zoom) > 12
                   const leaderTarget = LEADER_TARGETS[p.id]
                   const hasLeader = leaderTarget && !labelFits
                   const labelPos = hasLeader ? leaderTarget : rawC

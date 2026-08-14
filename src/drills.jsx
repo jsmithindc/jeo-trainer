@@ -1006,8 +1006,8 @@ const GLOBAL_LEADER_TARGETS = {
   // Black Sea
   'MDA': { lx: 565, ly: 126 }, // Black Sea W
   'GEO': { lx: 570, ly: 120 }, // Black Sea N
-  'ARM': { lx: 616, ly: 138 }, // Caspian W (east of Armenia)
-  'AZE': { lx: 619, ly: 144 }, // Caspian S (lon 52, lat 38)
+  'ARM': { lx: 571, ly: 131 }, // Black Sea (lon 34, lat 42)
+  'AZE': { lx: 619, ly: 139 }, // Caspian center (lon 52, lat 40)
   // Mediterranean E
   'CYP': { lx: 562, ly: 160 }, // E Mediterranean
   // Africa - 18px gaps, all in open Atlantic at map W edge
@@ -1020,6 +1020,7 @@ const GLOBAL_LEADER_TARGETS = {
   'LBR': { lx: 432, ly: 296 }, // +18
   'GNQ': { lx: 490, ly: 258 }, // Gulf of Guinea W
   'STP': { lx: 476, ly: 280 }, // Gulf of Guinea SW
+  'CAF': { lx: 493, ly: 256 }, // Gulf of Guinea S (Central African Republic)
   'COG': { lx: 504, ly: 275 }, // Gulf of Guinea S
   'RWA': { lx: 610, ly: 248 }, // Indian Ocean (lon 46, past Madagascar N)
   'BDI': { lx: 610, ly: 262 }, // Indian Ocean
@@ -1031,7 +1032,8 @@ const GLOBAL_LEADER_TARGETS = {
   'GHA': { lx: 462, ly: 263 }, // Gulf of Guinea S
   'TGO': { lx: 476, ly: 268 }, // Gulf of Guinea S
   'BEN': { lx: 490, ly: 268 }, // Gulf of Guinea SE
-  'DJI': { lx: 597, ly: 218 }, // Gulf of Aden
+  'DJI': { lx: 605, ly: 219 }, // Gulf of Aden E
+  'MOZ': { lx: 592, ly: 300 }, // Indian Ocean E of Mozambique
   'COM': { lx: 605, ly: 278 }, // Indian Ocean N
   // South America small
   'GUY': { lx: 313, ly: 208 }, // Caribbean N (well above coast)
@@ -1049,7 +1051,7 @@ const GLOBAL_LEADER_TARGETS = {
   'BHR': { lx: 629, ly: 183 }, // Arabian Sea
   'QAT': { lx: 635, ly: 189 }, // Arabian Sea
   'ARE': { lx: 640, ly: 194 }, // Arabian Sea
-  'OMN': { lx: 645, ly: 205 }, // Arabian Sea S
+  'OMN': { lx: 635, ly: 211 }, // Arabian Sea S (lon 58, lat 14)
   'OMN': { lx: 640, ly: 200 }, // Arabian Sea S
   // South Asia - Bay of Bengal, diagonal spread
   'BTN': { lx: 715, ly: 216 }, // Bay of Bengal S (Bhutan, lat 12°)

@@ -976,18 +976,18 @@ const GLOBAL_LEADER_TARGETS = {
   'BEL': { lx: 448, ly: 106 }, // English Channel
   'NLD': { lx: 460, ly: 94 },  // S North Sea
   'DNK': { lx: 460, ly: 80 },  // Skagerrak
-  // Landlocked C Europe - Atlantic column far left, stacked 14px apart
-  'CHE': { lx: 440, ly: 112 }, // Atlantic (lat 52°)
-  'LIE': { lx: 440, ly: 98 },  // Atlantic (lat 57°)
-  'AUT': { lx: 440, ly: 119 }, // Atlantic (lat 47°)
-  'CZE': { lx: 440, ly: 126 }, // Atlantic (lat 44°)
-  'SVK': { lx: 440, ly: 133 }, // Atlantic (lat 42°)
-  'HUN': { lx: 440, ly: 140 }, // Atlantic (lat 40°)
-  // Baltic states - Norwegian Sea column (far N, above Scandinavia)
-  'EST': { lx: 540, ly: 58 },  // Norwegian Sea (lat 69°)
-  'LVA': { lx: 528, ly: 58 },  // Norwegian Sea
-  'LTU': { lx: 516, ly: 58 },  // Norwegian Sea
-  'BLR': { lx: 504, ly: 58 },  // Norwegian Sea
+  // Landlocked C Europe - Atlantic column (x=425), separated from Baltic column
+  'LIE': { lx: 425, ly: 83 },  // Atlantic N
+  'CHE': { lx: 425, ly: 97 },  // Atlantic
+  'AUT': { lx: 425, ly: 111 }, // Atlantic
+  'CZE': { lx: 425, ly: 125 }, // Atlantic
+  'SVK': { lx: 425, ly: 139 }, // Atlantic
+  'HUN': { lx: 425, ly: 153 }, // Atlantic S
+  // Baltic states - Atlantic W of UK, stacked vertically
+  'EST': { lx: 440, ly: 83 },  // Atlantic (lat 60°)
+  'LVA': { lx: 440, ly: 97 },  // Atlantic (lat 55°)
+  'LTU': { lx: 440, ly: 111 }, // Atlantic (lat 50°)
+  'BLR': { lx: 440, ly: 125 }, // Atlantic (lat 45°)
   // Balkans W - Tyrrhenian Sea (far left of Italy)
   'VAT': { lx: 470, ly: 148 }, // Tyrrhenian W
   'SMR': { lx: 470, ly: 158 }, // Tyrrhenian W
@@ -1015,18 +1015,18 @@ const GLOBAL_LEADER_TARGETS = {
   'GIN': { lx: 432, ly: 260 }, // +18
   'SLE': { lx: 432, ly: 278 }, // +18
   'LBR': { lx: 432, ly: 296 }, // +18
-  'GNQ': { lx: 452, ly: 290 }, // Gulf of Guinea S
-  'COG': { lx: 452, ly: 304 }, // Gulf of Guinea S
-  'STP': { lx: 452, ly: 318 }, // Atlantic S
-  'RWA': { lx: 589, ly: 253 }, // Indian Ocean channel (lon 41)
-  'BDI': { lx: 589, ly: 265 }, // Indian Ocean channel
-  'MWI': { lx: 589, ly: 283 }, // Indian Ocean channel
-  'SWZ': { lx: 589, ly: 315 }, // Indian Ocean channel
-  'LSO': { lx: 589, ly: 327 }, // Indian Ocean channel S
-  // Gulf of Guinea - fan out widely
-  'GHA': { lx: 452, ly: 248 }, // Atlantic SW of Ghana
-  'TGO': { lx: 452, ly: 262 }, // Atlantic S of Togo
-  'BEN': { lx: 452, ly: 276 }, // Atlantic S of Benin
+  'GNQ': { lx: 490, ly: 258 }, // Gulf of Guinea W
+  'STP': { lx: 476, ly: 280 }, // Gulf of Guinea SW
+  'COG': { lx: 504, ly: 275 }, // Gulf of Guinea S
+  'RWA': { lx: 600, ly: 250 }, // Indian Ocean (lon 43)
+  'BDI': { lx: 600, ly: 264 }, // Indian Ocean
+  'MWI': { lx: 600, ly: 284 }, // Indian Ocean
+  'SWZ': { lx: 600, ly: 316 }, // Indian Ocean
+  'LSO': { lx: 600, ly: 330 }, // Indian Ocean S
+  // Gulf of Guinea - south of coast, well spread
+  'GHA': { lx: 462, ly: 260 }, // Gulf of Guinea S
+  'TGO': { lx: 476, ly: 268 }, // Gulf of Guinea S
+  'BEN': { lx: 490, ly: 268 }, // Gulf of Guinea SE
   'DJI': { lx: 597, ly: 218 }, // Gulf of Aden
   'COM': { lx: 605, ly: 278 }, // Indian Ocean N
   // South America small
@@ -1040,12 +1040,12 @@ const GLOBAL_LEADER_TARGETS = {
   'ISR': { lx: 542, ly: 156 }, // E Med (col A)
   'PSE': { lx: 542, ly: 166 }, // E Med (col A)
   'JOR': { lx: 554, ly: 156 }, // E Med (col B)
-  // Persian Gulf - fan into Arabian Sea diagonally
-  'KWT': { lx: 613, ly: 167 }, // Persian Gulf open water N
-  'BHR': { lx: 627, ly: 175 }, // Arabian Sea N
-  'QAT': { lx: 635, ly: 183 }, // Arabian Sea
-  'ARE': { lx: 640, ly: 189 }, // Arabian Sea
-  'OMN': { lx: 645, ly: 197 }, // Arabian Sea S
+  // Persian Gulf - fan into Arabian Sea
+  'KWT': { lx: 619, ly: 169 }, // Arabian Sea N
+  'BHR': { lx: 629, ly: 183 }, // Arabian Sea
+  'QAT': { lx: 635, ly: 189 }, // Arabian Sea
+  'ARE': { lx: 640, ly: 194 }, // Arabian Sea
+  'OMN': { lx: 645, ly: 200 }, // Arabian Sea S
   // South Asia - Bay of Bengal, diagonal spread
   'BTN': { lx: 733, ly: 189 }, // Bay of Bengal E (Bhutan)
   'BGD': { lx: 715, ly: 200 }, // Bay of Bengal W (Bangladesh)

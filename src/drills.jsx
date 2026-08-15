@@ -969,11 +969,11 @@ function WaterBodiesDrill({ onBack, cards = [], setCards = () => {}, preloadedPa
 // ─── Global leader line targets for tiny countries (open water positions) ─────
 const GLOBAL_LEADER_TARGETS = {
   // Europe W - stacked in Atlantic (far left), well separated
-  'AND': { lx: 435, ly: 150 }, // Atlantic W
-  'MCO': { lx: 435, ly: 140 }, // Atlantic W
-  'MLT': { lx: 435, ly: 162 }, // Atlantic W
-  'LUX': { lx: 448, ly: 116 }, // Atlantic/Channel
-  'BEL': { lx: 448, ly: 106 }, // English Channel
+  'AND': { lx: 435, ly: 144 }, // Atlantic W
+  'MCO': { lx: 435, ly: 116 }, // Atlantic W
+  'MLT': { lx: 435, ly: 164 }, // Atlantic W
+  'LUX': { lx: 448, ly: 120 }, // Atlantic/Channel
+  'BEL': { lx: 448, ly: 94 }, // English Channel
   'NLD': { lx: 460, ly: 94 },  // S North Sea
   'DNK': { lx: 460, ly: 80 },  // Skagerrak
   // C Europe + Baltic - two well-separated columns (90px apart)
@@ -981,31 +981,31 @@ const GLOBAL_LEADER_TARGETS = {
   'EST': { lx: 405, ly: 62 }, 'LIE': { lx: 405, ly: 82 },
   'AUT': { lx: 405, ly: 102 }, 'CZE': { lx: 405, ly: 122 }, 'HUN': { lx: 405, ly: 142 },
   // Col B (x=495): LVA LTU BLR CHE SVK DNK
-  'LVA': { lx: 495, ly: 62 }, 'LTU': { lx: 495, ly: 82 },
+  'LVA': { lx: 495, ly: 68 }, 'LTU': { lx: 495, ly: 88 },
   'BLR': { lx: 440, ly: 103 }, // Atlantic W (lon -15, lat 53)
   'CHE': { lx: 440, ly: 119 }, // Atlantic W (lon -15, lat 47)
   'SVK': { lx: 495, ly: 142 }, 'DNK': { lx: 495, ly: 162 },
   // Scandinavia - Norwegian Sea
-  'SWE': { lx: 493, ly: 56 }, 'FIN': { lx: 533, ly: 50 },
+  'SWE': { lx: 493, ly: 48 }, 'FIN': { lx: 533, ly: 48 },
   // Balkans W - Tyrrhenian Sea (far left of Italy)
-  'VAT': { lx: 470, ly: 148 }, // Tyrrhenian W
-  'SMR': { lx: 470, ly: 158 }, // Tyrrhenian W
-  // Balkans center - Adriatic (well into sea)
-  'SVN': { lx: 488, ly: 140 }, // Adriatic N
-  'HRV': { lx: 488, ly: 150 }, // Adriatic
-  'BIH': { lx: 488, ly: 160 }, // Adriatic S
-  'MNE': { lx: 488, ly: 170 }, // Adriatic S
-  // Balkans E - Aegean (far right)
-  'ALB': { lx: 548, ly: 150 }, // Ionian/Aegean
-  'XKX': { lx: 548, ly: 160 }, // Aegean
-  'MKD': { lx: 548, ly: 170 }, // Aegean S
+  'VAT': { lx: 462, ly: 148 }, // Tyrrhenian
+  'SMR': { lx: 462, ly: 168 }, // Tyrrhenian
+  // Balkans center - Adriatic
+  'SVN': { lx: 482, ly: 136 }, // Adriatic N
+  'HRV': { lx: 482, ly: 156 }, // Adriatic
+  'BIH': { lx: 482, ly: 176 }, // Adriatic S
+  'MNE': { lx: 482, ly: 196 }, // Adriatic S
+  // Balkans E - Aegean
+  'ALB': { lx: 548, ly: 148 }, // Ionian
+  'XKX': { lx: 548, ly: 172 }, // Aegean
+  'MKD': { lx: 548, ly: 188 }, // Aegean S
   // Black Sea (open water: lon 29-41, lat 41-47)
-  'MDA': { lx: 580, ly: 122 }, // Black Sea N (lon 37°, lat 46°) ✓
-  'GEO': { lx: 566, ly: 116 }, // Black Sea NE (lon 33°, lat 48°) ✓
-  'ARM': { lx: 558, ly: 130 }, // Black Sea W (lon 29°, lat 43°) ✓
-  'AZE': { lx: 619, ly: 147 }, // Caspian S (lon 52°, lat 37°) ✓
+  'MDA': { lx: 576, ly: 118 }, // Black Sea N
+  'GEO': { lx: 560, ly: 108 }, // Black Sea NW
+  'ARM': { lx: 550, ly: 132 }, // Black Sea W
+  'AZE': { lx: 613, ly: 42 }, // Arctic N (lon 50, lat 75)
   // Mediterranean E
-  'CYP': { lx: 562, ly: 160 }, // E Mediterranean ✓
+  'CYP': { lx: 570, ly: 162 }, // E Mediterranean ✓
   // Africa W coast - Atlantic edge, 18px gaps
   'CPV': { lx: 432, ly: 188 }, // Atlantic W edge
   'SEN': { lx: 432, ly: 206 }, // Atlantic
@@ -1022,7 +1022,7 @@ const GLOBAL_LEADER_TARGETS = {
   'TGO': { lx: 466, ly: 258 }, // lon -3°, lat -3° ✓
   'BEN': { lx: 480, ly: 258 }, // lon 0°, lat -3° ✓
   'GNQ': { lx: 491, ly: 253 }, // Gulf of Guinea (lon 4, lat -1)
-  'CAF': { lx: 493, ly: 283 }, // Gulf of Guinea S (lon 5°, lat -12°) - alone
+  'CAF': { lx: 493, ly: 298 }, // Gulf of Guinea S (lon 5°, lat -14°)
   // Row 3 (ly=272): STP COG
   'STP': { lx: 466, ly: 272 }, // lon -3°, lat -7° ✓
   'COG': { lx: 494, ly: 272 }, // lon 4°, lat -7° ✓
@@ -1042,21 +1042,21 @@ const GLOBAL_LEADER_TARGETS = {
   'TTO': { lx: 309, ly: 217 }, // Caribbean
   'BLZ': { lx: 243, ly: 197 }, // Caribbean W
   // Middle East - E Mediterranean, two columns
-  'LBN': { lx: 542, ly: 144 }, // E Med (col A)
-  'ISR': { lx: 542, ly: 156 }, // E Med (col A)
-  'PSE': { lx: 542, ly: 166 }, // E Med (col A)
-  'JOR': { lx: 554, ly: 156 }, // E Med (col B)
+  'LBN': { lx: 536, ly: 140 }, // E Med col A
+  'ISR': { lx: 536, ly: 160 }, // E Med col A
+  'PSE': { lx: 536, ly: 180 }, // E Med col A
+  'JOR': { lx: 556, ly: 176 }, // E Med col B
   // Persian Gulf - fan into Arabian Sea
   'KWT': { lx: 613, ly: 162 }, // Persian Gulf N (lon 50, lat 30)
   'BHR': { lx: 629, ly: 183 }, // Arabian Sea
-  'QAT': { lx: 635, ly: 189 }, // Arabian Sea
-  'ARE': { lx: 640, ly: 194 }, // Arabian Sea
+  'QAT': { lx: 621, ly: 225 }, // Arabian Sea S (lon 53, lat 9)
+  'ARE': { lx: 635, ly: 231 }, // Arabian Sea S (lon 58, lat 7)
   'OMN': { lx: 635, ly: 214 }, // Arabian Sea S (lon 58°, lat 13°) - south of Oman's S coast
   // South Asia - Bay of Bengal, diagonal spread
-  'BTN': { lx: 715, ly: 216 }, // Bay of Bengal S (Bhutan, lat 12°)
-  'BGD': { lx: 725, ly: 230 }, // Bay of Bengal S (Bangladesh, lat 9°)
-  'LKA': { lx: 688, ly: 234 }, // Indian Ocean
-  'MDV': { lx: 672, ly: 234 }, // Indian Ocean W
+  'BTN': { lx: 710, ly: 210 }, // Bay of Bengal (Bhutan)
+  'BGD': { lx: 730, ly: 232 }, // Bay of Bengal (Bangladesh)
+  'LKA': { lx: 692, ly: 240 }, // Indian Ocean
+  'MDV': { lx: 668, ly: 228 }, // Indian Ocean W
   // SE Asia - South China Sea
   'LAO': { lx: 787, ly: 192 }, // S China Sea W
   'KHM': { lx: 779, ly: 220 }, // Gulf of Thailand
@@ -1064,17 +1064,21 @@ const GLOBAL_LEADER_TARGETS = {
   'SGP': { lx: 763, ly: 239 }, // Malacca Strait
   'TLS': { lx: 821, ly: 273 }, // Timor Sea
   // Caribbean/Central America
-  'BRB': { lx: 330, ly: 215 }, 'LCA': { lx: 318, ly: 210 },
-  'VCT': { lx: 320, ly: 213 }, 'GRD': { lx: 315, ly: 218 },
-  'ATG': { lx: 308, ly: 200 }, 'DMA': { lx: 312, ly: 205 },
-  'KNA': { lx: 305, ly: 197 }, 'TTO': { lx: 325, ly: 222 },
-  'JAM': { lx: 268, ly: 200 }, 'PRI': { lx: 298, ly: 192 },
-  'BHS': { lx: 268, ly: 183 },
+  // Caribbean - two columns, 30px x separation, 22px y gaps
+  // Col A (x=290): PRI KNA ATG DMA LCA VCT
+  'PRI': { lx: 285, ly: 168 }, 'KNA': { lx: 285, ly: 190 },
+  'ATG': { lx: 285, ly: 212 }, 'DMA': { lx: 285, ly: 234 },
+  // Col B (x=340): BHS JAM BRB GRD TTO GUF
+  'BHS': { lx: 340, ly: 168 }, 'JAM': { lx: 240, ly: 190 },
+  'BRB': { lx: 340, ly: 190 }, 'GRD': { lx: 340, ly: 212 },
+  'TTO': { lx: 340, ly: 234 },
+  // Remaining: LCA VCT between columns
+  'LCA': { lx: 285, ly: 256 }, 'VCT': { lx: 285, ly: 278 },
   // Oceania
-  'KIR': { lx: 870, ly: 260 }, 'MHL': { lx: 860, ly: 230 },
-  'FSM': { lx: 845, ly: 245 }, 'NRU': { lx: 868, ly: 242 },
-  'PLW': { lx: 830, ly: 248 }, 'WSM': { lx: 895, ly: 280 },
-  'TON': { lx: 905, ly: 295 }, 'TUV': { lx: 910, ly: 268 },
+  'PLW': { lx: 820, ly: 240 }, 'FSM': { lx: 840, ly: 230 },
+  'MHL': { lx: 860, ly: 220 }, 'NRU': { lx: 880, ly: 230 },
+  'KIR': { lx: 880, ly: 250 }, 'TUV': { lx: 900, ly: 260 },
+  'WSM': { lx: 900, ly: 278 }, 'TON': { lx: 920, ly: 292 },
 }
 
 // ─── World Map Drill ──────────────────────────────────────────────────────────

@@ -706,8 +706,6 @@ function LabeledMapReference({ onBack, paths, pathCentroids }) {
                   const bw = centroid.bw || 0, bh = centroid.bh || 0
                   const labelFits = (bw * zoom) > (country.name.length * 8) && (bh * zoom) > 12
                   const leaderTarget = !labelFits ? GLOBAL_LEADER_TARGETS[p.id] : null
-                  // On world map, hide label if too small AND no leader target defined
-                  if (!labelFits && !leaderTarget) return null
                   const lx = leaderTarget ? leaderTarget.lx : centroid.x
                   const ly = leaderTarget ? leaderTarget.ly : centroid.y
                   return (
@@ -984,7 +982,8 @@ const GLOBAL_LEADER_TARGETS = {
   'AUT': { lx: 405, ly: 102 }, 'CZE': { lx: 405, ly: 122 }, 'HUN': { lx: 405, ly: 142 },
   // Col B (x=495): LVA LTU BLR CHE SVK DNK
   'LVA': { lx: 495, ly: 62 }, 'LTU': { lx: 495, ly: 82 },
-  'BLR': { lx: 495, ly: 102 }, 'CHE': { lx: 495, ly: 122 },
+  'BLR': { lx: 440, ly: 103 }, // Atlantic W (lon -15, lat 53)
+  'CHE': { lx: 440, ly: 119 }, // Atlantic W (lon -15, lat 47)
   'SVK': { lx: 495, ly: 142 }, 'DNK': { lx: 495, ly: 162 },
   // Scandinavia - Norwegian Sea
   'SWE': { lx: 493, ly: 56 }, 'FIN': { lx: 533, ly: 50 },
@@ -1022,7 +1021,7 @@ const GLOBAL_LEADER_TARGETS = {
   'GHA': { lx: 452, ly: 258 }, // lon -7°, lat -3° ✓
   'TGO': { lx: 466, ly: 258 }, // lon -3°, lat -3° ✓
   'BEN': { lx: 480, ly: 258 }, // lon 0°, lat -3° ✓
-  'GNQ': { lx: 480, ly: 258 }, // Gulf of Guinea (lon 1°, lat -3°)
+  'GNQ': { lx: 491, ly: 253 }, // Gulf of Guinea (lon 4, lat -1)
   'CAF': { lx: 493, ly: 283 }, // Gulf of Guinea S (lon 5°, lat -12°) - alone
   // Row 3 (ly=272): STP COG
   'STP': { lx: 466, ly: 272 }, // lon -3°, lat -7° ✓
@@ -2422,6 +2421,7 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
                     'GRC': { x: 539, y: 140 },
                     'TUR': { x: 582, y: 140 },  // C Turkey (lon 34)
                     'AZE': { x: 607, y: 139 },  // Azerbaijan main body (lon 47°)
+                    'OMN': { x: 635, y: 186 },  // Gulf of Oman coast (lon 58°, lat 24°)
                     'UKR': { x: 572, y: 122 },
                     'POL': { x: 528, y: 111 },
                     'SWE': { x: 520, y: 78 },   // S Sweden

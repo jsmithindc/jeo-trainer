@@ -12,7 +12,7 @@ import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpi
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 import { DrillsView } from './drills.jsx'
 
-const APP_VERSION = '2.5.1'
+const APP_VERSION = '2.5.2'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -921,7 +921,7 @@ export default function App() {
             }}
           />
         )}
-        {view === 'study' && <StudyTabView cards={cards} setCards={setCards} user={user} dueCount={dueCount} />}
+        {view === 'study' && <StudyTabView cards={cards} setCards={setCards} user={user} dueCount={dueCount} dailyCards={dailyCards} setDailyCards={setDailyCards} />}
 
         {view === 'summary' && (
           <SummaryView
@@ -1207,7 +1207,7 @@ function Header({ coryatScore, actualScore, correctCount, incorrectCount, passCo
 
 // ─── Nav ──────────────────────────────────────────────────────────────────────
 // ─── Study Tab View ──────────────────────────────────────────────────────────
-function StudyTabView({ cards, setCards, user, dueCount }) {
+function StudyTabView({ cards, setCards, user, dueCount, dailyCards, setDailyCards }) {
   const [subTab, setSubTab] = useState('flashcards')
   const [flashcardView, setFlashcardView] = useState('menu') // menu | study | deck
 
@@ -1262,7 +1262,7 @@ function StudyTabView({ cards, setCards, user, dueCount }) {
                 </button>
               </div>
             )}
-            {flashcardView === 'study' && <StudyView cards={cards} setCards={setCards} onBack={() => setFlashcardView('menu')} />}
+            {flashcardView === 'study' && <StudyView cards={cards} setCards={setCards} onBack={() => setFlashcardView('menu')} dailyCards={dailyCards} setDailyCards={setDailyCards} />}
             {flashcardView === 'deck' && <DeckView cards={cards} setCards={setCards} user={user} onBack={() => setFlashcardView('menu')} />}
           </>
         )}
@@ -2446,7 +2446,7 @@ function ClueModal({ clue, category, showAnswer, onReveal, onMark, onClose, isRe
 }
 
 // ─── Study View ───────────────────────────────────────────────────────────────
-function StudyView({ cards, setCards, onBack }) {
+function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards }) {
   const CHUNK_PRESETS = { quick: 10, standard: 20, long: 40, marathon: 100 }
   const DEFAULT_CHUNK = 'marathon'
 

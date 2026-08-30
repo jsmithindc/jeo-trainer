@@ -152,6 +152,8 @@ export default function App() {
     }
   }, [authChecked])
 
+  const [dailyCards, setDailyCards] = useState(() => getDailyStats().cardsReviewed)
+
   // ── Auto-load latest episode + episode list on mount ────────────────────
   const [historyReady, setHistoryReady] = useState(false)
 
@@ -2444,7 +2446,7 @@ function ClueModal({ clue, category, showAnswer, onReveal, onMark, onClose, isRe
 // ─── Study View ───────────────────────────────────────────────────────────────
 function StudyView({ cards, setCards, onBack }) {
   const CHUNK_PRESETS = { quick: 10, standard: 20, long: 40, marathon: 100 }
-  const DEFAULT_CHUNK = 'standard'
+  const DEFAULT_CHUNK = 'marathon'
 
   const [phase, setPhase] = useState('configure') // configure | session | chunkdone
   const [sessionCards, setSessionCards] = useState([])   // all cards for this run
@@ -2459,7 +2461,6 @@ function StudyView({ cards, setCards, onBack }) {
   const [showCustom, setShowCustom] = useState(false)
   const [editingCard, setEditingCard] = useState(null) // card being edited in-session
   const [confirmDeleteStudy, setConfirmDeleteStudy] = useState(null) // card id pending delete
-  const [dailyCards, setDailyCards] = useState(() => getDailyStats().cardsReviewed)
   // Re-check daily count on each render in case midnight passed
   const _todayCheck = new Date().toDateString()
   useEffect(() => { setDailyCards(getDailyStats().cardsReviewed) }, [_todayCheck])
@@ -2503,7 +2504,8 @@ function StudyView({ cards, setCards, onBack }) {
 
   function getChunkSize() {
     if (showCustom && customChunk) return Math.max(1, parseInt(customChunk) || 20)
-    return CHUNK_PRESETS[chunkPreset] || 20
+    if (chunkPreset === 'adaptive') return matchingCards.length || 1
+    return CHUNK_PRESETS[chunkPreset] || 100
   }
 
   function buildChunks(cardList, size) {
@@ -2623,6 +2625,13 @@ function StudyView({ cards, setCards, onBack }) {
                   <span style={{ fontSize: 10, opacity: 0.6 }}> {n}</span>
                 </button>
               ))}
+              <button
+                style={{ ...S.toggleBtn, ...(chunkPreset === 'adaptive' && !showCustom ? S.toggleActive : {}) }}
+                onClick={() => { setChunkPreset('adaptive'); setShowCustom(false) }}
+              >
+                <span style={{ fontSize: 13 }}>Adaptive</span>
+                <span style={{ fontSize: 10, opacity: 0.6 }}> {matchingCards.length}</span>
+              </button>
               <button
                 style={{ ...S.toggleBtn, ...(showCustom ? S.toggleActive : {}) }}
                 onClick={() => setShowCustom(true)}

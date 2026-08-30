@@ -12,7 +12,7 @@ import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpi
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 import { DrillsView } from './drills.jsx'
 
-const APP_VERSION = '2.4.9'
+const APP_VERSION = '2.5.0'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -153,6 +153,8 @@ export default function App() {
   }, [authChecked])
 
   const [dailyCards, setDailyCards] = useState(() => getDailyStats().cardsReviewed)
+  const _todayCheck = new Date().toDateString()
+  useEffect(() => { setDailyCards(getDailyStats().cardsReviewed) }, [_todayCheck])
 
   // ── Auto-load latest episode + episode list on mount ────────────────────
   const [historyReady, setHistoryReady] = useState(false)
@@ -2461,9 +2463,6 @@ function StudyView({ cards, setCards, onBack }) {
   const [showCustom, setShowCustom] = useState(false)
   const [editingCard, setEditingCard] = useState(null) // card being edited in-session
   const [confirmDeleteStudy, setConfirmDeleteStudy] = useState(null) // card id pending delete
-  // Re-check daily count on each render in case midnight passed
-  const _todayCheck = new Date().toDateString()
-  useEffect(() => { setDailyCards(getDailyStats().cardsReviewed) }, [_todayCheck])
   const [editFront, setEditFront] = useState('')
   const [editBack, setEditBack] = useState('')
 

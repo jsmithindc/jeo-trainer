@@ -12,7 +12,7 @@ import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpi
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 import { DrillsView } from './drills.jsx'
 
-const APP_VERSION = '2.5.0'
+const APP_VERSION = '2.5.1'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -2814,7 +2814,7 @@ function StudyView({ cards, setCards, onBack }) {
 
   // ── Active session ────────────────────────────────────────────────────────
   const card = currentChunk[cardIdx]
-  if (!card) return null
+  if (!card) return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 200, color: '#4060a0', fontSize: 13, letterSpacing: 2 }}>LOADING…</div>
 
   return (
     <div style={S.studyWrap}>

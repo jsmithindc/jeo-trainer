@@ -10,11 +10,11 @@ import { supabase, signIn, signUp, resetPassword, signOut, loadRemoteData, saveR
 import { buildCategoryHeatMap, buildValueBreakdown, predictCoryat, exportToApkg, getMetaCategory, META_CATEGORY_NAMES } from './analytics.js'
 import { CardContent, cardIsHtml } from './CardContent.jsx'
 import { getMediaStats, clearAllMedia, getMedia } from './mediaStore.js'
-import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpisodeToCache, getEpisodeFromCache, pinEpisode, unpinEpisode, removeEpisodeFromCache, getCacheStats, getDailyStats, incrementDailyCards, addToTrash, getTrash, restoreFromTrash, setStorageErrorHandler } from './storage.js'
+import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpisodeToCache, getEpisodeFromCache, pinEpisode, unpinEpisode, removeEpisodeFromCache, getCacheStats, getDailyStats, incrementDailyCards, addToTrash, getTrash, restoreFromTrash, setStorageErrorHandler, getTombstones, addTombstones, saveTombstones, removeTombstone } from './storage.js'
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 import { DrillsView } from './drills.jsx'
 
-const APP_VERSION = '2.6.0'
+const APP_VERSION = '2.6.1'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -276,7 +276,7 @@ export default function App() {
     setSyncError(null)
     loadRemoteData()
       .then(remote => {
-        const local = { cards, gameHistory }
+        const local = { cards, gameHistory, tombstones: getTombstones() }
         const merged = mergeData(local, remote, remote.updatedAt)
         // Run after the merge, not before: remote wins on conflict for games that
         // already exist there, so repairing local first would just be overwritten.
@@ -286,6 +286,7 @@ export default function App() {
         const ddPass = backfillDdNet(fjPass.games)
         if (ddPass.changed) console.info(`[migration] derived ddNet for ${ddPass.changed} game(s)`)
         const repairedHistory = ddPass.games
+        if (merged.tombstones) saveTombstones(merged.tombstones)
         setCards(merged.cards)
         setGameHistory(repairedHistory)
         saveCards(merged.cards)
@@ -320,7 +321,7 @@ export default function App() {
       clearTimeout(syncTimeout.current)
       syncTimeout.current = setTimeout(() => {
         setSyncing(true)
-        saveRemoteData(cards, gameHistory, { [new Date().toLocaleDateString()]: getDailyStats().cardsReviewed })
+        saveRemoteData(cards, gameHistory, { [new Date().toLocaleDateString()]: getDailyStats().cardsReviewed }, getTombstones())
           .catch(err => setSyncError(err.message))
           .finally(() => setSyncing(false))
       }, 2000)
@@ -3069,6 +3070,7 @@ function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards }) {
                   <button style={{ ...S.markBtn, background: '#5c1a1a', color: '#e07070', border: '1px solid #8c2e2e', flex: 1 }} onClick={() => {
                     const cardToDelete = cards.find(c => c.id === confirmDeleteStudy)
                     if (cardToDelete) addToTrash(cardToDelete)
+                    addTombstones(confirmDeleteStudy)
                     setCards(prev => prev.filter(c => c.id !== confirmDeleteStudy))
                     setConfirmDeleteStudy(null)
                     const nextCard = cardIdx + 1
@@ -3196,6 +3198,7 @@ function DeckView({ cards, setCards, user, onBack }) {
   function deleteCard(id) {
     const card = cards.find(c => c.id === id)
     if (card) { addToTrash(card); setTrash(getTrash().cards) }
+    addTombstones(id)
     setCards(prev => prev.filter(c => c.id !== id))
     setConfirmDelete(null)
   }
@@ -3204,6 +3207,8 @@ function DeckView({ cards, setCards, user, onBack }) {
     const card = restoreFromTrash(id)
     if (card) {
       const { deletedAt, ...restored } = card
+      // Clear the tombstone too, or the next merge deletes it straight back out.
+      removeTombstone(id)
       setCards(prev => [restored, ...prev])
       setTrash(getTrash().cards)
     }
@@ -3241,6 +3246,7 @@ function DeckView({ cards, setCards, user, onBack }) {
   }
 
   function bulkDelete() {
+    addTombstones([...selectedIds])
     setCards(prev => prev.filter(c => !selectedIds.has(c.id)))
     clearSelection()
   }

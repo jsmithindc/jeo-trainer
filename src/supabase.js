@@ -36,7 +36,7 @@ export async function signOut() {
 export async function loadRemoteData() {
   const { data, error } = await supabase
     .from('user_data')
-    .select('cards, game_history, daily_stats, updated_at')
+    .select('*')
     .single()
 
   if (error) {
@@ -49,10 +49,13 @@ export async function loadRemoteData() {
     gameHistory: data.game_history || [],
     updatedAt: data.updated_at || null,
     dailyStats: data.daily_stats || null,
+    // Absent until the tombstones column is added; treated as "no known deletions",
+    // which is the safe direction — it keeps cards rather than removing them.
+    tombstones: data.tombstones || [],
   }
 }
 
-export async function saveRemoteData(cards, gameHistory, dailyStats = null) {
+export async function saveRemoteData(cards, gameHistory, dailyStats = null, tombstones = null) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return
 
@@ -65,9 +68,17 @@ export async function saveRemoteData(cards, gameHistory, dailyStats = null) {
   if (existing) {
     const { error } = await supabase
       .from('user_data')
-      .update({ cards, game_history: gameHistory, ...(dailyStats ? { daily_stats: dailyStats } : {}), updated_at: new Date().toISOString() })
+      .update({ cards, game_history: gameHistory, ...(dailyStats ? { daily_stats: dailyStats } : {}), ...(tombstones ? { tombstones } : {}), updated_at: new Date().toISOString() })
       .eq('user_id', user.id)
-    if (error) throw error
+    if (error) {
+      // The tombstones column may not exist yet; keep syncing everything else
+      // rather than failing the whole save.
+      if (tombstones && /tombstones/i.test(error.message || '')) {
+        console.warn('[sync] tombstones column missing — run the migration SQL; syncing without it')
+        return saveRemoteData(cards, gameHistory, dailyStats, null)
+      }
+      throw error
+    }
   } else {
     const { error } = await supabase
       .from('user_data')
@@ -76,30 +87,39 @@ export async function saveRemoteData(cards, gameHistory, dailyStats = null) {
   }
 }
 
+const TOMBSTONE_LIMIT = 1000
+
 export function mergeData(local, remote, remoteUpdatedAt = null) {
-  // Strategy: remote is authoritative for deletions.
-  // Exception: if local has significantly more cards than remote, local wins outright
-  // (handles the case where remote was accidentally wiped)
-  if (local.cards.length > remote.cards.length * 2 && local.cards.length > remote.cards.length + 50) {
-    // Local has way more cards — treat local as authoritative, just merge in any remote-only cards
-    const localIds = new Set(local.cards.map(c => c.id))
-    const remoteOnlyCards = remote.cards.filter(c => !localIds.has(c.id))
-    const cards = [...local.cards, ...remoteOnlyCards]
-    const remoteGameIds = new Set(remote.gameHistory.map(g => g.id))
-    const localGameIds = new Set(local.gameHistory.map(g => g.id))
-    const gameHistory = [...local.gameHistory, ...remote.gameHistory.filter(g => !localGameIds.has(g.id))]
-      .sort((a, b) => new Date(b.playedAt) - new Date(a.playedAt))
-    return { cards, gameHistory }
+  // Deletions are recorded explicitly. Previously a card missing from remote and
+  // created before the last sync was assumed deleted — but that is also exactly what
+  // a failed upload looks like, so any card that never made it up was destroyed on
+  // the next login. Absence is no longer evidence of deletion; only a tombstone is.
+  const tombMap = new Map()
+  for (const t of [...(remote.tombstones || []), ...(local.tombstones || [])]) {
+    if (!t?.id) continue
+    const prev = tombMap.get(t.id)
+    if (!prev || (t.deletedAt || 0) > (prev.deletedAt || 0)) tombMap.set(t.id, t)
   }
 
-  const remoteCardIds = new Set(remote.cards.map(c => c.id))
+  // Union by id; remote wins where both sides hold the same card.
+  const byId = new Map()
+  for (const c of local.cards) byId.set(c.id, c)
+  for (const c of remote.cards) byId.set(c.id, c)
+
+  const cards = [...byId.values()].filter(c => {
+    const tomb = tombMap.get(c.id)
+    if (!tomb) return true
+    // A card created after its own tombstone was deliberately re-added.
+    return (c.createdAt || 0) > (tomb.deletedAt || 0)
+  })
+
+  // Keep the tombstone list bounded; the newest deletions are the ones that still
+  // need to propagate to other devices.
+  const tombstones = [...tombMap.values()]
+    .sort((a, b) => (b.deletedAt || 0) - (a.deletedAt || 0))
+    .slice(0, TOMBSTONE_LIMIT)
 
   const syncCutoff = remoteUpdatedAt ? new Date(remoteUpdatedAt).getTime() : 0
-  const localOnlyCards = local.cards.filter(c =>
-    !remoteCardIds.has(c.id) &&
-    (c.createdAt || 0) > syncCutoff
-  )
-  const cards = [...remote.cards, ...localOnlyCards]
 
   // For game history, merge by unique game ID — remote wins on conflict
   const remoteGameIds = new Set(remote.gameHistory.map(g => g.id))
@@ -110,7 +130,7 @@ export function mergeData(local, remote, remoteUpdatedAt = null) {
   const gameHistory = [...remote.gameHistory, ...localOnlyGames]
     .sort((a, b) => new Date(b.playedAt) - new Date(a.playedAt))
 
-  return { cards, gameHistory }
+  return { cards, gameHistory, tombstones }
 }
 
 // ── Game state sync (in-progress games) ──────────────────────────────────────

@@ -150,3 +150,34 @@ export function clearTrash() {
 }
 
 // Deck snapshots moved to IndexedDB in v2.6.0 — see snapshotStore.js
+
+// ── Deletion tombstones ───────────────────────────────────────────────────────
+// A card missing from remote is ambiguous: deleted elsewhere, or an upload that
+// never landed. Recording deletions explicitly lets the merge tell them apart,
+// so a failed upload retries instead of being destroyed.
+const TOMBSTONE_KEY = 'jeo-tombstones'
+const TOMBSTONE_LIMIT = 1000
+
+export function getTombstones() {
+  try { return JSON.parse(localStorage.getItem(TOMBSTONE_KEY) || '[]') } catch { return [] }
+}
+
+export function addTombstones(ids) {
+  const list = Array.isArray(ids) ? ids : [ids]
+  if (!list.length) return
+  const now = Date.now()
+  const existing = getTombstones()
+  const merged = new Map(existing.map(t => [t.id, t]))
+  list.filter(Boolean).forEach(id => merged.set(id, { id, deletedAt: now }))
+  const next = [...merged.values()]
+    .sort((a, b) => (b.deletedAt || 0) - (a.deletedAt || 0))
+    .slice(0, TOMBSTONE_LIMIT)
+  set(TOMBSTONE_KEY, next)
+}
+
+export function saveTombstones(tombstones) { set(TOMBSTONE_KEY, tombstones || []) }
+
+// Restoring from the trash must clear the tombstone, or the next sync deletes it again.
+export function removeTombstone(id) {
+  set(TOMBSTONE_KEY, getTombstones().filter(t => t.id !== id))
+}

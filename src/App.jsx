@@ -6,10 +6,11 @@ import { parseApkg, migrateLocalMediaToSupabase } from './ankiImport.js'
 import { SAMPLE_BOARD } from './boardData.js'
 import { migrateFJWagers, backfillDdNet, migrateToFsrs } from './migrations.js'
 import { buildPlayedIndex, findPlayed } from './played.js'
+import { matchesAnswer } from './fuzzy.js'
 import { saveDeckSnapshot, getDeckSnapshots, restoreSnapshot, ensureSnapshotsMigrated } from './snapshotStore.js'
 import { fetchEpisode, episodeToBoard, searchEpisodesByCategory } from './jarchive.js'
 import { supabase, signIn, signUp, resetPassword, signOut, loadRemoteData, saveRemoteData, mergeData, saveGameStateRemote, uploadMedia } from './supabase.js'
-import { buildCategoryHeatMap, buildValueBreakdown, predictCoryat, exportToApkg, getMetaCategory, META_CATEGORY_NAMES, buildDailyDoubleStats, buildRetentionSeries, buildDeckHealth } from './analytics.js'
+import { buildCategoryHeatMap, buildValueBreakdown, predictCoryat, exportToApkg, getMetaCategory, META_CATEGORY_NAMES, buildDailyDoubleStats, buildRetentionSeries, buildDeckHealth, buildStudyStreak } from './analytics.js'
 import { CardContent, cardIsHtml } from './CardContent.jsx'
 import { getMediaStats, clearAllMedia, getMedia } from './mediaStore.js'
 import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpisodeToCache, getEpisodeFromCache, pinEpisode, unpinEpisode, removeEpisodeFromCache, getCacheStats, getDailyStats, incrementDailyCards, addToTrash, getTrash, restoreFromTrash, setStorageErrorHandler, logReview, removeLastReview, getReviewLog, getTombstones, addTombstones, saveTombstones, removeTombstone } from './storage.js'
@@ -18,7 +19,7 @@ import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, T
 // than half the bundle, and none of it is needed unless the Drills tab is opened.
 const DrillsView = lazy(() => import('./drills.jsx').then(m => ({ default: m.DrillsView })))
 
-const APP_VERSION = '2.7.7'
+const APP_VERSION = '2.8.0'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -1401,6 +1402,74 @@ function Header({ coryatScore, actualScore, correctCount, incorrectCount, passCo
 
 // ─── Nav ──────────────────────────────────────────────────────────────────────
 // ─── Study Tab View ──────────────────────────────────────────────────────────
+const DAILY_GOAL_KEY = 'jeo-daily-goal'
+const GOAL_CHOICES = [20, 50, 100, 200]
+
+// A visible target and an unbroken streak are the cheapest retention mechanics there
+// are, and both numbers were already being tracked without driving anything.
+function DailyGoalCard({ dailyCards }) {
+  const [goal, setGoal] = useState(() => {
+    const stored = parseInt(localStorage.getItem(DAILY_GOAL_KEY) || '', 10)
+    return Number.isFinite(stored) && stored > 0 ? stored : 50
+  })
+  const [editing, setEditing] = useState(false)
+
+  // Recompute when the day's count moves, so finishing a session updates the streak.
+  const streak = useMemo(() => buildStudyStreak(getReviewLog()), [dailyCards])
+
+  const pct = Math.min(100, Math.round((dailyCards / goal) * 100))
+  const met = dailyCards >= goal
+  const remaining = Math.max(0, goal - dailyCards)
+
+  const chooseGoal = n => {
+    setGoal(n)
+    try { localStorage.setItem(DAILY_GOAL_KEY, String(n)) } catch {}
+    setEditing(false)
+  }
+
+  return (
+    <div style={{ background: '#0a0f2e', border: `1px solid ${met ? '#2e8c50' : '#1a2460'}`, borderRadius: 12, padding: '14px 16px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 }}>
+        <span style={{ fontSize: 9, letterSpacing: 3, color: '#6070a0' }}>TODAY</span>
+        {streak.current > 0 && (
+          <span style={{ fontSize: 11, color: streak.studiedToday ? '#f5c518' : '#8890c0', letterSpacing: 1 }}>
+            🔥 {streak.current} day{streak.current !== 1 ? 's' : ''}
+            {!streak.studiedToday && <span style={{ color: '#4060a0' }}> · study to keep it</span>}
+          </span>
+        )}
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 8 }}>
+        <span style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 34, lineHeight: 1, color: met ? '#4caf7d' : '#f5c518' }}>
+          {dailyCards}
+        </span>
+        <span style={{ fontSize: 12, color: '#8890c0' }}>of {goal} cards</span>
+        <button
+          onClick={() => setEditing(e => !e)}
+          style={{ marginLeft: 'auto', fontSize: 10, color: '#4060a0', background: 'none', border: 'none', cursor: 'pointer', letterSpacing: 1 }}
+        >{editing ? 'close' : 'change goal'}</button>
+      </div>
+
+      <div style={S.progressOuter}>
+        <div style={{ ...S.progressInner, width: `${pct}%`, background: met ? '#4caf7d' : '#f5c518' }} />
+      </div>
+      <div style={{ fontSize: 10, color: met ? '#4caf7d' : '#4060a0', marginTop: 5, letterSpacing: 1 }}>
+        {met
+          ? `✓ goal met${streak.longest > streak.current ? ` · best streak ${streak.longest} days` : ''}`
+          : `${remaining} to go`}
+      </div>
+
+      {editing && (
+        <div style={{ ...S.toggleGroup, marginTop: 10 }}>
+          {GOAL_CHOICES.map(n => (
+            <button key={n} style={{ ...S.toggleBtn, ...(goal === n ? S.toggleActive : {}) }} onClick={() => chooseGoal(n)}>{n}</button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function StudyTabView({ cards, setCards, user, dueCount, dailyCards, setDailyCards, gameHistory = [] }) {
   const [subTab, setSubTab] = useState('flashcards')
   const [flashcardView, setFlashcardView] = useState('menu') // menu | study | deck
@@ -1440,6 +1509,7 @@ function StudyTabView({ cards, setCards, user, dueCount, dailyCards, setDailyCar
                   <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 32, color: '#f5c518', letterSpacing: 4 }}>FLASHCARDS</div>
                   <div style={{ fontSize: 11, color: '#4060a0', letterSpacing: 2, marginTop: 2 }}>SPACED REPETITION STUDY</div>
                 </div>
+                <DailyGoalCard dailyCards={dailyCards} />
                 <button
                   style={{ background: '#0a0f2e', border: '1px solid #1a2460', borderRadius: 12, padding: '18px 20px', textAlign: 'left', cursor: 'pointer', width: '100%' }}
                   onClick={() => setFlashcardView('study')}
@@ -2684,6 +2754,12 @@ function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards, gameHis
   const [editingCard, setEditingCard] = useState(null) // card being edited in-session
   const [confirmDeleteStudy, setConfirmDeleteStudy] = useState(null) // card id pending delete
   const [lastRating, setLastRating] = useState(null) // one level of undo for a misgrade
+  // Typed answers: self-grading quietly inflates retention, because recognising an
+  // answer feels like recalling it. Typing removes that bias.
+  const [typedMode, setTypedMode] = useState(() => localStorage.getItem('jeo-typed-answers') === '1')
+  const [typed, setTyped] = useState('')
+  const [typedResult, setTypedResult] = useState(null) // 'correct' | 'incorrect'
+  const answerInputRef = useRef(null)
   const [editFront, setEditFront] = useState('')
   const [editBack, setEditBack] = useState('')
 
@@ -2760,6 +2836,8 @@ function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards, gameHis
     setSessionStats({ again: 0, hard: 0, good: 0, easy: 0 })
     setChunkStats({ again: 0, hard: 0, good: 0, easy: 0 })
     setLastRating(null)
+    setTyped('')
+    setTypedResult(null)
     setPhase('session')
   }
 
@@ -2783,7 +2861,16 @@ function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards, gameHis
     } else {
       setCardIdx(nextCard)
       setFlipped(false)
+      setTyped('')
+      setTypedResult(null)
     }
+  }
+
+  function submitTyped() {
+    const card = (allChunks[chunkIdx] || [])[cardIdx]
+    if (!card || !typed.trim()) return
+    setTypedResult(matchesAnswer(typed, card.back) ? 'correct' : 'incorrect')
+    setFlipped(true) // reveal so the grade is made against the real answer
   }
 
   // Restore the card exactly as it was, rewind the counters, and return to it.
@@ -2799,6 +2886,8 @@ function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards, gameHis
     setCardIdx(idx)
     setPhase(phaseBefore)
     setFlipped(true) // they were looking at the answer when they graded it
+    setTyped('')
+    setTypedResult(null)
     setLastRating(null)
   }
 
@@ -2903,6 +2992,25 @@ function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards, gameHis
                 min={1} max={200}
               />
             )}
+          </div>
+
+          {/* Answer mode */}
+          <div style={S.configRow}>
+            <span style={S.configLabel}>ANSWER MODE</span>
+            <div style={S.toggleGroup}>
+              <button
+                style={{ ...S.toggleBtn, ...(!typedMode ? S.toggleActive : {}) }}
+                onClick={() => { setTypedMode(false); localStorage.setItem('jeo-typed-answers', '0') }}
+              >Reveal &amp; self-grade</button>
+              <button
+                style={{ ...S.toggleBtn, ...(typedMode ? S.toggleActive : {}) }}
+                onClick={() => { setTypedMode(true); localStorage.setItem('jeo-typed-answers', '1') }}
+              >⌨ Type the answer</button>
+            </div>
+            <div style={{ fontSize: 9, color: '#4060a0', letterSpacing: 1, lineHeight: 1.5 }}>
+              Typing checks recall rather than recognition, so retention reflects what
+              you could actually produce on a buzzer.
+            </div>
           </div>
 
           {/* Due toggle */}
@@ -3158,11 +3266,42 @@ function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards, gameHis
               <div style={S.flashSide}>CLUE</div>
               {card.image && <img src={card.image} alt="map" style={{ width: '100%', maxHeight: 160, objectFit: 'contain', borderRadius: 8, marginBottom: 8 }} />}
               {!card.image && <CardContent content={card.front.replace(/^\[Map\] /, '')} isHtml={card.hasMedia || cardIsHtml(card.front)} style={S.flashFrontText} />}
-              <div style={S.flashHint}>tap to reveal</div>
+              {typedMode ? (
+                <div style={{ width: '100%', marginTop: 10 }} onClick={e => e.stopPropagation()}>
+                  <input
+                    ref={answerInputRef}
+                    value={typed}
+                    onChange={e => setTyped(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); submitTyped() } }}
+                    placeholder="Type your response…"
+                    autoFocus
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    style={{ width: '100%', background: '#060b1a', border: '1px solid #2a3480', borderRadius: 8, padding: '10px 12px', color: '#e9ecf9', fontSize: 15, fontFamily: 'inherit', textAlign: 'center' }}
+                  />
+                  <div style={{ ...S.flashHint, marginTop: 6 }}>
+                    {typed.trim() ? 'press enter to check' : 'type an answer, or tap the card to reveal'}
+                  </div>
+                </div>
+              ) : (
+                <div style={S.flashHint}>tap to reveal</div>
+              )}
             </div>
           : <div style={S.flashInner}>
               <div style={{ ...S.flashSide, color: '#7cd992' }}>ANSWER</div>
               <CardContent content={card.back} isHtml={card.hasMedia || cardIsHtml(card.back)} style={S.flashBackText} />
+              {typedResult && (
+                <div style={{
+                  marginTop: 10, padding: '7px 12px', borderRadius: 8,
+                  border: `1px solid ${typedResult === 'correct' ? '#2e8c50' : '#8c2e2e'}`,
+                  background: typedResult === 'correct' ? 'rgba(46,140,80,0.12)' : 'rgba(140,46,46,0.12)',
+                  color: typedResult === 'correct' ? '#7cd992' : '#e07070', fontSize: 12,
+                }}>
+                  {typedResult === 'correct' ? '✓ matched' : '✗ no match'}
+                  <span style={{ color: '#8890c0' }}> — you typed “{typed.trim()}”</span>
+                </div>
+              )}
               <div style={S.flashHint}>tap to flip back</div>
             </div>}
       </div>
@@ -3170,7 +3309,13 @@ function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards, gameHis
         <>
           <div style={S.rateRow}>
             {[{q:0,label:'Again',color:'#e57373',bg:'#3a1010'},{q:1,label:'Hard',color:'#ffb74d',bg:'#3a2510'},{q:2,label:'Good',color:'#81c784',bg:'#103a18'},{q:3,label:'Easy',color:'#4dd0e1',bg:'#0e2e36'}].map(({ q, label, color, bg }) => (
-              <button key={q} style={{ ...S.rateBtn, background: bg, borderColor: color }} onClick={() => rate(q, label.toLowerCase())}>
+              <button key={q} style={{
+                ...S.rateBtn, background: bg, borderColor: color,
+                // Suggest the grade the typed answer implies — still the user's call,
+                // since only they know whether it was a guess or genuine recall.
+                ...(typedResult && ((typedResult === 'incorrect' && q === 0) || (typedResult === 'correct' && q === 2))
+                  ? { outline: `2px solid ${color}`, outlineOffset: 1 } : {}),
+              }} onClick={() => rate(q, label.toLowerCase())}>
                 <span style={{ color, fontWeight: 700, fontSize: 14 }}>{label}</span>
                 <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: 10, marginTop: 2 }}>{nextDueLabel(q, card)}</span>
               </button>

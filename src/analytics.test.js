@@ -160,3 +160,48 @@ describe('buildDeckHealth', () => {
     expect(h.avgEase).toBeNull()
   })
 })
+
+import { buildStudyStreak } from './analytics.js'
+
+describe('buildStudyStreak', () => {
+  const DAY = 86400000
+  const NOW = Date.parse('2026-09-04T12:00:00')
+  const daysAgo = n => ({ t: NOW - n * DAY, q: 2, l: 1 })
+
+  it('counts consecutive days studied', () => {
+    const s = buildStudyStreak([daysAgo(0), daysAgo(1), daysAgo(2)], { now: NOW })
+    expect(s.current).toBe(3)
+    expect(s.studiedToday).toBe(true)
+  })
+
+  it('keeps the streak alive if you studied yesterday but not yet today', () => {
+    // Breaking it at midnight would punish someone who simply has not studied yet.
+    const s = buildStudyStreak([daysAgo(1), daysAgo(2)], { now: NOW })
+    expect(s.current).toBe(2)
+    expect(s.studiedToday).toBe(false)
+  })
+
+  it('breaks the streak once a whole day is missed', () => {
+    const s = buildStudyStreak([daysAgo(2), daysAgo(3)], { now: NOW })
+    expect(s.current).toBe(0)
+    expect(s.longest).toBe(2) // history still recorded
+  })
+
+  it('counts several reviews in one day once', () => {
+    const s = buildStudyStreak([daysAgo(0), daysAgo(0), daysAgo(0)], { now: NOW })
+    expect(s.current).toBe(1)
+    expect(s.totalDays).toBe(1)
+  })
+
+  it('reports the longest run even when the current one is shorter', () => {
+    const log = [daysAgo(0), daysAgo(5), daysAgo(6), daysAgo(7), daysAgo(8)]
+    const s = buildStudyStreak(log, { now: NOW })
+    expect(s.current).toBe(1)
+    expect(s.longest).toBe(4)
+  })
+
+  it('handles an empty log', () => {
+    const s = buildStudyStreak([], { now: NOW })
+    expect(s).toEqual({ current: 0, longest: 0, studiedToday: false, totalDays: 0 })
+  })
+})

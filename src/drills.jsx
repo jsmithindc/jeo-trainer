@@ -1,3 +1,5 @@
+import { normalize, levenshtein, fuzzyMatch } from './fuzzy.js'
+import { evaluateFinalWager, generateFinalScenario } from './wager.js'
 import { useState, useEffect, useRef } from 'react'
 import { saveCards, loadCards } from './storage.js'
 // waterBodies.js is 478 KB of Natural Earth polygons, loaded on demand below.
@@ -47,35 +49,6 @@ function makeFlashCard(front, back, category = 'Drill') {
 }
 
 // ─── Fuzzy Match ─────────────────────────────────────────────────────────────
-function normalize(s) {
-  return (s || '').toLowerCase()
-    .replace(/[.\-''']/g, '')   // remove periods, hyphens, apostrophes
-    .replace(/\s+/g, ' ')
-    .trim()
-}
-
-function levenshtein(a, b) {
-  const m = a.length, n = b.length
-  const dp = Array.from({ length: m + 1 }, (_, i) => Array.from({ length: n + 1 }, (_, j) => i === 0 ? j : j === 0 ? i : 0))
-  for (let i = 1; i <= m; i++)
-    for (let j = 1; j <= n; j++)
-      dp[i][j] = a[i-1] === b[j-1] ? dp[i-1][j-1] : 1 + Math.min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1])
-  return dp[m][n]
-}
-
-function fuzzyMatch(input, target) {
-  const a = normalize(input)
-  const b = normalize(target)
-  if (a === b) return true
-  // Accept if input exactly matches any significant word in target (e.g. last name only)
-  const bWords = b.split(' ').filter(w => w.length >= 4)
-  if (bWords.some(w => w === a)) return true
-  // Require input to be at least 40% the length of target to avoid trivial matches
-  if (a.length < 3 || a.length < b.length * 0.4) return false
-  const maxDist = b.length > 8 ? 2 : b.length > 4 ? 1 : 0
-  return levenshtein(a, b) <= maxDist
-}
-
 // ─── Drill Stats Storage ──────────────────────────────────────────────────────
 const DRILL_STATS_KEY = 'jeo-drill-stats'
 
@@ -1524,6 +1497,7 @@ export function DrillsView({ cards = [], setCards = () => {} }) {
   }, [])
 
   if (drill === 'knowledge') return <KnowledgeHub onBack={handleBack} onSelect={setDrill} stats={stats} />
+  if (drill === 'wager') return <WagerDrill onBack={() => { setDrill('knowledge'); setStats(loadDrillStats()) }} />
   if (drill === 'presidents') return <PresidentsDrill onBack={() => { setDrill('knowledge'); setStats(loadDrillStats()) }} cards={cards} setCards={setCards} />
   if (drill && FLASH_DRILLS[drill]) return <FlashDrill drillKey={drill} onBack={() => { setDrill('knowledge'); setStats(loadDrillStats()) }} cards={cards} setCards={setCards} />
   if (drill === 'geography') return (
@@ -1583,8 +1557,126 @@ export function DrillsView({ cards = [], setCards = () => {} }) {
 }
 
 // ─── Knowledge Hub ───────────────────────────────────────────────────────────
+// Wagering is the one part of board play Coryat cannot measure, because it excludes
+// Daily Doubles and Final Jeopardy entirely. The maths is small and learnable, which
+// makes it drillable in a way that trivia recall is not.
+function WagerDrill({ onBack }) {
+  const drillId = 'wager'
+  const [scenario, setScenario] = useState(() => generateFinalScenario())
+  const [wager, setWager] = useState('')
+  const [result, setResult] = useState(null)
+  const [score, setScore] = useState({ correct: 0, total: 0 })
+  const inputRef = useRef(null)
+  const sessionSaved = useRef(false)
+
+  const submit = () => {
+    if (result || wager === '') return
+    const evaluated = evaluateFinalWager(scenario, wager)
+    setResult(evaluated)
+    if (evaluated.verdict !== 'invalid') {
+      setScore(s => ({ correct: s.correct + (evaluated.verdict === 'optimal' ? 1 : 0), total: s.total + 1 }))
+    }
+  }
+
+  const next = () => {
+    setScenario(generateFinalScenario())
+    setWager('')
+    setResult(null)
+    setTimeout(() => inputRef.current?.focus(), 50)
+  }
+
+  const finish = () => {
+    if (!sessionSaved.current && score.total > 0) {
+      sessionSaved.current = true
+      saveDrillSession(drillId, score.correct, score.total)
+    }
+    onBack()
+  }
+
+  const pct = score.total ? Math.round((score.correct / score.total) * 100) : null
+  const verdictColor = { optimal: '#4caf7d', risky: '#ffb74d', wrong: '#e57373', invalid: '#8890c0' }
+
+  const positionLabel = {
+    lock: 'You cannot be caught — if you wager carefully.',
+    leading: 'You lead, but second place can pass you by doubling.',
+    trailing: 'You are behind and need a big answer.',
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: '100%' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <button style={{ fontSize: 12, color: '#4060a0', background: 'none', border: 'none', cursor: 'pointer' }} onClick={finish}>← Back</button>
+        <div style={S.title}>💰 WAGER TRAINER</div>
+        {pct !== null && (
+          <span style={{ marginLeft: 'auto', fontSize: 11, color: pct >= 80 ? '#4caf7d' : pct >= 50 ? '#f5c518' : '#e57373' }}>
+            {score.correct}/{score.total} · {pct}%
+          </span>
+        )}
+      </div>
+
+      <div style={{ background: '#0a0f2e', border: '1px solid #1a2460', borderRadius: 10, padding: '14px 16px' }}>
+        <div style={{ fontSize: 9, letterSpacing: 3, color: '#6070a0', marginBottom: 10 }}>GOING INTO FINAL JEOPARDY</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+          {[
+            ['YOU', scenario.you, '#f5c518'],
+            ['2ND', scenario.second, '#c0c8e8'],
+            ['3RD', scenario.third, '#6070a0'],
+          ].map(([lbl, val, col]) => (
+            <div key={lbl} style={{ background: '#060b1a', border: '1px solid #1a2040', borderRadius: 8, padding: '10px 4px', textAlign: 'center' }}>
+              <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: col }}>${val.toLocaleString()}</div>
+              <div style={{ fontSize: 9, letterSpacing: 2, color: '#4060a0' }}>{lbl}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{ fontSize: 10, color: '#8890c0', marginTop: 10, letterSpacing: 1 }}>
+          {positionLabel[scenario.position]}
+        </div>
+      </div>
+
+      {!result ? (
+        <>
+          <input
+            ref={inputRef}
+            type="number"
+            value={wager}
+            onChange={e => setWager(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') submit() }}
+            placeholder="Your wager"
+            autoFocus
+            style={{ width: '100%', background: '#060b1a', border: '1px solid #2a3480', borderRadius: 8, padding: '12px', color: '#e9ecf9', fontSize: 18, textAlign: 'center', fontFamily: 'inherit' }}
+          />
+          <button
+            onClick={submit}
+            disabled={wager === ''}
+            style={{ background: wager === '' ? '#1a2040' : '#f5c518', color: wager === '' ? '#4060a0' : '#060b1a', border: 'none', borderRadius: 8, padding: '12px', fontFamily: "'Bebas Neue', sans-serif", fontSize: 17, letterSpacing: 2, cursor: wager === '' ? 'default' : 'pointer' }}
+          >Lock it in →</button>
+        </>
+      ) : (
+        <>
+          <div style={{ background: '#0a0f2e', border: `1px solid ${verdictColor[result.verdict]}`, borderRadius: 10, padding: '14px 16px' }}>
+            <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 19, letterSpacing: 1, color: verdictColor[result.verdict], marginBottom: 6 }}>
+              {result.verdict === 'optimal' ? '✓ ' : '✗ '}{result.headline}
+            </div>
+            <div style={{ fontSize: 12, color: '#c0c8e8', lineHeight: 1.55 }}>{result.why}</div>
+            {result.verdict !== 'invalid' && (
+              <div style={{ fontSize: 10, color: '#4060a0', marginTop: 8, letterSpacing: 1 }}>
+                You wagered ${Number(wager).toLocaleString()} · sound range ${result.min.toLocaleString()}–${result.max.toLocaleString()}
+              </div>
+            )}
+          </div>
+          <button
+            onClick={next}
+            style={{ background: '#1a2460', color: '#f5c518', border: '1px solid #2a3480', borderRadius: 8, padding: '12px', fontFamily: "'Bebas Neue', sans-serif", fontSize: 17, letterSpacing: 2, cursor: 'pointer' }}
+          >Next scenario →</button>
+        </>
+      )}
+    </div>
+  )
+}
+
 function KnowledgeHub({ onBack, onSelect, stats }) {
   const knowledgeDrills = [
+    { id: 'wager', emoji: '💰', label: 'WAGER TRAINER', desc: 'Final Jeopardy wagering — locks, covers & catching up' },
     { id: 'presidents', emoji: '🇺🇸', label: 'US PRESIDENTS', desc: 'All 47 presidents · number, name & years' },
     { id: 'vice_presidents', emoji: '🏛', label: 'US VICE PRESIDENTS', desc: '49 VPs · name, number & president served' },
     { id: 'astronomy', emoji: '🪐', label: 'PLANETS & ASTRONOMY', desc: 'Solar system, moons & space facts' },

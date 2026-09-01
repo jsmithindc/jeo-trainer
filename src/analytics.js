@@ -447,3 +447,42 @@ export function buildDeckHealth(cards, { matureDays = 21 } = {}) {
     avgEase: easeCount ? +(easeSum / easeCount).toFixed(2) : null,
   }
 }
+
+// ─── Study streak ─────────────────────────────────────────────────────────────
+// calcStreak in training.jsx counts days you played a *game*. This counts days you
+// *studied*, which is the habit the daily goal is trying to build. Derived from the
+// review log, so it starts from when that log began rather than claiming false history.
+export function buildStudyStreak(log = [], { now = Date.now() } = {}) {
+  const DAY = 86400000
+  const dayKey = t => {
+    const d = new Date(t)
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  }
+
+  const days = [...new Set(log.map(e => dayKey(e.t)))].sort().reverse()
+  if (!days.length) return { current: 0, longest: 0, studiedToday: false, totalDays: 0 }
+
+  const today = dayKey(now)
+  const yesterday = dayKey(now - DAY)
+  const studiedToday = days[0] === today
+
+  // A streak survives until you miss a whole day: if you studied yesterday but not yet
+  // today, the streak still stands — it only breaks once yesterday is also missed.
+  let current = 0
+  if (days[0] === today || days[0] === yesterday) {
+    current = 1
+    for (let i = 1; i < days.length; i++) {
+      const gap = (Date.parse(days[i - 1]) - Date.parse(days[i])) / DAY
+      if (gap <= 1.5) current++
+      else break
+    }
+  }
+
+  let longest = 1, run = 1
+  for (let i = 1; i < days.length; i++) {
+    const gap = (Date.parse(days[i - 1]) - Date.parse(days[i])) / DAY
+    if (gap <= 1.5) { run++; longest = Math.max(longest, run) } else run = 1
+  }
+
+  return { current, longest: Math.max(longest, current), studiedToday, totalDays: days.length }
+}

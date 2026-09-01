@@ -66,3 +66,58 @@ describe('findPlayed', () => {
     expect(findPlayed(idx, ep('9504', 'y'))?.id).toBe('n')
   })
 })
+
+// ── Replay history retention (v2.7.7) ────────────────────────────────────────
+// saveGame used to drop any existing entry for the same episode, so replaying a game
+// destroyed the earlier attempt. It still has to collapse a genuine double-save, which
+// happens when Final Jeopardy is answered twice in one sitting.
+describe('replay vs double-save', () => {
+  const DOUBLE_SAVE_WINDOW = 10 * 60 * 1000
+
+  // Mirrors the reducer in saveGame.
+  const applySave = (prev, game, now = Date.now()) => {
+    const kept = prev.filter(g => !(
+      g.episodeId === game.episodeId &&
+      now - new Date(g.playedAt).getTime() < DOUBLE_SAVE_WINDOW
+    ))
+    const attempt = kept.filter(g => g.episodeId === game.episodeId).length + 1
+    return [{ ...game, attempt }, ...kept]
+  }
+
+  const at = mins => new Date(Date.now() - mins * 60000).toISOString()
+
+  it('replaces an entry saved moments ago', () => {
+    const prev = [{ id: 'a', episodeId: '9550', playedAt: at(1), coryatScore: 100 }]
+    const out = applySave(prev, { id: 'b', episodeId: '9550', playedAt: at(0), coryatScore: 200 })
+    expect(out).toHaveLength(1)
+    expect(out[0].id).toBe('b')
+    expect(out[0].attempt).toBe(1)
+  })
+
+  it('keeps a genuine replay from another day', () => {
+    const prev = [{ id: 'a', episodeId: '9550', playedAt: at(60 * 24 * 3), coryatScore: 100 }]
+    const out = applySave(prev, { id: 'b', episodeId: '9550', playedAt: at(0), coryatScore: 200 })
+    expect(out).toHaveLength(2)
+    expect(out[0].attempt).toBe(2) // so improvement is visible
+    expect(out.map(g => g.coryatScore)).toEqual([200, 100])
+  })
+
+  it('leaves other episodes untouched', () => {
+    const prev = [
+      { id: 'x', episodeId: '9551', playedAt: at(2) },
+      { id: 'a', episodeId: '9550', playedAt: at(2) },
+    ]
+    const out = applySave(prev, { id: 'b', episodeId: '9550', playedAt: at(0) })
+    expect(out.map(g => g.id).sort()).toEqual(['b', 'x'])
+  })
+
+  it('numbers a third attempt correctly', () => {
+    let h = [
+      { id: 'a2', episodeId: '9550', playedAt: at(60 * 24 * 2), attempt: 2 },
+      { id: 'a1', episodeId: '9550', playedAt: at(60 * 24 * 9), attempt: 1 },
+    ]
+    h = applySave(h, { id: 'a3', episodeId: '9550', playedAt: at(0) })
+    expect(h[0].attempt).toBe(3)
+    expect(h).toHaveLength(3)
+  })
+})

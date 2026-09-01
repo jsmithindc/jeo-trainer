@@ -18,7 +18,7 @@ import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, T
 // than half the bundle, and none of it is needed unless the Drills tab is opened.
 const DrillsView = lazy(() => import('./drills.jsx').then(m => ({ default: m.DrillsView })))
 
-const APP_VERSION = '2.7.6'
+const APP_VERSION = '2.7.7'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -198,17 +198,6 @@ export default function App() {
 
   useEffect(() => {
     if (!authChecked) return
-    // Load episode list so prev/next work immediately
-    fetch('/.netlify/functions/episodes')
-      .then(r => r.json())
-      .then(data => {
-        if (data.seasons?.length) setSeasons(data.seasons)
-        if (data.episodes?.length) {
-          setEpisodeList(data.episodes)
-          setCurrentEpIndex(0) // latest is index 0
-        }
-      })
-      .catch(() => {}) // non-critical
     // Load next unplayed episode after the last completed one
     // gameHistory[0] is most recent; gameId is numeric j-archive ID (added v1.5.0)
     // Fall back to episodeId (show number) for older history entries
@@ -229,13 +218,16 @@ export default function App() {
       })
     }
 
-    // Fetch episode list to find next unplayed episode
+    // One request serves both consumers: populating prev/next, and finding the next
+    // unplayed episode. This used to be fetched twice here, and the effect re-runs when
+    // historyReady flips — so a cold start hit the function up to four times.
     fetch('/.netlify/functions/episodes')
       .then(r => r.json())
       .then(data => {
         if (data.seasons?.length) setSeasons(data.seasons)
         if (!data.episodes?.length) { loadLatestFallback(); return }
         setEpisodeList(data.episodes)
+        setCurrentEpIndex(0) // provisional; corrected below once the episode loads
 
         // Find the last played episode in the list
         // Match by gameId first, then airDate (most reliable since showNumber may be stale)
@@ -923,7 +915,19 @@ export default function App() {
         finalRank: [coryatScore, ...tournamentState.opponents].sort((a,b)=>b-a).indexOf(coryatScore) + 1,
       } : null,
     }
-    setGameHistory(prev => [game, ...prev.filter(g => g.episodeId !== game.episodeId)])
+    setGameHistory(prev => {
+      // Answering Final Jeopardy twice in one sitting saves twice; that should replace.
+      // Playing the same episode again another day should not — losing the earlier
+      // attempt removes the only way to see whether you improved.
+      const DOUBLE_SAVE_WINDOW = 10 * 60 * 1000
+      const now = Date.now()
+      const kept = prev.filter(g => !(
+        g.episodeId === game.episodeId &&
+        now - new Date(g.playedAt).getTime() < DOUBLE_SAVE_WINDOW
+      ))
+      const attempt = kept.filter(g => g.episodeId === game.episodeId).length + 1
+      return [{ ...game, attempt }, ...kept]
+    })
     gameCompleteRef.current = true // mark complete before async updates
     clearGameState() // game complete, clear saved state
   }

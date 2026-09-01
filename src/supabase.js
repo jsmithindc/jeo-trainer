@@ -14,15 +14,28 @@ const SUPABASE_ANON_KEY = 'sb_publishable_qJMYyHDRF18PWU6S4nqewA_bi1SDSEM'
 //
 // Still present in 2.112.4, so turn that one case back into the no-op it was meant to
 // be. Every other lock failure still propagates, and the next tick refreshes normally.
+// Catching the rejection was not enough. Firefox reports the promise created *inside*
+// navigator.locks.request, which no application handler ever sees — the wrapper caught
+// it and preventDefault() ran, and the console printed it anyway.
+//
+// So don't let the library reach its throw. acquireTimeout 0 means "skip if busy", and
+// it is the only path that produces this message, so handle that case directly: ask for
+// the lock with ifAvailable and return quietly when it isn't free. Every other timeout
+// still goes through the library's own implementation.
 async function quietNavigatorLock(name, acquireTimeout, fn) {
+  if (acquireTimeout === 0) {
+    return globalThis.navigator.locks.request(
+      name,
+      { mode: 'exclusive', ifAvailable: true },
+      async lock => (lock ? await fn() : undefined),
+    )
+  }
+
   try {
     return await navigatorLock(name, acquireTimeout, fn)
   } catch (err) {
-    // Match on the library's own duck-typed flag as well as the class: the bundled
-    // copy and any transitively duplicated one are not necessarily the same identity,
-    // and instanceof alone was not catching this in the browser.
-    const isAcquireTimeout = err instanceof NavigatorLockAcquireTimeoutError || err?.isAcquireTimeout === true
-    if (isAcquireTimeout) return undefined // someone else holds it; the next tick refreshes
+    // Belt and braces for any other acquire-timeout path.
+    if (err instanceof NavigatorLockAcquireTimeoutError || err?.isAcquireTimeout === true) return undefined
     throw err
   }
 }

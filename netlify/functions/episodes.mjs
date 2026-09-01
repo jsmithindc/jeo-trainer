@@ -1,5 +1,3 @@
-import { parse } from 'node-html-parser'
-
 export const handler = async (event) => {
   const headers = { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' }
 
@@ -99,22 +97,37 @@ export const handler = async (event) => {
       return { gameId, showNumber, airDate, season: targetSeason }
     }).filter(ep => ep.gameId && ep.airDate)
 
-    // Filter by search
-    let filtered = episodes
+    // A season page can link the same game more than once (date cell + scores cell).
+    // Keep the first occurrence, which is the one carrying the air date text.
+    const seen = new Set()
+    const deduped = episodes.filter(ep => {
+      if (seen.has(ep.gameId)) return false
+      seen.add(ep.gameId)
+      return true
+    })
+
+    // Filter by search: every token must appear, in any order, so "September 2025"
+    // matches "September 8, 2025". Numeric tokens match whole words only, so
+    // "September 8" doesn't also drag in the 18th and 28th.
+    let filtered = deduped
     if (search) {
-      const q = search.toLowerCase().replace(/\s+/g, '')
-      filtered = episodes.filter(ep =>
-        ep.showNumber.includes(search) ||
-        ep.airDate.toLowerCase().replace(/\s+/g, '').includes(q)
-      )
+      const tokens = search.toLowerCase().split(/[\s,]+/).filter(Boolean)
+      filtered = deduped.filter(ep => {
+        const hay = `${ep.showNumber} ${ep.airDate}`.toLowerCase()
+        return tokens.every(t =>
+          /^\d+$/.test(t) ? new RegExp(`\\b${t}\\b`).test(hay) : hay.includes(t)
+        )
+      })
     }
 
     filtered.sort((a, b) => parseInt(b.gameId) - parseInt(a.gameId))
 
+    // Return the whole season (~230 shows, ~20KB). The old cap of 50 meant the
+    // browser could only reach ~2 months back from the latest episode.
     return {
       statusCode: 200,
       headers,
-      body: JSON.stringify({ episodes: filtered.slice(0, 50), seasons })
+      body: JSON.stringify({ episodes: filtered.slice(0, 500), seasons })
     }
 
   } catch (err) {

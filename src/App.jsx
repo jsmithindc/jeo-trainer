@@ -13,7 +13,7 @@ import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpi
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 import { DrillsView } from './drills.jsx'
 
-const APP_VERSION = '2.5.7'
+const APP_VERSION = '2.5.8'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -71,6 +71,7 @@ export default function App() {
   const [showConfidence, setShowConfidence] = useState(false)
   const [confidenceRatings, setConfidenceRatings] = useState(null)
   const [wagerState, setWagerState] = useState(null) // { type, resolve }
+  const [dailyDoubles, setDailyDoubles] = useState([]) // per-DD wager log for this game
   const [buzzTimeRef] = useState({ start: null }) // for tracking buzz times
 
   const [cards, setCards] = useState([])
@@ -94,6 +95,7 @@ export default function App() {
   const boardControlRef = useRef('player')
   const opponentCategoryRef = useRef(null)
   const boardRef = useRef(null)
+  const dailyDoublesRef = useRef([])
   const clueStatesRef = useRef({})
   const singleClueStatesRef = useRef({})
   const doubleClueStatesRef = useRef({})
@@ -338,6 +340,7 @@ export default function App() {
       coryatScore: singleCoryat + doubleCoryat,
       actualScore: actualScore,
       confidenceRatings,
+      dailyDoubles,
       tournamentState,
       savedAt: new Date().toISOString(),
     }
@@ -394,6 +397,7 @@ export default function App() {
         coryatScore: singleCoryat + doubleCoryat,
         actualScore: actualScore,
         confidenceRatings,
+        dailyDoubles,
         tournamentState,
         savedAt: new Date().toISOString(),
       }
@@ -454,6 +458,7 @@ export default function App() {
       setFjAnswered(null)
       setActiveClue(null)
       setConfidenceRatings(null)
+      setDailyDoubles([])
       // Start screen shown when user taps START button on board, not automatically
     } catch (err) {
       setBoardError(err.message)
@@ -485,6 +490,7 @@ export default function App() {
   useEffect(() => { gameCompleteRef.current = !!fjAnswered }, [fjAnswered])
   useEffect(() => { autoModeRef.current = autoMode }, [autoMode])
   useEffect(() => { roundRef.current = round }, [round])
+  useEffect(() => { dailyDoublesRef.current = dailyDoubles }, [dailyDoubles])
 
   // Auto-save whenever clue states change during an active game
   useEffect(() => {
@@ -596,7 +602,17 @@ export default function App() {
 
     // Allow re-answering already-answered clues (shows answer immediately)
     if (currentState !== CLUE_STATES.UNANSWERED) {
-      setActiveClue({ ci, ri, clue, category, isReanswer: true, previousResult: currentState })
+      // A re-answered Daily Double has to carry its original wager. Without it
+      // markClue reverses the old result and applies the new one at face value,
+      // so actualScore drifts by the wager/value gap — twice.
+      const prior = clue.isDailyDouble
+        ? (dailyDoublesRef.current || dailyDoubles).find(d => d.key === `${roundRef.current || round}-${ci}-${ri}`)
+        : null
+      setActiveClue({
+        ci, ri,
+        clue: prior?.wagered ? { ...clue, wager: prior.wager } : clue,
+        category, isReanswer: true, previousResult: currentState,
+      })
       setShowAnswer(true) // show answer immediately since they've seen it
       return
     }
@@ -620,6 +636,23 @@ export default function App() {
 
     // Track actual show score (with wagers for DD)
     const effectiveValue = clue.wager || clue.value
+
+    // Record Daily Doubles so wagering can be analysed later. Only the effect on
+    // actualScore used to survive the clue closing, which made DD play invisible.
+    if (clue.isDailyDouble) {
+      const key = `${round}-${ci}-${ri}`
+      const entry = {
+        key,
+        round,
+        category,
+        value: clue.value,          // face value of the square
+        wager: effectiveValue,      // what was actually risked
+        wagered: !!clue.wager,      // false when the wager prompt was skipped
+        result,
+      }
+      // Re-answering a clue replaces its entry rather than adding a second one.
+      setDailyDoubles(prev => [...prev.filter(d => d.key !== key), entry])
+    }
 
     if (isReanswer && previousResult) {
       // Reverse the old score effect first
@@ -795,6 +828,11 @@ export default function App() {
       singleBreakdown: buildBreakdown(singleBoard, singleClueStates),
       doubleBreakdown: buildBreakdown(doubleBoard, doubleClueStates),
       valueBreakdown,
+      dailyDoubles,
+      // Net effect of DD wagering on the show score. Coryat excludes Daily Doubles
+      // entirely, so this is exactly what wagering added or cost versus a flat Coryat.
+      ddNet: dailyDoubles.reduce((sum, d) =>
+        sum + (d.result === 'correct' ? d.wager : d.result === 'incorrect' ? -d.wager : 0), 0),
       confidenceRatings: confidenceRatings || null,
       contestants: episodeMeta.contestants || null,
       tournamentResult: tournamentState ? {
@@ -1124,6 +1162,7 @@ export default function App() {
             setDoubleClueStates(r.doubleClueStates)
             setFjAnswered(r.fjAnswered)
             setActualScore(r.actualScore || 0)
+            setDailyDoubles(r.dailyDoubles || [])
             setGameStarted(true)
             setResumePrompt(null)
             clearGameState()

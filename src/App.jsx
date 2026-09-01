@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense } from 'react'
-import { sm2, newCard, formatRelative, nextDueLabel } from './srs.js'
+import { newCard, formatRelative } from './srs.js'
+import { rateCard, nextDueLabel } from './fsrs.js'
 import { loadCards, saveCards, loadGameHistory, saveGameHistory } from './storage.js'
 import { parseApkg, migrateLocalMediaToSupabase } from './ankiImport.js'
 import { SAMPLE_BOARD } from './boardData.js'
-import { migrateFJWagers, backfillDdNet } from './migrations.js'
+import { migrateFJWagers, backfillDdNet, migrateToFsrs } from './migrations.js'
 import { saveDeckSnapshot, getDeckSnapshots, restoreSnapshot, ensureSnapshotsMigrated } from './snapshotStore.js'
 import { fetchEpisode, episodeToBoard, searchEpisodesByCategory } from './jarchive.js'
 import { supabase, signIn, signUp, resetPassword, signOut, loadRemoteData, saveRemoteData, mergeData, saveGameStateRemote, uploadMedia } from './supabase.js'
@@ -16,7 +17,7 @@ import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, T
 // than half the bundle, and none of it is needed unless the Drills tab is opened.
 const DrillsView = lazy(() => import('./drills.jsx').then(m => ({ default: m.DrillsView })))
 
-const APP_VERSION = '2.7.2'
+const APP_VERSION = '2.7.3'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -166,7 +167,9 @@ export default function App() {
 
   // ── Load local data ───────────────────────────────────────────────────────
   useEffect(() => {
-    setCards(loadCards())
+    const fsrsPass = migrateToFsrs(loadCards())
+    if (fsrsPass.changed) console.info(`[migration] seeded FSRS state on ${fsrsPass.changed} card(s)`)
+    setCards(fsrsPass.cards)
     const fjPass = migrateFJWagers(loadGameHistory())
     if (fjPass.changed) console.info(`[migration] repaired FJ wager on ${fjPass.changed} game(s)`)
     const ddPass = backfillDdNet(fjPass.games)
@@ -296,9 +299,11 @@ export default function App() {
         if (ddPass.changed) console.info(`[migration] derived ddNet for ${ddPass.changed} game(s)`)
         const repairedHistory = ddPass.games
         if (merged.tombstones) saveTombstones(merged.tombstones)
-        setCards(merged.cards)
+        const fsrsPass = migrateToFsrs(merged.cards)
+        if (fsrsPass.changed) console.info(`[migration] seeded FSRS state on ${fsrsPass.changed} card(s)`)
+        setCards(fsrsPass.cards)
         setGameHistory(repairedHistory)
-        saveCards(merged.cards)
+        saveCards(fsrsPass.cards)
         saveGameHistory(repairedHistory)
         // Merge daily stats: take the max across devices for today
         if (remote.dailyStats) {
@@ -2767,7 +2772,7 @@ function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards, gameHis
     // Judge "was this already learned" from the card as it stands, before sm2
     // rewrites repetitions — afterwards the answer is always yes.
     logReview(quality, (card.repetitions || 0) > 0)
-    setCards(prev => prev.map(c => c.id === card.id ? sm2(card, quality) : c))
+    setCards(prev => prev.map(c => c.id === card.id ? rateCard(card, quality) : c))
     setSessionStats(prev => ({ ...prev, [label]: prev[label] + 1 }))
     setChunkStats(prev => ({ ...prev, [label]: prev[label] + 1 }))
     const nextCard = cardIdx + 1

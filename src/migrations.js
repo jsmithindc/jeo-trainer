@@ -95,3 +95,21 @@ export function backfillDdNet(games) {
 
   return { games: migrated, changed }
 }
+
+// Adopt FSRS for cards that only have SM-2 state. Stability is estimated from the
+// current interval and difficulty from the ease factor.
+//
+// Due dates are deliberately left alone. Rescheduling the whole deck at once would
+// either bury the user under a sudden backlog or silently push work months out;
+// instead each card keeps its place and FSRS takes over from its next review.
+import { seedFsrsState, hasFsrsState } from './fsrs.js'
+
+export function migrateToFsrs(cards) {
+  let changed = 0
+  const migrated = cards.map(card => {
+    if (hasFsrsState(card)) return card
+    changed++
+    return { ...card, ...seedFsrsState(card) } // dueAt untouched
+  })
+  return { cards: migrated, changed }
+}

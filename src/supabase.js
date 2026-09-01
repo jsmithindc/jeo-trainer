@@ -1,9 +1,37 @@
-import { createClient } from '@supabase/supabase-js'
+import { createClient, navigatorLock, NavigatorLockAcquireTimeoutError } from '@supabase/supabase-js'
 
 const SUPABASE_URL = 'https://uramupgwxuugdcmmklds.supabase.co'
 const SUPABASE_ANON_KEY = 'sb_publishable_qJMYyHDRF18PWU6S4nqewA_bi1SDSEM'
 
-export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+// supabase-js schedules its first auto-refresh tick from an unguarded setTimeout while
+// initialising (GoTrueClient#_startAutoRefresh). That tick asks for the auth lock with
+// acquireTimeout 0 — meaning "skip if another context is already using it" — but the
+// library throws instead of returning, and nothing catches it. A deliberately skipped
+// refresh therefore surfaces as an uncaught promise rejection on every page load:
+//
+//   Uncaught (in promise) Error: Acquiring an exclusive Navigator LockManager lock
+//   "lock:sb-…-auth-token" immediately failed
+//
+// Still present in 2.112.4, so turn that one case back into the no-op it was meant to
+// be. Every other lock failure still propagates, and the next tick refreshes normally.
+async function quietNavigatorLock(name, acquireTimeout, fn) {
+  try {
+    return await navigatorLock(name, acquireTimeout, fn)
+  } catch (err) {
+    if (acquireTimeout === 0 && err instanceof NavigatorLockAcquireTimeoutError) return undefined
+    throw err
+  }
+}
+
+// Only override where the Web Locks API actually exists; elsewhere supabase-js picks
+// its own fallback and navigatorLock would throw on a missing navigator.locks.
+const supportsWebLocks = typeof globalThis !== 'undefined' && !!globalThis.navigator?.locks
+
+export const supabase = createClient(
+  SUPABASE_URL,
+  SUPABASE_ANON_KEY,
+  supportsWebLocks ? { auth: { lock: quietNavigatorLock } } : undefined,
+)
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 

@@ -237,16 +237,12 @@ function processAnkiHtml(html, mediaIndex, user) {
 export async function migrateLocalMediaToSupabase(user, onProgress = null) {
   if (!user) return 0
 
-  // Get all keys from IndexedDB
+  // Use the shared opener. This used to re-open the database at version 1 while
+  // mediaStore was on version 4; opening below the stored version throws
+  // VersionError, and the call site swallows it — so this migration had never once
+  // run to completion, and media imported before signing in stayed on one device.
   const { openDB } = await import('./mediaStore.js')
-
-  // We'll re-import by reading from IndexedDB directly
-  // Get all stored media records
-  const db = await new Promise((resolve, reject) => {
-    const req = indexedDB.open('jeo-trainer-media', 1)
-    req.onsuccess = e => resolve(e.target.result)
-    req.onerror = () => reject(req.error)
-  })
+  const db = await openDB()
 
   const records = await new Promise((resolve, reject) => {
     const tx = db.transaction('media', 'readonly')

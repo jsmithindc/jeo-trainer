@@ -5,7 +5,7 @@ const STORE = 'media'
 
 let dbPromise = null
 
-function openDB() {
+export function openDB() {
   if (dbPromise) return dbPromise
   dbPromise = new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION)
@@ -30,10 +30,11 @@ function openDB() {
     }
 
     req.onblocked = () => {
-      // Another tab has the DB open - delete and retry
+      // Another tab holding the database open is an ordinary situation, especially
+      // for a PWA. Destroying every stored image and audio file in response is not a
+      // proportionate remedy — fail this attempt and let the next one retry.
       dbPromise = null
-      indexedDB.deleteDatabase(DB_NAME)
-      reject(new Error('DB blocked - will retry on reload'))
+      reject(new Error('Media store is open in another tab — close it and reload.'))
     }
   })
   return dbPromise

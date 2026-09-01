@@ -58,13 +58,45 @@ const META_CATEGORIES = {
   'Potpourri': [], // catch-all
 }
 
+const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+// Cache the compiled patterns — this runs for every category of every game whenever
+// the heat map, weakness tracker or Coryat prediction is rebuilt.
+const KEYWORD_PATTERNS = Object.fromEntries(
+  Object.entries(META_CATEGORIES)
+    .filter(([meta]) => meta !== 'Potpourri')
+    .map(([meta, keywords]) => [
+      meta,
+      // Whole words only, matching singular and plural in both directions: the list
+      // holds 'olympics' but a category reads OLYMPIC, and holds 'novel' where a
+      // category reads NOVELS. Plain substring matching meant 'war' fired on WARHOL
+      // and HOWARD, 'uk' on DUKE, and 'pop' on POPULATION — quietly misfiling the
+      // categories the study recommendations are built from.
+      keywords.map(kw => {
+        const stem = kw.length > 3 && kw.endsWith('s') ? kw.slice(0, -1) : kw
+        return { weight: stem.length, re: new RegExp(`(^|[^a-z])${escapeRe(stem)}s?([^a-z]|$)`, 'i') }
+      }),
+    ])
+)
+
 export function getMetaCategory(categoryName) {
-  const lower = categoryName.toLowerCase()
-  for (const [meta, keywords] of Object.entries(META_CATEGORIES)) {
-    if (meta === 'Potpourri') continue
-    if (keywords.some(kw => lower.includes(kw))) return meta
+  const lower = (categoryName || '').toLowerCase()
+  if (!lower) return 'Potpourri'
+
+  // Score every meta-category and take the best match rather than the first one that
+  // happens to hit. Object key order used to decide ties, so "SPORTS MOVIES" landed
+  // in Arts purely because Arts is declared above Sports.
+  // Weight matches by keyword length so a specific hit ("swimming") outranks a vague
+  // one ("tv"), instead of every keyword counting equally and ties falling to
+  // whichever meta-category happens to be declared first.
+  let best = 'Potpourri'
+  let bestScore = 0
+  for (const [meta, patterns] of Object.entries(KEYWORD_PATTERNS)) {
+    let score = 0
+    for (const { re, weight } of patterns) if (re.test(lower)) score += weight
+    if (score > bestScore) { bestScore = score; best = meta }
   }
-  return 'Potpourri'
+  return best
 }
 
 export const META_CATEGORY_NAMES = Object.keys(META_CATEGORIES)

@@ -34,13 +34,20 @@ export async function signOut() {
 // ── Data sync ─────────────────────────────────────────────────────────────────
 
 export async function loadRemoteData() {
+  // Scope the read explicitly rather than relying on row-level security alone. If RLS
+  // is ever disabled or altered during a migration, or a second row appears for the
+  // account, .single() would otherwise error or return the wrong row.
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { cards: [], gameHistory: [], updatedAt: null, tombstones: [] }
+
   const { data, error } = await supabase
     .from('user_data')
     .select('*')
+    .eq('user_id', user.id)
     .single()
 
   if (error) {
-    if (error.code === 'PGRST116') return { cards: [], gameHistory: [], updatedAt: null }
+    if (error.code === 'PGRST116') return { cards: [], gameHistory: [], updatedAt: null, tombstones: [] }
     throw error
   }
 

@@ -12,7 +12,11 @@ export function sm2(card, quality) {
     interval = 1
     lapses += 1
   } else {
-    lapses = 0
+    // lapses is a lifetime count, matching Anki's meaning — and matching what
+    // imported cards already carry, since parseApkg copies Anki's cumulative value.
+    // It used to reset to 0 on any success, so a card failed twenty times with the
+    // occasional correct answer never registered, and the leech filter (lapses >= 4)
+    // could only ever fire on four failures in a row.
     if (repetitions === 0) {
       // First review: Hard=1d, Good=1d, Easy=4d
       interval = quality === 3 ? 4 : 1

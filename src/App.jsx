@@ -6,7 +6,7 @@ import { SAMPLE_BOARD } from './boardData.js'
 import { migrateFJWagers, backfillDdNet } from './migrations.js'
 import { saveDeckSnapshot, getDeckSnapshots, restoreSnapshot, ensureSnapshotsMigrated } from './snapshotStore.js'
 import { fetchEpisode, episodeToBoard, searchEpisodesByCategory } from './jarchive.js'
-import { supabase, signIn, signUp, resetPassword, signOut, loadRemoteData, saveRemoteData, mergeData, saveGameStateRemote, loadGameStateRemote, uploadMedia } from './supabase.js'
+import { supabase, signIn, signUp, resetPassword, signOut, loadRemoteData, saveRemoteData, mergeData, saveGameStateRemote, uploadMedia } from './supabase.js'
 import { buildCategoryHeatMap, buildValueBreakdown, predictCoryat, exportToApkg, getMetaCategory, META_CATEGORY_NAMES } from './analytics.js'
 import { CardContent, cardIsHtml } from './CardContent.jsx'
 import { getMediaStats, clearAllMedia, getMedia } from './mediaStore.js'
@@ -16,10 +16,16 @@ import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, T
 // than half the bundle, and none of it is needed unless the Drills tab is opened.
 const DrillsView = lazy(() => import('./drills.jsx').then(m => ({ default: m.DrillsView })))
 
-const APP_VERSION = '2.6.3'
+const APP_VERSION = '2.6.4'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
+
+// A saved game is only worth resuming if it never reached Final Jeopardy — that is
+// the point at which saveGame() records the result and the game is over.
+function isResumable(state) {
+  return !!(state && state.episodeMeta && !state.fjAnswered)
+}
 
 function initClueStates(board) {
   const s = {}
@@ -174,9 +180,9 @@ export default function App() {
   useEffect(() => {
     if (!authChecked) return
     const saved = loadGameState()
-    if (saved && saved.episodeMeta) {
-      setResumePrompt(saved)
-    }
+    // Defensive: stale finished states may already be on disk from before the guard
+    // above existed, so judge the record itself rather than trusting it was cleared.
+    if (isResumable(saved)) setResumePrompt(saved)
   }, [authChecked])
 
   const [dailyCards, setDailyCards] = useState(() => getDailyStats().cardsReviewed)
@@ -434,9 +440,11 @@ export default function App() {
   }
 
   async function loadEpisode(gameId, silent = false) {
-    // Auto-save current game if one is in progress
-    // Use direct state values here (not refs) since we're in the render cycle
-    if (gameStarted && episodeMeta) {
+    // Auto-save current game if one is in progress.
+    // The completion check matters: saveGame clears the saved state when a game ends,
+    // but navigating away afterwards used to write it straight back, so returning to
+    // a finished game offered to resume it.
+    if (gameStarted && episodeMeta && !fjAnswered && !gameCompleteRef.current) {
       const state = {
         episodeData,
         episodeMeta,
@@ -494,7 +502,7 @@ export default function App() {
 
       // Check if there's a saved partial game for this episode
       const savedState = loadGameState()
-      if (savedState && savedState.episodeMeta &&
+      if (isResumable(savedState) &&
           (savedState.episodeMeta.episodeId === episode.episodeId ||
            savedState.episodeMeta.episodeNumber === episode.episodeNumber)) {
         setResumePrompt(savedState)
@@ -2696,7 +2704,9 @@ function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards }) {
     else if (sourceFilter === 'leeches') filtered = filtered.filter(c => (c.lapses || 0) >= 4)
     else if (sourceFilter === 'board') filtered = filtered.filter(c => !c.id?.startsWith('drill-') && c.source !== 'manual' && c.source !== 'anki')
     else if (sourceFilter !== 'all') filtered = filtered.filter(c => c.source === sourceFilter)
-    if (strugglingOnly === true) filtered = filtered.filter(c => c.repetitions === 0 || (c.lapses || 0) > 0)
+    // lapses is a lifetime count, so >= 2 keeps this meaning "actively problematic"
+    // rather than "missed once at some point".
+    if (strugglingOnly === true) filtered = filtered.filter(c => c.repetitions === 0 || (c.lapses || 0) >= 2)
     if (strugglingOnly === 'hard') filtered = filtered.filter(c => c.easeFactor < 2.0 && c.repetitions > 0)
     if (categoryFilter !== 'all') filtered = filtered.filter(c => getMetaCategory(c.category?.split(' · ')[0] || c.category || '') === categoryFilter)
     return filtered
@@ -2875,7 +2885,7 @@ function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards }) {
             <div style={S.toggleGroup}>
               <button style={{ ...S.toggleBtn, ...(!strugglingOnly ? S.toggleActive : {}) }} onClick={() => setStrugglingOnly(false)}>All</button>
               <button style={{ ...S.toggleBtn, ...(strugglingOnly === 'hard' ? S.toggleActive : {}) }} onClick={() => setStrugglingOnly('hard')}>🟡 Hard ({cards.filter(c => c.easeFactor < 2.0 && c.repetitions > 0).length})</button>
-              <button style={{ ...S.toggleBtn, ...(strugglingOnly === true ? S.toggleActive : {}) }} onClick={() => setStrugglingOnly(true)}>🔴 Struggling ({cards.filter(c => c.repetitions === 0 || (c.lapses || 0) > 0).length})</button>
+              <button style={{ ...S.toggleBtn, ...(strugglingOnly === true ? S.toggleActive : {}) }} onClick={() => setStrugglingOnly(true)}>🔴 Struggling ({cards.filter(c => c.repetitions === 0 || (c.lapses || 0) >= 2).length})</button>
             </div>
           </div>
 

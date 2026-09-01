@@ -66,15 +66,22 @@ describe('sm2 lapse counting (drives leech detection)', () => {
     expect(c.lapses).toBe(3)
   })
 
-  // DeckView flags leeches at lapses >= 4, but a single correct answer wipes the
-  // count — so only four failures in a row can ever raise the flag. A card failed
-  // twenty times with an occasional success never registers, which is exactly the
-  // card the leech filter is meant to surface.
-  it('DOCUMENTS CURRENT BEHAVIOUR: any success resets the lapse count to zero', () => {
+  // Lapses are a lifetime count. Resetting them on success meant the leech filter
+  // (lapses >= 4) could only fire on four consecutive failures, so the card it most
+  // needed to surface — repeatedly failed, occasionally right — never qualified.
+  it('keeps counting across successes, so leeches accumulate', () => {
     let c = newCard('f', 'b')
     c = sm2(c, 0); c = sm2(c, 0); c = sm2(c, 0)
     expect(c.lapses).toBe(3)
-    c = sm2(c, 2) // one Good
-    expect(c.lapses).toBe(0)
+    c = sm2(c, 2) // one Good must not wipe the history
+    expect(c.lapses).toBe(3)
+    c = sm2(c, 0)
+    expect(c.lapses).toBe(4) // now correctly flagged as a leech
+  })
+
+  it('reaches the leech threshold despite alternating success and failure', () => {
+    let c = newCard('f', 'b')
+    for (let i = 0; i < 4; i++) { c = sm2(c, 0); c = sm2(c, 2) }
+    expect(c.lapses).toBe(4)
   })
 })

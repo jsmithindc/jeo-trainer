@@ -1,11 +1,34 @@
+// Without an allowlist the `url` parameter turns this into an open proxy: anyone can
+// have our Netlify function fetch any URL and read the response back, on our bandwidth
+// and from inside Netlify's network. Only the hosts the app actually needs are allowed.
+const ALLOWED_HOSTS = new Set([
+  'upload.wikimedia.org',
+  'commons.wikimedia.org',
+  'en.wikipedia.org',
+])
+
+function isAllowed(raw) {
+  try {
+    const u = new URL(raw)
+    if (u.protocol !== 'https:') return false
+    return ALLOWED_HOSTS.has(u.hostname)
+  } catch {
+    return false
+  }
+}
+
 export const handler = async (event) => {
   const title = event.queryStringParameters?.title
   const directUrl = event.queryStringParameters?.url
   if (!title && !directUrl) return { statusCode: 400, body: 'Missing title or url' }
 
   const headers = {
-    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Origin': 'https://jeotrainer.netlify.app',
     'Cache-Control': 'public, max-age=604800',
+  }
+
+  if (directUrl && !isAllowed(directUrl)) {
+    return { statusCode: 400, headers, body: 'URL host not allowed' }
   }
   const ua = 'JeoTrainer/1.0 (jsmithindc@gmail.com)'
 
@@ -24,6 +47,10 @@ export const handler = async (event) => {
     }
 
     if (!imgUrl) return { statusCode: 404, headers, body: 'No image found' }
+
+    // The title path derives its URL from the Wikipedia API response, which is still
+    // external input — check the final URL too, not just the caller-supplied one.
+    if (!isAllowed(imgUrl)) return { statusCode: 400, headers, body: 'Resolved host not allowed' }
 
     const imgRes = await fetch(imgUrl, { headers: { 'User-Agent': ua } })
     if (!imgRes.ok) return { statusCode: imgRes.status, headers, body: 'Fetch failed: ' + imgRes.status }

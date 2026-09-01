@@ -1,8 +1,11 @@
 import { useState, useEffect, useRef } from 'react'
 import { getMediaUrl } from './mediaStore.js'
+import { sanitizeCardHtml } from './sanitize.js'
 
 /**
- * Renders card content — either plain text or sanitized Anki HTML with media.
+ * Renders card content — either plain text or Anki HTML with media.
+ * All HTML is sanitised here, at the point of injection, so cards imported before
+ * sanitising was fixed (and already synced to Supabase) are covered too.
  * For cards with hasMedia=true, resolves img/audio references from IndexedDB.
  */
 export function CardContent({ content, style, isHtml = false }) {
@@ -31,8 +34,10 @@ export function CardContent({ content, style, isHtml = false }) {
           if (url && !cancelled) {
             urlsRef.current.push(url)
             // Replace the data-anki-src placeholder with the real object URL
+            // Match the marker on its own: sanitising may reorder or drop a
+            // neighbouring empty src, so pairing them would break silently.
             html = html.replace(
-              new RegExp(`data-anki-src="${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}" src=""`,'g'),
+              new RegExp(`data-anki-src="${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`, 'g'),
               `src="${url}"`
             )
           }
@@ -61,7 +66,7 @@ export function CardContent({ content, style, isHtml = false }) {
         }
       }
 
-      if (!cancelled) setResolvedHtml(html)
+      if (!cancelled) setResolvedHtml(sanitizeCardHtml(html))
     }
 
     resolve()
@@ -78,7 +83,9 @@ export function CardContent({ content, style, isHtml = false }) {
     return <span style={style}>{content}</span>
   }
 
-  const htmlToRender = resolvedHtml || initialHtml || content
+  // Sanitise the pre-resolution fallback too — it renders on the first paint,
+  // before the media effect has run.
+  const htmlToRender = resolvedHtml || sanitizeCardHtml(initialHtml || content)
 
   return (
     <div

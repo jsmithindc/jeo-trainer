@@ -2,6 +2,7 @@ import JSZip from 'jszip'
 import { newCard } from './srs.js'
 import { storeMedia, getMimeType, isImage, isAudio } from './mediaStore.js'
 import { uploadMedia } from './supabase.js'
+import { sanitizeCardHtml } from './sanitize.js'
 
 /**
  * Parse an Anki .apkg file.
@@ -186,7 +187,7 @@ export async function parseApkg(file, onProgress = null, user = null) {
  * - If user is logged in and media was uploaded, use public Supabase URLs
  * - Otherwise, mark with data-anki-src for local IndexedDB resolution
  * - Convert [sound:] tags to <audio> elements
- * - Strip dangerous HTML
+ * - Sanitise via DOMPurify
  */
 function processAnkiHtml(html, mediaIndex, user) {
   if (!html) return ''
@@ -219,17 +220,13 @@ function processAnkiHtml(html, mediaIndex, user) {
     }
 
     // Fall back to local IndexedDB reference
-    return `<img${pre}data-anki-src="anki:${src}" src=""${post} style="max-width:100%;height:auto;border-radius:6px">`
+    return `<img${pre}data-anki-src="anki:${src}"${post} style="max-width:100%;height:auto;border-radius:6px">`
   })
 
-  // Remove dangerous content
-  html = html
-    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-    .replace(/\son\w+="[^"]*"/gi, '')
-    .replace(/javascript:/gi, '')
-
-  return html.trim()
+  // Sanitise before the card is ever stored. CardContent sanitises again at render,
+  // which is what actually protects you — this keeps the stored copy clean as well,
+  // so a payload never reaches Supabase or an export.
+  return sanitizeCardHtml(html).trim()
 }
 
 /**

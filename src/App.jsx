@@ -12,7 +12,7 @@ import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpi
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 import { DrillsView } from './drills.jsx'
 
-const APP_VERSION = '2.5.5'
+const APP_VERSION = '2.5.6'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -1062,8 +1062,14 @@ export default function App() {
       {showBrowser && (
         <EpisodeBrowser
           currentEpisodeId={episodeMeta?.episodeId}
-          playedGameIds={new Set(gameHistory.map(g => g.gameId).filter(Boolean))}
-          lastPlayedGameId={gameHistory.length > 0 ? gameHistory[0].gameId : null}
+          // Oldest first so the newest entry wins if an episode was replayed.
+          // Ids are stringified because older history rows stored them as numbers.
+          playedGames={new Map(
+            [...gameHistory].reverse()
+              .filter(g => g.gameId)
+              .map(g => [String(g.gameId), g])
+          )}
+          lastPlayedGameId={gameHistory.length > 0 ? String(gameHistory[0].gameId) : null}
           onSelect={(gameId, episodes, index) => {
             setShowBrowser(false)
             setEpisodeList(episodes)
@@ -2039,7 +2045,7 @@ function CategorySearch({ onSelect, onClose }) {
 }
 
 // ─── Episode Browser Modal ────────────────────────────────────────────────────
-function EpisodeBrowser({ onSelect, onClose, currentEpisodeId, playedGameIds, lastPlayedGameId }) {
+function EpisodeBrowser({ onSelect, onClose, currentEpisodeId, playedGames = new Map(), lastPlayedGameId }) {
   const [episodes, setEpisodes] = useState([])
   const [seasons, setSeasons] = useState([])
   const [selectedSeason, setSelectedSeason] = useState('')
@@ -2089,24 +2095,46 @@ function EpisodeBrowser({ onSelect, onClose, currentEpisodeId, playedGameIds, la
             {seasons.filter((s, i, arr) => arr.findIndex(x => x.id === s.id) === i).map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
           </select>
         </div>
+        {!loading && !error && episodes.length > 0 && (() => {
+          const playedHere = episodes.filter(ep => playedGames.has(String(ep.gameId))).length
+          return (
+            <div style={S.browserCount}>
+              <span>{episodes.length} episode{episodes.length !== 1 ? 's' : ''}</span>
+              <span style={{ color: playedHere ? '#4caf7d' : '#3a4570' }}>
+                ✓ {playedHere} played
+              </span>
+            </div>
+          )
+        })()}
         <div style={S.browserList}>
           {loading && <div style={S.browserLoading}>⏳ Loading episodes...</div>}
           {error && <div style={{ ...S.loadError, margin: 12 }}>{error}</div>}
           {!loading && !error && episodes.length === 0 && <div style={S.browserLoading}>No episodes found</div>}
-          {!loading && episodes.map((ep, i) => (
-            <button key={ep.gameId} style={{
-              ...S.episodeRow,
-              background: ep.gameId === currentEpisodeId ? 'rgba(245,197,24,0.08)' : undefined,
-              borderLeft: ep.gameId === currentEpisodeId ? '2px solid #f5c518' : ep.gameId === lastPlayedGameId ? '2px solid #4caf7d' : '2px solid transparent',
-            }} onClick={() => onSelect(ep.gameId, episodes, i)}>
-              <span style={{ width: 16, textAlign: 'center', fontSize: 11, flexShrink: 0, color: ep.gameId === currentEpisodeId ? '#f5c518' : '#4caf7d' }}>
-                {ep.gameId === currentEpisodeId ? '▶' : ep.gameId === lastPlayedGameId ? '✓' : ''}
-              </span>
-              <span style={S.epDate}>{ep.airDate}</span>
-              <span style={{ fontSize: 10, color: '#4060a0' }}>#{ep.gameId}</span>
-              <span style={S.epArrow}>▶</span>
-            </button>
-          ))}
+          {!loading && episodes.map((ep, i) => {
+            const id = String(ep.gameId)
+            const isCurrent = id === String(currentEpisodeId)
+            const played = playedGames.get(id)
+            const isLastPlayed = id === lastPlayedGameId
+            return (
+              <button key={ep.gameId} style={{
+                ...S.episodeRow,
+                background: isCurrent ? 'rgba(245,197,24,0.08)' : played ? 'rgba(76,175,125,0.045)' : undefined,
+                borderLeft: isCurrent ? '2px solid #f5c518' : isLastPlayed ? '2px solid #4caf7d' : '2px solid transparent',
+              }} onClick={() => onSelect(ep.gameId, episodes, i)}>
+                <span style={{ width: 16, textAlign: 'center', fontSize: 11, flexShrink: 0, color: isCurrent ? '#f5c518' : '#4caf7d' }}>
+                  {isCurrent ? '▶' : played ? '✓' : ''}
+                </span>
+                <span style={{ ...S.epDate, color: played && !isCurrent ? '#7a89b4' : S.epDate.color }}>{ep.airDate}</span>
+                {played && (
+                  <span style={S.epScore} title={`Coryat ${played.coryatScore?.toLocaleString() ?? '—'}`}>
+                    ${played.coryatScore?.toLocaleString() ?? '—'}
+                  </span>
+                )}
+                <span style={{ fontSize: 10, color: '#4060a0' }}>#{ep.gameId}</span>
+                <span style={S.epArrow}>▶</span>
+              </button>
+            )
+          })}
         </div>
       </div>
     </div>
@@ -4006,11 +4034,13 @@ const S = {
   browserTitle: { fontFamily: "'Bebas Neue', sans-serif", fontSize: 20, color: '#f5c518', letterSpacing: 2 },
   browserControls: { display: 'flex', gap: 8, padding: '12px 16px', borderBottom: '1px solid #1a2040' },
   seasonSelect: { background: '#060b1a', border: '1px solid #1a2460', borderRadius: 8, color: '#e8e8f0', fontSize: 12, padding: '8px 10px', fontFamily: "'Barlow Condensed', sans-serif" },
+  browserCount: { display: 'flex', justifyContent: 'space-between', padding: '7px 20px', fontSize: 10, letterSpacing: 1.5, color: '#4060a0', borderBottom: '1px solid #0f1530' },
   browserList: { flex: 1, overflowY: 'auto', padding: '8px 0' },
   browserLoading: { textAlign: 'center', color: '#6070a0', padding: '24px', fontSize: 13 },
   episodeRow: { display: 'flex', alignItems: 'center', gap: 12, padding: '11px 20px', width: '100%', textAlign: 'left', borderBottom: '1px solid #0f1530', background: 'none' },
   epShowNum: { fontFamily: "'Bebas Neue', sans-serif", fontSize: 18, color: '#f5c518', minWidth: 70 },
   epDate: { flex: 1, fontSize: 13, color: '#a0acd0' },
+  epScore: { fontSize: 11, color: '#4caf7d', fontVariantNumeric: 'tabular-nums', flexShrink: 0 },
   epArrow: { fontSize: 12, color: '#2a3580' },
 
   overlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: 16 },

@@ -113,7 +113,8 @@ export function getDailyStats() {
 
 export function incrementDailyCards(n = 1) {
   const stats = getDailyStats()
-  stats.cardsReviewed = (stats.cardsReviewed || 0) + n
+  // n can be negative when a rating is undone; never let the day's count go below 0.
+  stats.cardsReviewed = Math.max(0, (stats.cardsReviewed || 0) + n)
   localStorage.setItem(DAILY_STATS_KEY, JSON.stringify(stats))
   return stats.cardsReviewed
 }

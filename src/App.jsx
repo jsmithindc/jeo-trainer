@@ -16,7 +16,7 @@ import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, T
 // than half the bundle, and none of it is needed unless the Drills tab is opened.
 const DrillsView = lazy(() => import('./drills.jsx').then(m => ({ default: m.DrillsView })))
 
-const APP_VERSION = '2.6.6'
+const APP_VERSION = '2.7.0'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -2676,6 +2676,7 @@ function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards }) {
   const [showCustom, setShowCustom] = useState(false)
   const [editingCard, setEditingCard] = useState(null) // card being edited in-session
   const [confirmDeleteStudy, setConfirmDeleteStudy] = useState(null) // card id pending delete
+  const [lastRating, setLastRating] = useState(null) // one level of undo for a misgrade
   const [editFront, setEditFront] = useState('')
   const [editBack, setEditBack] = useState('')
 
@@ -2741,6 +2742,7 @@ function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards }) {
     setFlipped(false)
     setSessionStats({ again: 0, hard: 0, good: 0, easy: 0 })
     setChunkStats({ again: 0, hard: 0, good: 0, easy: 0 })
+    setLastRating(null)
     setPhase('session')
   }
 
@@ -2748,8 +2750,10 @@ function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards }) {
     const currentChunk = allChunks[chunkIdx] || []
     const card = currentChunk[cardIdx]
     if (!card) return
+    // Snapshot the card's schedule before sm2 rewrites it. A misgrade otherwise costs
+    // that card's interval permanently, with no way back.
+    setLastRating({ card, label, cardIdx, chunkIdx, phaseBefore: phase })
     setCards(prev => prev.map(c => c.id === card.id ? sm2(card, quality) : c))
-    const statUpdate = { again: 0, hard: 0, good: 0, easy: 0, [label]: 1 }
     setSessionStats(prev => ({ ...prev, [label]: prev[label] + 1 }))
     setChunkStats(prev => ({ ...prev, [label]: prev[label] + 1 }))
     const nextCard = cardIdx + 1
@@ -2760,6 +2764,21 @@ function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards }) {
       setCardIdx(nextCard)
       setFlipped(false)
     }
+  }
+
+  // Restore the card exactly as it was, rewind the counters, and return to it.
+  function undoLastRating() {
+    if (!lastRating) return
+    const { card, label, cardIdx: idx, chunkIdx: cidx, phaseBefore } = lastRating
+    setCards(prev => prev.map(c => (c.id === card.id ? card : c)))
+    setSessionStats(prev => ({ ...prev, [label]: Math.max(0, prev[label] - 1) }))
+    setChunkStats(prev => ({ ...prev, [label]: Math.max(0, prev[label] - 1) }))
+    setDailyCards(incrementDailyCards(-1))
+    setChunkIdx(cidx)
+    setCardIdx(idx)
+    setPhase(phaseBefore)
+    setFlipped(true) // they were looking at the answer when they graded it
+    setLastRating(null)
   }
 
   const currentChunk = allChunks[chunkIdx] || []
@@ -2977,6 +2996,13 @@ function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards }) {
       <div style={S.studyTitle}>
         {chunksRemaining === 0 ? 'ALL DONE!' : `SESSION ${chunkIdx + 1} COMPLETE`}
       </div>
+      {/* Misgrading the final card lands here, so undo has to be reachable. */}
+      {lastRating && (
+        <button
+          style={{ fontSize: 11, color: '#f5c518', background: 'none', border: '1px solid #3a3010', borderRadius: 6, padding: '4px 12px', cursor: 'pointer', letterSpacing: 1 }}
+          onClick={undoLastRating}
+        >↩ Undo last card ({lastRating.label})</button>
+      )}
 
       {/* Chunk stats */}
       <div style={S.statsGrid}>
@@ -3039,11 +3065,14 @@ function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards }) {
           Session {chunkIdx + 1}/{totalChunks} · Card {cardIdx + 1}/{currentChunk.length}
           <div style={{ fontSize: 9, color: '#4060a0', letterSpacing: 2, marginTop: 1 }}>TODAY: {dailyCards} REVIEWED</div>
         </div>
+        {/* Replaces the old "Prev", which rewound the card index without undoing the
+            rating — so re-grading ran sm2 a second time on an already-updated card. */}
         <button
-          style={{ fontSize: 11, color: cardIdx > 0 ? '#4060a0' : '#2a3460', letterSpacing: 1, cursor: cardIdx > 0 ? 'pointer' : 'default' }}
-          onClick={() => { if (cardIdx > 0) { setCardIdx(cardIdx - 1); setFlipped(false) } }}
-          disabled={cardIdx === 0}
-        >Prev ↩</button>
+          style={{ fontSize: 11, color: lastRating ? '#f5c518' : '#2a3460', letterSpacing: 1, cursor: lastRating ? 'pointer' : 'default' }}
+          onClick={undoLastRating}
+          disabled={!lastRating}
+          title={lastRating ? `Undo "${lastRating.label}"` : 'Nothing to undo'}
+        >↩ Undo</button>
       </div>
       <div style={S.progressOuter}><div style={{ ...S.progressInner, width: `${(cardIdx / currentChunk.length) * 100}%` }} /></div>
       <div style={S.flashCard} onClick={() => setFlipped(!flipped)}>

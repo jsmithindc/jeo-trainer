@@ -4,12 +4,33 @@ const GAME_STATE_KEY = 'coryat-game-state-v1'
 const EPISODE_CACHE_KEY = 'coryat-episode-cache-v1'
 
 function get(key) { try { return JSON.parse(localStorage.getItem(key)) } catch { return null } }
-function set(key, val) { try { localStorage.setItem(key, JSON.stringify(val)) } catch {} }
+
+// A silent write failure is how a deck disappears: the app keeps showing cards that
+// were never persisted, and the next reload loses everything since the last good
+// write. Report failures so callers can surface them instead of guessing.
+let onStorageError = null
+export function setStorageErrorHandler(fn) { onStorageError = fn }
+
+function set(key, val) {
+  try {
+    localStorage.setItem(key, JSON.stringify(val))
+    return true
+  } catch (err) {
+    const quota = err?.name === 'QuotaExceededError' || err?.code === 22
+    console.error('[storage] write failed:', key, err?.name || err)
+    if (onStorageError) {
+      onStorageError(quota
+        ? 'Out of local storage — recent changes were not saved. Free space in Settings, or sign in so your data syncs.'
+        : `Could not save locally (${err?.name || 'unknown error'}). Recent changes may be lost.`)
+    }
+    return false
+  }
+}
 
 export function loadCards() { return get(CARDS_KEY) || [] }
-export function saveCards(cards) { set(CARDS_KEY, cards) }
+export function saveCards(cards) { return set(CARDS_KEY, cards) }
 export function loadGameHistory() { return get(GAMES_KEY) || [] }
-export function saveGameHistory(games) { set(GAMES_KEY, games) }
+export function saveGameHistory(games) { return set(GAMES_KEY, games) }
 
 // ── In-progress game state ────────────────────────────────────────────────────
 export function loadGameState() { return get(GAME_STATE_KEY) }
@@ -128,42 +149,4 @@ export function clearTrash() {
   localStorage.setItem(TRASH_KEY, JSON.stringify({ date: today, cards: [] }))
 }
 
-// ── Daily deck snapshot (backup before midnight wipe risk) ───────────────────
-const SNAPSHOT_KEY = 'jeo-deck-snapshot'
-
-export function saveDeckSnapshot(cards) {
-  try {
-    const d = new Date()
-    const date = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
-    const existing = JSON.parse(localStorage.getItem(SNAPSHOT_KEY) || '{}')
-    const snapshots = existing.snapshots || []
-    // Strip large image data to keep snapshot small
-    const slim = cards.map(c => {
-      if (!c.image) return c
-      const { image, ...rest } = c
-      return rest
-    })
-    if (snapshots.length && snapshots[0].date === date) {
-      if (Math.abs(snapshots[0].count - slim.length) < 5) return
-      snapshots[0] = { date, count: slim.length, cards: slim }
-    } else {
-      snapshots.unshift({ date, count: slim.length, cards: slim })
-    }
-    localStorage.setItem(SNAPSHOT_KEY, JSON.stringify({ snapshots: snapshots.slice(0, 3) }))
-  } catch (e) {
-    console.warn('Snapshot failed:', e.message)
-  }
-}
-
-export function getDeckSnapshots() {
-  try { return JSON.parse(localStorage.getItem(SNAPSHOT_KEY) || '{}').snapshots || [] }
-  catch { return [] }
-}
-
-export function restoreSnapshot(snapshotIndex = 0) {
-  const snapshots = getDeckSnapshots()
-  if (!snapshots[snapshotIndex]) return null
-  const cards = snapshots[snapshotIndex].cards
-  saveCards(cards)
-  return cards
-}
+// Deck snapshots moved to IndexedDB in v2.6.0 — see snapshotStore.js

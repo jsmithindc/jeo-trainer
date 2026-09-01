@@ -4,16 +4,17 @@ import { loadCards, saveCards, loadGameHistory, saveGameHistory } from './storag
 import { parseApkg, migrateLocalMediaToSupabase } from './ankiImport.js'
 import { SAMPLE_BOARD } from './boardData.js'
 import { migrateFJWagers, backfillDdNet } from './migrations.js'
+import { saveDeckSnapshot, getDeckSnapshots, restoreSnapshot, ensureSnapshotsMigrated } from './snapshotStore.js'
 import { fetchEpisode, episodeToBoard, searchEpisodesByCategory } from './jarchive.js'
 import { supabase, signIn, signUp, resetPassword, signOut, loadRemoteData, saveRemoteData, mergeData, saveGameStateRemote, loadGameStateRemote, uploadMedia } from './supabase.js'
 import { buildCategoryHeatMap, buildValueBreakdown, predictCoryat, exportToApkg, getMetaCategory, META_CATEGORY_NAMES } from './analytics.js'
 import { CardContent, cardIsHtml } from './CardContent.jsx'
 import { getMediaStats, clearAllMedia, getMedia } from './mediaStore.js'
-import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpisodeToCache, getEpisodeFromCache, pinEpisode, unpinEpisode, removeEpisodeFromCache, getCacheStats, getDailyStats, incrementDailyCards, addToTrash, getTrash, restoreFromTrash, saveDeckSnapshot, getDeckSnapshots, restoreSnapshot } from './storage.js'
+import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpisodeToCache, getEpisodeFromCache, pinEpisode, unpinEpisode, removeEpisodeFromCache, getCacheStats, getDailyStats, incrementDailyCards, addToTrash, getTrash, restoreFromTrash, setStorageErrorHandler } from './storage.js'
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 import { DrillsView } from './drills.jsx'
 
-const APP_VERSION = '2.5.9'
+const APP_VERSION = '2.6.0'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -138,6 +139,20 @@ export default function App() {
       setUser(session?.user ?? null)
     })
     return () => subscription.unsubscribe()
+  }, [])
+
+  // Surface failed local writes through the same banner as sync errors, rather
+  // than letting the app show cards that were never actually saved.
+  useEffect(() => {
+    setStorageErrorHandler(msg => setSyncError(msg))
+    return () => setStorageErrorHandler(null)
+  }, [])
+
+  // Move deck snapshots out of localStorage (~2.3 MB) into IndexedDB.
+  useEffect(() => {
+    ensureSnapshotsMigrated()
+      .then(n => { if (n > 0) console.info(`[migration] moved ${n} deck snapshot(s) to IndexedDB`) })
+      .catch(() => {})
   }, [])
 
   // ── Load local data ───────────────────────────────────────────────────────
@@ -299,7 +314,7 @@ export default function App() {
   useEffect(() => {
     if (!storageReady) return
     saveCards(cards)
-    if (cards.length > 10) saveDeckSnapshot(cards)
+    if (cards.length > 10) saveDeckSnapshot(cards).catch(() => {})
     saveGameHistory(gameHistory)
     if (user) {
       clearTimeout(syncTimeout.current)
@@ -3165,8 +3180,8 @@ function DeckView({ cards, setCards, user, onBack }) {
   const [confirmDelete, setConfirmDelete] = useState(null)
   const [trash, setTrash] = useState(() => getTrash().cards)
   const [showTrash, setShowTrash] = useState(false)
-  const [snapshots, setSnapshots] = useState(() => getDeckSnapshots())
-  useEffect(() => { setSnapshots(getDeckSnapshots()) }, [cards.length])
+  const [snapshots, setSnapshots] = useState([])
+  useEffect(() => { let live = true; getDeckSnapshots().then(s => { if (live) setSnapshots(s) }); return () => { live = false } }, [cards.length])
   const [importing, setImporting] = useState(false)
   const [importResult, setImportResult] = useState(null)
   const [importError, setImportError] = useState(null)
@@ -3476,10 +3491,11 @@ function DeckView({ cards, setCards, user, onBack }) {
                   <div style={{ fontSize: 10, color: '#4060a0' }}>{s.count} cards</div>
                 </div>
                 <button style={{ fontSize: 11, color: '#f5c518', border: '1px solid #3a3010', borderRadius: 6, padding: '3px 10px', background: '#1a1500', cursor: 'pointer' }}
-                  onClick={() => {
+                  onClick={async () => {
                     if (!confirm(`Restore ${s.count} cards from ${s.date}? This will overwrite your current deck.`)) return
-                    const restored = restoreSnapshot(i)
+                    const restored = await restoreSnapshot(i)
                     if (restored) { setCards(restored); alert(`Restored ${restored.length} cards`) }
+                    else alert('Could not read that snapshot.')
                   }}>Restore</button>
               </div>
             ))}

@@ -18,9 +18,31 @@ async function quietNavigatorLock(name, acquireTimeout, fn) {
   try {
     return await navigatorLock(name, acquireTimeout, fn)
   } catch (err) {
-    if (acquireTimeout === 0 && err instanceof NavigatorLockAcquireTimeoutError) return undefined
+    // Match on the library's own duck-typed flag as well as the class: the bundled
+    // copy and any transitively duplicated one are not necessarily the same identity,
+    // and instanceof alone was not catching this in the browser.
+    const isAcquireTimeout = err instanceof NavigatorLockAcquireTimeoutError || err?.isAcquireTimeout === true
+    if (isAcquireTimeout) return undefined // someone else holds it; the next tick refreshes
     throw err
   }
+}
+
+// The wrapper above should be enough, but the rejection was still reaching the console
+// after it shipped, and a minified async stack was not enough to prove which branch let
+// it through. This catches it wherever it originates.
+//
+// Deliberately narrow: it matches only this one benign message — a token refresh that
+// declined to wait for a lock another context already held — and every other rejection
+// is left completely untouched so real failures still surface.
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('unhandledrejection', event => {
+    const message = event?.reason?.message
+    if (typeof message === 'string' &&
+        message.includes('Navigator LockManager lock') &&
+        message.includes('immediately failed')) {
+      event.preventDefault()
+    }
+  })
 }
 
 // Only override where the Web Locks API actually exists; elsewhere supabase-js picks

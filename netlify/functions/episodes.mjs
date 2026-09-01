@@ -46,8 +46,19 @@ export const handler = async (event) => {
     const seasonsHtml = await seasonsRes.text()
 
     // Extract numeric seasons only (skip special ones like "cwcpi", "goattournament")
+    // The page links the current and previous seasons twice (shortcuts at the top,
+    // then again in the main table), so dedupe by id — cross-season navigation
+    // relies on adjacency in this list being real.
     const seasonMatches = [...seasonsHtml.matchAll(/href="showseason\.php\?season=(\d+)"[^>]*>([^<]+)</g)]
-    const seasons = seasonMatches.map(m => ({ id: m[1], label: m[2].trim() }))
+    const seenSeasons = new Set()
+    const seasons = seasonMatches
+      .map(m => ({ id: m[1], label: m[2].trim() }))
+      .filter(s => {
+        if (seenSeasons.has(s.id)) return false
+        seenSeasons.add(s.id)
+        return true
+      })
+      .sort((a, b) => parseInt(b.id) - parseInt(a.id))
 
     if (seasons.length === 0) {
       return { statusCode: 502, headers, body: JSON.stringify({ error: 'No seasons found', htmlLength: seasonsHtml.length }) }

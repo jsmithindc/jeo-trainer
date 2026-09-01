@@ -12,7 +12,7 @@ import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpi
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 import { DrillsView } from './drills.jsx'
 
-const APP_VERSION = '2.5.4'
+const APP_VERSION = '2.5.5'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -46,8 +46,10 @@ export default function App() {
   const [episodeMeta, setEpisodeMeta] = useState(null)
   const [episodeData, setEpisodeData] = useState(null)
   const [round, setRound] = useState('single')
-  const [episodeList, setEpisodeList] = useState([]) // for prev/next nav
+  const [episodeList, setEpisodeList] = useState([]) // current season, for prev/next nav
   const [currentEpIndex, setCurrentEpIndex] = useState(-1)
+  const [seasons, setSeasons] = useState([])            // all seasons, for cross-season nav
+  const [seasonNavLoading, setSeasonNavLoading] = useState(false)
   const [boardLoading, setBoardLoading] = useState(true)
   const [boardError, setBoardError] = useState(null)
 
@@ -165,6 +167,7 @@ export default function App() {
     fetch('/.netlify/functions/episodes')
       .then(r => r.json())
       .then(data => {
+        if (data.seasons?.length) setSeasons(data.seasons)
         if (data.episodes?.length) {
           setEpisodeList(data.episodes)
           setCurrentEpIndex(0) // latest is index 0
@@ -195,6 +198,7 @@ export default function App() {
     fetch('/.netlify/functions/episodes')
       .then(r => r.json())
       .then(data => {
+        if (data.seasons?.length) setSeasons(data.seasons)
         if (!data.episodes?.length) { loadLatestFallback(); return }
         setEpisodeList(data.episodes)
 
@@ -355,7 +359,11 @@ export default function App() {
       const unplayed = eps.filter(ep => !playedIds.has(String(ep.gameId)))
       const pool = unplayed.length > 0 ? unplayed : eps
       const pick = pool[Math.floor(Math.random() * pool.length)]
-      if (pick) loadEpisode(pick.gameId)
+      if (pick) {
+        // Adopt this season as the nav context so prev/next work from here
+        setEpisodeList(eps)
+        loadEpisode(pick.gameId)
+      }
     } catch {
       // Fallback to episodeList
       const pick = episodeList[Math.floor(Math.random() * episodeList.length)]
@@ -809,14 +817,65 @@ export default function App() {
     setShowFJ(false)
   }
 
-  // ── Prev/next episode via episode list ────────────────────────────────────
-  function navigateEpisode(dir) {
-    if (episodeList.length === 0 || currentEpIndex < 0) return
+  // ── Prev/next episode, rolling across season boundaries ───────────────────
+  // episodeList holds one season, newest-first. dir = +1 goes back in time.
+  // Dedupe defensively: j-archive lists the newest two seasons twice, and a
+  // duplicate here would make a season look adjacent to itself.
+  const orderedSeasons = [...new Map(seasons.map(s => [String(s.id), s])).values()]
+    .sort((a, b) => parseInt(b.id) - parseInt(a.id))
+  const currentSeasonId = episodeList[0]?.season ?? null
+  const seasonIdx = currentSeasonId == null
+    ? -1
+    : orderedSeasons.findIndex(s => String(s.id) === String(currentSeasonId))
+  const olderSeason = seasonIdx >= 0 ? orderedSeasons[seasonIdx + 1] : null
+  const newerSeason = seasonIdx > 0 ? orderedSeasons[seasonIdx - 1] : null
+
+  const navAnchored = currentEpIndex >= 0 && episodeList.length > 0
+  const canGoPrev = navAnchored && !seasonNavLoading &&
+    (currentEpIndex < episodeList.length - 1 || !!olderSeason)
+  const canGoNext = navAnchored && !seasonNavLoading &&
+    (currentEpIndex > 0 || !!newerSeason)
+
+  async function navigateEpisode(dir) {
+    if (!navAnchored || seasonNavLoading) return
+
     const newIndex = currentEpIndex + dir
-    if (newIndex < 0 || newIndex >= episodeList.length) return
-    setCurrentEpIndex(newIndex)
-    loadEpisode(episodeList[newIndex].gameId)
+    if (newIndex >= 0 && newIndex < episodeList.length) {
+      setCurrentEpIndex(newIndex)
+      loadEpisode(episodeList[newIndex].gameId)
+      return
+    }
+
+    // Walked off an edge — pull in the adjacent season and continue into it.
+    const target = dir === 1 ? olderSeason : newerSeason
+    if (!target) return // start or end of the archive
+
+    setSeasonNavLoading(true)
+    try {
+      const res = await fetch(`/.netlify/functions/episodes?season=${target.id}`)
+      const data = await res.json()
+      const eps = data.episodes || []
+      if (!eps.length) return
+      // Entering an older season lands on its newest show; a newer season on its oldest.
+      const entryIdx = dir === 1 ? 0 : eps.length - 1
+      setEpisodeList(eps)
+      setCurrentEpIndex(entryIdx)
+      await loadEpisode(eps[entryIdx].gameId)
+    } catch {
+      // Leave the user where they are; the season didn't load.
+    } finally {
+      setSeasonNavLoading(false)
+    }
   }
+
+  // Keep the prev/next anchor pointing at whatever episode is actually loaded.
+  // Without this, loading a game from category search or Random leaves the index
+  // pointing into a stale list and prev/next jump somewhere unrelated.
+  useEffect(() => {
+    const id = episodeMeta?.episodeId
+    if (!id || episodeList.length === 0) return
+    setCurrentEpIndex(episodeList.findIndex(ep => String(ep.gameId) === String(id)))
+  }, [episodeMeta, episodeList])
 
   if (!authChecked || (boardLoading && !board)) {
     return (
@@ -890,8 +949,8 @@ export default function App() {
             boardError={boardError}
             onLoadEpisode={loadEpisode}
             onRandomGame={loadRandomUnplayed}
-            canGoPrev={currentEpIndex < episodeList.length - 1}
-            canGoNext={currentEpIndex > 0}
+            canGoPrev={canGoPrev}
+            canGoNext={canGoNext}
             onPrev={() => navigateEpisode(1)}
             onNext={() => navigateEpisode(-1)}
             timedMode={timedMode}

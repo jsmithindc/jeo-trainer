@@ -3,6 +3,9 @@ import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
+  // Drop chatty console.log from the shipped bundle, but keep warn/error/info —
+  // the migration and storage-failure diagnostics rely on those.
+  esbuild: { pure: ['console.log'], drop: ['debugger'] },
   plugins: [
     react(),
     VitePWA({

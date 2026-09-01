@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { saveCards, loadCards } from './storage.js'
-import { WATER_BODIES, WATER_BODY_MAP } from './waterBodies.js'
+// waterBodies.js is 478 KB of Natural Earth polygons, loaded on demand below.
 
 // ─── Generate SVG snapshot of a map region ───────────────────────────────────
 function makeMapSnapshot(targetPath, allPaths, viewPad = 30) {
@@ -794,6 +794,17 @@ function WaterBodiesDrill({ onBack, cards = [], setCards = () => {}, preloadedPa
   const [missCounts, setMissCounts] = useState(() => getDrillMissCounts(drillId))
   const sessionSaved = useRef(false)
 
+  const [waterData, setWaterData] = useState(null)
+  useEffect(() => {
+    let live = true
+    import('./waterBodies.js')
+      .then(m => { if (live) setWaterData({ list: m.WATER_BODIES, map: m.WATER_BODY_MAP }) })
+      .catch(() => { if (live) setWaterData({ list: [], map: {} }) })
+    return () => { live = false }
+  }, [])
+  const WATER_BODIES = waterData?.list || []
+  const WATER_BODY_MAP = waterData?.map || {}
+
   const filteredBodies = WATER_BODIES.filter(w => filter === 'all' || w.type === filter)
   const remaining = filteredBodies.filter(w => !attempted.has(w.name)).length
 
@@ -840,6 +851,14 @@ function WaterBodiesDrill({ onBack, cards = [], setCards = () => {}, preloadedPa
     if (attempted.has(name)) return '#e57373'
     return '#1a3580'
   }
+
+  // All hooks above this point so the order stays stable while the data loads.
+  if (!waterData) return (
+    <div style={{ display:'flex', flexDirection:'column', gap:10, width:'100%' }}>
+      <button style={{ fontSize:12, color:'#4060a0', background:'none', border:'none', cursor:'pointer', textAlign:'left' }} onClick={onBack}>← Back</button>
+      <div style={{ padding:40, textAlign:'center', color:'#4060a0', fontSize:12, letterSpacing:2 }}>LOADING MAP DATA…</div>
+    </div>
+  )
 
   return (
     <div style={{ display:'flex', flexDirection:'column', gap:10, width:'100%' }}>

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense } from 'react'
 import { sm2, newCard, formatRelative, nextDueLabel } from './srs.js'
 import { loadCards, saveCards, loadGameHistory, saveGameHistory } from './storage.js'
 import { parseApkg, migrateLocalMediaToSupabase } from './ankiImport.js'
@@ -12,9 +12,11 @@ import { CardContent, cardIsHtml } from './CardContent.jsx'
 import { getMediaStats, clearAllMedia, getMedia } from './mediaStore.js'
 import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpisodeToCache, getEpisodeFromCache, pinEpisode, unpinEpisode, removeEpisodeFromCache, getCacheStats, getDailyStats, incrementDailyCards, addToTrash, getTrash, restoreFromTrash, setStorageErrorHandler, getTombstones, addTombstones, saveTombstones, removeTombstone } from './storage.js'
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
-import { DrillsView } from './drills.jsx'
+// drills.jsx pulls in the Natural Earth water-body polygons; together they are more
+// than half the bundle, and none of it is needed unless the Drills tab is opened.
+const DrillsView = lazy(() => import('./drills.jsx').then(m => ({ default: m.DrillsView })))
 
-const APP_VERSION = '2.6.2'
+const APP_VERSION = '2.6.3'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -125,6 +127,7 @@ export default function App() {
   const [showCategorySearch, setShowCategorySearch] = useState(false)
 
   const syncTimeout = useRef(null)
+  const lastRemoteGameSave = useRef(0)
 
   const clueStates = round === 'single' ? singleClueStates : doubleClueStates
   const setClueStates = round === 'single' ? setSingleClueStates : setDoubleClueStates
@@ -318,15 +321,40 @@ export default function App() {
     if (cards.length > 10) saveDeckSnapshot(cards).catch(() => {})
     saveGameHistory(gameHistory)
     if (user) {
+      // Every push sends the whole deck (1-2 MB). At a 2s debounce a 100-card study
+      // session re-uploaded it dozens of times. 20s coalesces a session into a
+      // handful of pushes; the flush below covers leaving before the timer fires.
       clearTimeout(syncTimeout.current)
-      syncTimeout.current = setTimeout(() => {
-        setSyncing(true)
-        saveRemoteData(cards, gameHistory, { [new Date().toLocaleDateString()]: getDailyStats().cardsReviewed }, getTombstones())
-          .catch(err => setSyncError(err.message))
-          .finally(() => setSyncing(false))
-      }, 2000)
+      syncTimeout.current = setTimeout(() => { pushRemote() }, 20000)
     }
   }, [cards, gameHistory, storageReady, user])
+
+  // Keep the latest values for the flush, which runs outside the render cycle.
+  const pushPayloadRef = useRef({ cards, gameHistory })
+  useEffect(() => { pushPayloadRef.current = { cards, gameHistory } }, [cards, gameHistory])
+
+  const pushRemote = useCallback(() => {
+    const { cards: c, gameHistory: g } = pushPayloadRef.current
+    setSyncing(true)
+    return saveRemoteData(c, g, { [new Date().toLocaleDateString()]: getDailyStats().cardsReviewed }, getTombstones())
+      .catch(err => setSyncError(err.message))
+      .finally(() => setSyncing(false))
+  }, [])
+
+  // Flush pending work when the tab is backgrounded or closed — on mobile this is
+  // usually how a study session ends, and it is where a long debounce would lose data.
+  useEffect(() => {
+    if (!user) return
+    const flush = () => {
+      if (document.visibilityState === 'hidden' && syncTimeout.current) {
+        clearTimeout(syncTimeout.current)
+        syncTimeout.current = null
+        pushRemote()
+      }
+    }
+    document.addEventListener('visibilitychange', flush)
+    return () => document.removeEventListener('visibilitychange', flush)
+  }, [user, pushRemote])
 
   // ── Card helpers ──────────────────────────────────────────────────────────
   const addMissedAsCard = useCallback((clue, category) => {
@@ -345,11 +373,7 @@ export default function App() {
     // Use refs to get current values (avoids stale closure issues)
     const meta = episodeMetaRef.current || episodeMeta
     const started = gameStartedRef.current || gameStarted
-    if (!meta || !started) {
-      console.log('[Save] Skipped - meta:', !!meta, 'started:', started)
-      return
-    }
-    console.log('[Save] Saving game state...')
+    if (!meta || !started) return
     const state = {
       episodeData,
       episodeMeta: meta,
@@ -366,7 +390,13 @@ export default function App() {
       savedAt: new Date().toISOString(),
     }
     saveGameState(state)
-    if (user) saveGameStateRemote(state).catch(console.error)
+    // The local copy is cheap and guards against a crash mid-game. The remote copy
+    // only has to be good enough to resume on another device, so throttle it — this
+    // used to fire a network write carrying the whole episode on every clue answered.
+    if (user && Date.now() - lastRemoteGameSave.current > 30000) {
+      lastRemoteGameSave.current = Date.now()
+      saveGameStateRemote(state).catch(console.error)
+    }
   }
 
   async function loadRandomUnplayed() {
@@ -424,7 +454,6 @@ export default function App() {
       }
       saveGameState(state)
       if (user) saveGameStateRemote(state).catch(console.error)
-      console.log('[Save] Saved on episode change')
     }
 
     // Reset game complete flag
@@ -518,7 +547,7 @@ export default function App() {
     if (!gameStarted || !episodeMeta) return
     // Don't save if game is complete
     if (gameCompleteRef.current || fjAnswered) return
-    const t = setTimeout(() => autoSaveCurrentGame(), 100)
+    const t = setTimeout(() => autoSaveCurrentGame(), 600)
     return () => clearTimeout(t)
   }, [singleClueStates, doubleClueStates, fjAnswered, gameStarted])
   useEffect(() => { openClueRef.current = openClue }, [openClue])
@@ -732,8 +761,17 @@ export default function App() {
   }
 
   // ── Scores ────────────────────────────────────────────────────────────────
-  const singleBoard = episodeData ? episodeToBoard(episodeData, 'single').board : null
-  const doubleBoard = episodeData?.doubleJeopardy ? episodeToBoard(episodeData, 'double').board : null
+  // Rebuilt only when the episode changes, not on every render. episodeToBoard throws
+  // when a round is missing, and this sits in the render body — an episode restored
+  // from an older saved game used to take the whole app down here.
+  const singleBoard = useMemo(() => {
+    if (!episodeData) return null
+    try { return episodeToBoard(episodeData, 'single').board } catch { return null }
+  }, [episodeData])
+  const doubleBoard = useMemo(() => {
+    if (!episodeData?.doubleJeopardy) return null
+    try { return episodeToBoard(episodeData, 'double').board } catch { return null }
+  }, [episodeData])
   const singleCoryat = calcCoryat(singleClueStates, singleBoard)
   const doubleCoryat = doubleBoard ? calcCoryat(doubleClueStates, doubleBoard) : 0
   const coryatScore = singleCoryat + doubleCoryat
@@ -748,10 +786,17 @@ export default function App() {
       )
     : null
 
-  // All-time correct/wrong/pass totals
-  const allTimeCorrect = gameHistory.reduce((s, g) => s + (g.totalCorrect || 0), 0)
-  const allTimeIncorrect = gameHistory.reduce((s, g) => s + (g.totalIncorrect || 0), 0)
-  const allTimePass = gameHistory.reduce((s, g) => s + (g.totalPass || 0), 0)
+  // All-time totals: one pass over the history when it changes, rather than six on
+  // every render (this component holds ~50 pieces of state, so it re-renders often).
+  const { allTimeCorrect, allTimeIncorrect, allTimePass } = useMemo(() => {
+    let c = 0, i = 0, p = 0
+    for (const g of gameHistory) {
+      c += g.totalCorrect || 0
+      i += g.totalIncorrect || 0
+      p += g.totalPass || 0
+    }
+    return { allTimeCorrect: c, allTimeIncorrect: i, allTimePass: p }
+  }, [gameHistory])
   const allTimeAnswered = allTimeCorrect + allTimeIncorrect + allTimePass
   const pctCorrect = allTimeAnswered > 0 ? Math.round(allTimeCorrect / allTimeAnswered * 100) : null
   const pctIncorrect = allTimeAnswered > 0 ? Math.round(allTimeIncorrect / allTimeAnswered * 100) : null
@@ -1400,7 +1445,11 @@ function StudyTabView({ cards, setCards, user, dueCount, dailyCards, setDailyCar
             {flashcardView === 'deck' && <DeckView cards={cards} setCards={setCards} user={user} onBack={() => setFlashcardView('menu')} />}
           </>
         )}
-        {subTab === 'drills' && <DrillsView cards={cards} setCards={setCards} />}
+        {subTab === 'drills' && (
+          <Suspense fallback={<div style={{ padding: 40, textAlign: 'center', color: '#4060a0', fontSize: 12, letterSpacing: 2 }}>LOADING DRILLS…</div>}>
+            <DrillsView cards={cards} setCards={setCards} />
+          </Suspense>
+        )}
       </div>
     </div>
   )

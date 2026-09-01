@@ -400,3 +400,50 @@ export function buildDailyDoubleStats(gameHistory) {
     biggestWin, biggestLoss, trueDDs,
   }
 }
+
+// ─── Retention ────────────────────────────────────────────────────────────────
+// Retention counts only cards that were already learned (repetitions > 0 at review
+// time). A first-ever encounter being wrong says nothing about how well the schedule
+// is holding — including those would drag the number down and hide the real trend.
+export function buildRetentionSeries(log, { bucketDays = 7, buckets = 8 } = {}) {
+  const DAY = 86400000
+  const now = Date.now()
+  const out = []
+
+  for (let i = buckets - 1; i >= 0; i--) {
+    const end = now - i * bucketDays * DAY
+    const start = end - bucketDays * DAY
+    const inRange = log.filter(e => e.l && e.t > start && e.t <= end)
+    const passed = inRange.filter(e => e.q > 0).length
+    out.push({
+      // Weeks back from now, so the axis reads right-to-left as recency.
+      label: i === 0 ? 'now' : `-${i * bucketDays}d`,
+      n: inRange.length,
+      retention: inRange.length ? Math.round((passed / inRange.length) * 100) : null,
+    })
+  }
+  return out
+}
+
+// A snapshot of deck health from card state alone, available immediately rather than
+// waiting for the log to fill. Mature = an interval long enough that remembering it
+// actually means something.
+export function buildDeckHealth(cards, { matureDays = 21 } = {}) {
+  let mature = 0, learned = 0, lapsed = 0, easeSum = 0, easeCount = 0, leeches = 0
+  for (const c of cards) {
+    if ((c.repetitions || 0) > 0) learned++
+    if ((c.interval || 0) >= matureDays) mature++
+    if ((c.lapses || 0) > 0) lapsed++
+    if ((c.lapses || 0) >= 4) leeches++
+    if (c.easeFactor) { easeSum += c.easeFactor; easeCount++ }
+  }
+  return {
+    total: cards.length,
+    learned,
+    mature,
+    lapsed,
+    leeches,
+    maturePct: cards.length ? Math.round((mature / cards.length) * 100) : 0,
+    avgEase: easeCount ? +(easeSum / easeCount).toFixed(2) : null,
+  }
+}

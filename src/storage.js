@@ -182,3 +182,28 @@ export function saveTombstones(tombstones) { set(TOMBSTONE_KEY, tombstones || []
 export function removeTombstone(id) {
   set(TOMBSTONE_KEY, getTombstones().filter(t => t.id !== id))
 }
+
+// ─── Review log ───────────────────────────────────────────────────────────────
+// True retention — how often a card you had already learned comes back correctly —
+// can't be derived from card state, because each review overwrites the last. It needs
+// a log, so one starts here. Entries are compact ({t}ime, {q}uality, was it a
+// {l}earned card) and capped; this is analytics, not durable data.
+const REVIEW_LOG_KEY = 'jeo-review-log'
+const REVIEW_LOG_LIMIT = 4000
+
+export function getReviewLog() {
+  try { return JSON.parse(localStorage.getItem(REVIEW_LOG_KEY) || '[]') } catch { return [] }
+}
+
+export function logReview(quality, wasLearned) {
+  const log = getReviewLog()
+  log.push({ t: Date.now(), q: quality, l: wasLearned ? 1 : 0 })
+  // Trim from the front so the newest reviews are the ones that survive.
+  set(REVIEW_LOG_KEY, log.length > REVIEW_LOG_LIMIT ? log.slice(-REVIEW_LOG_LIMIT) : log)
+}
+
+export function removeLastReview() {
+  const log = getReviewLog()
+  log.pop()
+  set(REVIEW_LOG_KEY, log)
+}

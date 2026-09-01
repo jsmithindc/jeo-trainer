@@ -7,16 +7,16 @@ import { migrateFJWagers, backfillDdNet } from './migrations.js'
 import { saveDeckSnapshot, getDeckSnapshots, restoreSnapshot, ensureSnapshotsMigrated } from './snapshotStore.js'
 import { fetchEpisode, episodeToBoard, searchEpisodesByCategory } from './jarchive.js'
 import { supabase, signIn, signUp, resetPassword, signOut, loadRemoteData, saveRemoteData, mergeData, saveGameStateRemote, uploadMedia } from './supabase.js'
-import { buildCategoryHeatMap, buildValueBreakdown, predictCoryat, exportToApkg, getMetaCategory, META_CATEGORY_NAMES, buildDailyDoubleStats } from './analytics.js'
+import { buildCategoryHeatMap, buildValueBreakdown, predictCoryat, exportToApkg, getMetaCategory, META_CATEGORY_NAMES, buildDailyDoubleStats, buildRetentionSeries, buildDeckHealth } from './analytics.js'
 import { CardContent, cardIsHtml } from './CardContent.jsx'
 import { getMediaStats, clearAllMedia, getMedia } from './mediaStore.js'
-import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpisodeToCache, getEpisodeFromCache, pinEpisode, unpinEpisode, removeEpisodeFromCache, getCacheStats, getDailyStats, incrementDailyCards, addToTrash, getTrash, restoreFromTrash, setStorageErrorHandler, getTombstones, addTombstones, saveTombstones, removeTombstone } from './storage.js'
+import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpisodeToCache, getEpisodeFromCache, pinEpisode, unpinEpisode, removeEpisodeFromCache, getCacheStats, getDailyStats, incrementDailyCards, addToTrash, getTrash, restoreFromTrash, setStorageErrorHandler, logReview, removeLastReview, getReviewLog, getTombstones, addTombstones, saveTombstones, removeTombstone } from './storage.js'
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 // drills.jsx pulls in the Natural Earth water-body polygons; together they are more
 // than half the bundle, and none of it is needed unless the Drills tab is opened.
 const DrillsView = lazy(() => import('./drills.jsx').then(m => ({ default: m.DrillsView })))
 
-const APP_VERSION = '2.7.1'
+const APP_VERSION = '2.7.2'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -1105,6 +1105,7 @@ export default function App() {
 
         {view === 'summary' && (
           <SummaryView
+            cards={cards}
             predictionBaseDate={predictionBaseDate}
             onResetPredictionBase={() => {
               const base = new Date().toISOString()
@@ -2763,6 +2764,9 @@ function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards, gameHis
     // Snapshot the card's schedule before sm2 rewrites it. A misgrade otherwise costs
     // that card's interval permanently, with no way back.
     setLastRating({ card, label, cardIdx, chunkIdx, phaseBefore: phase })
+    // Judge "was this already learned" from the card as it stands, before sm2
+    // rewrites repetitions — afterwards the answer is always yes.
+    logReview(quality, (card.repetitions || 0) > 0)
     setCards(prev => prev.map(c => c.id === card.id ? sm2(card, quality) : c))
     setSessionStats(prev => ({ ...prev, [label]: prev[label] + 1 }))
     setChunkStats(prev => ({ ...prev, [label]: prev[label] + 1 }))
@@ -2781,6 +2785,7 @@ function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards, gameHis
     if (!lastRating) return
     const { card, label, cardIdx: idx, chunkIdx: cidx, phaseBefore } = lastRating
     setCards(prev => prev.map(c => (c.id === card.id ? card : c)))
+    removeLastReview() // keep the retention log honest about what actually happened
     setSessionStats(prev => ({ ...prev, [label]: Math.max(0, prev[label] - 1) }))
     setChunkStats(prev => ({ ...prev, [label]: Math.max(0, prev[label] - 1) }))
     setDailyCards(incrementDailyCards(-1))
@@ -3757,7 +3762,7 @@ function GameHistoryRow({ game }) {
 }
 
 // ─── Summary / Stats View ─────────────────────────────────────────────────────
-function SummaryView({ predictionBaseDate, onResetPredictionBase, coryatScore, actualScore, fjAnswered, singleBoard, doubleBoard, singleClueStates, doubleClueStates, gameHistory, episodeMeta, tournamentState, confidenceRatings, allTimeCorrect, allTimeIncorrect, allTimePass, allTimeAnswered, pctCorrect, pctIncorrect, pctPass, avgSJ, avgDJ, gamesWithFJ, fjCorrect, pctFJ }) {
+function SummaryView({ cards = [], predictionBaseDate, onResetPredictionBase, coryatScore, actualScore, fjAnswered, singleBoard, doubleBoard, singleClueStates, doubleClueStates, gameHistory, episodeMeta, tournamentState, confidenceRatings, allTimeCorrect, allTimeIncorrect, allTimePass, allTimeAnswered, pctCorrect, pctIncorrect, pctPass, avgSJ, avgDJ, gamesWithFJ, fjCorrect, pctFJ }) {
   const [historyView, setHistoryView] = useState(false)
   const [statsTab, setStatsTab] = useState('current') // current | weakness | speed | history
 
@@ -3957,6 +3962,7 @@ function SummaryView({ predictionBaseDate, onResetPredictionBase, coryatScore, a
       )}
 
       <DailyDoublePanel gameHistory={gameHistory} />
+      <RetentionPanel cards={cards} />
 
       {gameHistory.length > 1 && <ScoreSparkline games={gameHistory.slice(0, 10).reverse()} />}
 
@@ -4203,6 +4209,88 @@ function DailyDoublePanel({ gameHistory }) {
           detail, which is recorded from v2.5.8 onward — play a game to start it.
         </div>
       )}
+    </div>
+  )
+}
+
+// Retention answers the question the deck size can't: is any of this sticking?
+// The series only counts cards that were already learned, so it measures the
+// schedule rather than the difficulty of first encounters.
+function RetentionPanel({ cards = [] }) {
+  const log = useMemo(() => getReviewLog(), [cards.length])
+  const health = useMemo(() => buildDeckHealth(cards), [cards])
+  const series = useMemo(() => buildRetentionSeries(log, { bucketDays: 7, buckets: 8 }), [log])
+
+  if (!cards.length) return null
+
+  const withData = series.filter(b => b.retention !== null)
+  const overall = (() => {
+    const learned = log.filter(e => e.l)
+    if (!learned.length) return null
+    return Math.round((learned.filter(e => e.q > 0).length / learned.length) * 100)
+  })()
+
+  const W = 280, H = 60
+  const pts = series.map((b, i) => ({
+    x: (i / Math.max(1, series.length - 1)) * W,
+    y: b.retention === null ? null : H - ((b.retention - 50) / 50) * H, // 50–100% band
+    b,
+  }))
+  const drawn = pts.filter(p => p.y !== null)
+
+  return (
+    <div style={{ background: '#0a0f2e', borderRadius: 10, padding: '14px 16px', border: '1px solid #1a2460', marginTop: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 10 }}>
+        <span style={{ fontSize: 9, letterSpacing: 3, color: '#6070a0' }}>RETENTION</span>
+        {overall !== null && (
+          <span style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 22, color: overall >= 85 ? '#4caf7d' : overall >= 75 ? '#ffb74d' : '#e57373' }}>
+            {overall}%
+          </span>
+        )}
+      </div>
+
+      {withData.length >= 2 ? (
+        <>
+          <svg viewBox={`0 -8 ${W} ${H + 16}`} style={{ width: '100%', height: 76, overflow: 'visible' }}>
+            {/* 85% is the conventional target band for a healthy schedule */}
+            <line x1="0" x2={W} y1={H - (35 / 50) * H} y2={H - (35 / 50) * H}
+                  stroke="#2a3480" strokeWidth="1" strokeDasharray="3 3" />
+            <polyline
+              points={drawn.map(p => `${p.x},${p.y}`).join(' ')}
+              fill="none" stroke="#4dd0e1" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round"
+            />
+            {drawn.map((p, i) => <circle key={i} cx={p.x} cy={p.y} r="3" fill="#4dd0e1" />)}
+          </svg>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: '#4060a0', letterSpacing: 1 }}>
+            <span>{series[0].label}</span>
+            <span style={{ color: '#2a3480' }}>dashed line = 85% target</span>
+            <span>now</span>
+          </div>
+        </>
+      ) : (
+        <div style={{ fontSize: 10, color: '#4060a0', lineHeight: 1.5, letterSpacing: 1, marginBottom: 10 }}>
+          {log.length
+            ? `Building the curve — ${log.filter(e => e.l).length} review${log.filter(e => e.l).length === 1 ? '' : 's'} of learned cards logged so far. Needs a couple of weeks to show a trend.`
+            : 'Retention needs a review history, which starts from your next study session.'}
+        </div>
+      )}
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, marginTop: 12 }}>
+        {[
+          ['MATURE', `${health.maturePct}%`, '#4caf7d'],
+          ['LEARNED', health.learned.toLocaleString(), '#c0c8e8'],
+          ['LAPSED', health.lapsed.toLocaleString(), health.lapsed ? '#ffb74d' : '#4060a0'],
+          ['LEECHES', health.leeches.toLocaleString(), health.leeches ? '#e57373' : '#4060a0'],
+        ].map(([lbl, val, col]) => (
+          <div key={lbl} style={{ ...S.statCell, padding: '9px 2px' }}>
+            <div style={{ ...S.statN, fontSize: 16, color: col }}>{val}</div>
+            <div style={S.statLbl}>{lbl}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ fontSize: 9, color: '#4060a0', marginTop: 6, letterSpacing: 1 }}>
+        Mature = interval of 21 days or more{health.avgEase ? ` · avg ease ${health.avgEase}` : ''}
+      </div>
     </div>
   )
 }

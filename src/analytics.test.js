@@ -96,3 +96,67 @@ describe('buildDailyDoubleStats', () => {
     expect(s.hits).toBe(2)
   })
 })
+
+import { buildRetentionSeries, buildDeckHealth } from './analytics.js'
+
+describe('buildRetentionSeries', () => {
+  const DAY = 86400000
+  const ago = d => Date.now() - d * DAY
+
+  it('counts only already-learned cards', () => {
+    const log = [
+      { t: ago(1), q: 0, l: 1 }, // learned card failed
+      { t: ago(1), q: 2, l: 1 }, // learned card passed
+      { t: ago(1), q: 0, l: 0 }, // brand new card failed — must not count
+      { t: ago(1), q: 0, l: 0 },
+    ]
+    const s = buildRetentionSeries(log, { bucketDays: 7, buckets: 1 })
+    expect(s[0].n).toBe(2)
+    expect(s[0].retention).toBe(50) // not 25%, which is what counting new cards gives
+  })
+
+  it('buckets by age and reports null for empty windows', () => {
+    const log = [{ t: ago(1), q: 2, l: 1 }, { t: ago(1), q: 2, l: 1 }]
+    const s = buildRetentionSeries(log, { bucketDays: 7, buckets: 3 })
+    expect(s).toHaveLength(3)
+    expect(s[2].retention).toBe(100) // most recent bucket
+    expect(s[0].retention).toBeNull() // nothing that long ago
+    expect(s[0].n).toBe(0)
+  })
+
+  it('treats Hard as a pass', () => {
+    // Recalling it slowly is still recalling it; only Again is a lapse.
+    const log = [{ t: ago(1), q: 1, l: 1 }]
+    expect(buildRetentionSeries(log, { bucketDays: 7, buckets: 1 })[0].retention).toBe(100)
+  })
+
+  it('handles an empty log', () => {
+    const s = buildRetentionSeries([], { buckets: 4 })
+    expect(s.every(b => b.retention === null && b.n === 0)).toBe(true)
+  })
+})
+
+describe('buildDeckHealth', () => {
+  it('summarises deck state', () => {
+    const h = buildDeckHealth([
+      { repetitions: 5, interval: 30, lapses: 0, easeFactor: 2.5 },
+      { repetitions: 2, interval: 3, lapses: 1, easeFactor: 2.1 },
+      { repetitions: 0, interval: 0, lapses: 0, easeFactor: 2.5 },
+      { repetitions: 9, interval: 60, lapses: 5, easeFactor: 1.7 },
+    ])
+    expect(h.total).toBe(4)
+    expect(h.learned).toBe(3)
+    expect(h.mature).toBe(2)
+    expect(h.lapsed).toBe(2)
+    expect(h.leeches).toBe(1)
+    expect(h.maturePct).toBe(50)
+    expect(h.avgEase).toBe(2.2)
+  })
+
+  it('handles an empty deck', () => {
+    const h = buildDeckHealth([])
+    expect(h.total).toBe(0)
+    expect(h.maturePct).toBe(0)
+    expect(h.avgEase).toBeNull()
+  })
+})

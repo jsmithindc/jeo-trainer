@@ -12,7 +12,7 @@ import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpi
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 import { DrillsView } from './drills.jsx'
 
-const APP_VERSION = '2.5.2'
+const APP_VERSION = '2.5.3'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -770,7 +770,8 @@ export default function App() {
       singleCoryat,
       doubleCoryat,
       coryatScore,
-      actualScore: actualScore,
+      // finalActualScore includes the FJ wager; actualScore state is still pre-wager here
+      actualScore: finalActualScore ?? actualScore,
       totalCorrect,
       totalIncorrect,
       totalPass,
@@ -4036,8 +4037,8 @@ const S = {
   configPanel: { width: '100%', maxWidth: 480, display: 'flex', flexDirection: 'column', gap: 16 },
   configRow: { background: '#0a0f2e', borderRadius: 10, padding: '12px 14px', border: '1px solid #1a2460', display: 'flex', flexDirection: 'column', gap: 8 },
   configLabel: { fontSize: 9, letterSpacing: 3, color: '#6070a0' },
-  toggleGroup: { display: 'flex', gap: 6 },
-  toggleBtn: { flex: 1, fontSize: 12, fontWeight: 700, letterSpacing: 1, color: '#5060a0', background: 'rgba(255,255,255,0.04)', borderRadius: 6, padding: '8px 4px', fontFamily: "'Barlow Condensed', sans-serif", border: '1px solid #1a2460' },
+  toggleGroup: { display: 'flex', flexWrap: 'wrap', gap: 6 },
+  toggleBtn: { flex: '1 1 68px', minWidth: 0, fontSize: 12, fontWeight: 700, letterSpacing: 1, color: '#5060a0', background: 'rgba(255,255,255,0.04)', borderRadius: 6, padding: '8px 4px', fontFamily: "'Barlow Condensed', sans-serif", border: '1px solid #1a2460' },
   toggleActive: { color: '#f5c518', background: 'rgba(245,197,24,0.08)', borderColor: '#f5c518' },
   chipRow: { display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 120, overflowY: 'auto' },
   chip: { fontSize: 11, letterSpacing: 1, color: '#5060a0', background: 'rgba(255,255,255,0.04)', borderRadius: 20, padding: '5px 12px', fontFamily: "'Barlow Condensed', sans-serif", fontWeight: 700, border: '1px solid #1a2460', whiteSpace: 'nowrap' },

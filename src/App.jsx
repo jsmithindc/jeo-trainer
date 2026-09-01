@@ -7,7 +7,7 @@ import { migrateFJWagers, backfillDdNet } from './migrations.js'
 import { saveDeckSnapshot, getDeckSnapshots, restoreSnapshot, ensureSnapshotsMigrated } from './snapshotStore.js'
 import { fetchEpisode, episodeToBoard, searchEpisodesByCategory } from './jarchive.js'
 import { supabase, signIn, signUp, resetPassword, signOut, loadRemoteData, saveRemoteData, mergeData, saveGameStateRemote, uploadMedia } from './supabase.js'
-import { buildCategoryHeatMap, buildValueBreakdown, predictCoryat, exportToApkg, getMetaCategory, META_CATEGORY_NAMES } from './analytics.js'
+import { buildCategoryHeatMap, buildValueBreakdown, predictCoryat, exportToApkg, getMetaCategory, META_CATEGORY_NAMES, buildDailyDoubleStats } from './analytics.js'
 import { CardContent, cardIsHtml } from './CardContent.jsx'
 import { getMediaStats, clearAllMedia, getMedia } from './mediaStore.js'
 import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpisodeToCache, getEpisodeFromCache, pinEpisode, unpinEpisode, removeEpisodeFromCache, getCacheStats, getDailyStats, incrementDailyCards, addToTrash, getTrash, restoreFromTrash, setStorageErrorHandler, getTombstones, addTombstones, saveTombstones, removeTombstone } from './storage.js'
@@ -16,7 +16,7 @@ import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, T
 // than half the bundle, and none of it is needed unless the Drills tab is opened.
 const DrillsView = lazy(() => import('./drills.jsx').then(m => ({ default: m.DrillsView })))
 
-const APP_VERSION = '2.7.0'
+const APP_VERSION = '2.7.1'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -1101,7 +1101,7 @@ export default function App() {
             }}
           />
         )}
-        {view === 'study' && <StudyTabView cards={cards} setCards={setCards} user={user} dueCount={dueCount} dailyCards={dailyCards} setDailyCards={setDailyCards} />}
+        {view === 'study' && <StudyTabView cards={cards} setCards={setCards} user={user} dueCount={dueCount} dailyCards={dailyCards} setDailyCards={setDailyCards} gameHistory={gameHistory} />}
 
         {view === 'summary' && (
           <SummaryView
@@ -1394,7 +1394,7 @@ function Header({ coryatScore, actualScore, correctCount, incorrectCount, passCo
 
 // ─── Nav ──────────────────────────────────────────────────────────────────────
 // ─── Study Tab View ──────────────────────────────────────────────────────────
-function StudyTabView({ cards, setCards, user, dueCount, dailyCards, setDailyCards }) {
+function StudyTabView({ cards, setCards, user, dueCount, dailyCards, setDailyCards, gameHistory = [] }) {
   const [subTab, setSubTab] = useState('flashcards')
   const [flashcardView, setFlashcardView] = useState('menu') // menu | study | deck
 
@@ -1449,7 +1449,7 @@ function StudyTabView({ cards, setCards, user, dueCount, dailyCards, setDailyCar
                 </button>
               </div>
             )}
-            {flashcardView === 'study' && <StudyView cards={cards} setCards={setCards} onBack={() => setFlashcardView('menu')} dailyCards={dailyCards} setDailyCards={setDailyCards} />}
+            {flashcardView === 'study' && <StudyView cards={cards} setCards={setCards} onBack={() => setFlashcardView('menu')} dailyCards={dailyCards} setDailyCards={setDailyCards} gameHistory={gameHistory} />}
             {flashcardView === 'deck' && <DeckView cards={cards} setCards={setCards} user={user} onBack={() => setFlashcardView('menu')} />}
           </>
         )}
@@ -2659,7 +2659,7 @@ function ClueModal({ clue, category, showAnswer, onReveal, onMark, onClose, isRe
 }
 
 // ─── Study View ───────────────────────────────────────────────────────────────
-function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards }) {
+function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards, gameHistory = [] }) {
   const CHUNK_PRESETS = { quick: 10, standard: 20, long: 40, marathon: 100 }
   const DEFAULT_CHUNK = 'marathon'
 
@@ -2712,6 +2712,16 @@ function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards }) {
     if (categoryFilter !== 'all') filtered = filtered.filter(c => getMetaCategory(c.category?.split(' · ')[0] || c.category || '') === categoryFilter)
     return filtered
   }
+
+  // The heat map already knows where board play is weakest; this closes the loop by
+  // turning that into a session. Only categories with cards are offered — pointing at
+  // a weak category with nothing to review would be a dead end.
+  const weakest = useMemo(() => {
+    if (gameHistory.length < 3) return null
+    const withCards = new Set(allMetaCategories)
+    const ranked = buildCategoryHeatMap(gameHistory).filter(m => withCards.has(m.meta))
+    return ranked.length ? ranked[0] : null // heat map is sorted worst-average first
+  }, [gameHistory, allMetaCategories.join('|')])
 
   const matchingCards = getFilteredCards()
   const todayEndSv = new Date().setHours(23, 59, 59, 999)
@@ -2931,6 +2941,27 @@ function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards }) {
           {allMetaCategories.length > 0 && (
             <div style={S.configRow}>
               <span style={S.configLabel}>CATEGORY</span>
+              {weakest && (
+                <button
+                  onClick={() => setCategoryFilter(categoryFilter === weakest.meta ? 'all' : weakest.meta)}
+                  style={{
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%',
+                    background: categoryFilter === weakest.meta ? 'rgba(245,197,24,0.10)' : '#060b1a',
+                    border: `1px solid ${categoryFilter === weakest.meta ? '#f5c518' : '#2a3480'}`,
+                    borderRadius: 8, padding: '9px 12px', cursor: 'pointer', marginBottom: 4,
+                  }}
+                >
+                  <span style={{ textAlign: 'left' }}>
+                    <span style={{ fontSize: 12, color: '#f5c518', letterSpacing: 1 }}>🎯 Target your weakest</span>
+                    <span style={{ display: 'block', fontSize: 10, color: '#4060a0', letterSpacing: 1 }}>
+                      {weakest.meta} · averaging ${weakest.avg.toLocaleString()} on the board
+                    </span>
+                  </span>
+                  <span style={{ fontSize: 11, color: categoryFilter === weakest.meta ? '#f5c518' : '#4060a0' }}>
+                    {categoryFilter === weakest.meta ? 'ON' : 'OFF'}
+                  </span>
+                </button>
+              )}
               <div style={S.chipRow}>
                 <button style={{ ...S.chip, ...(categoryFilter === 'all' ? S.chipActive : {}) }} onClick={() => setCategoryFilter('all')}>
                   All
@@ -3925,6 +3956,8 @@ function SummaryView({ predictionBaseDate, onResetPredictionBase, coryatScore, a
         </div>
       )}
 
+      <DailyDoublePanel gameHistory={gameHistory} />
+
       {gameHistory.length > 1 && <ScoreSparkline games={gameHistory.slice(0, 10).reverse()} />}
 
       {/* Category breakdown — only show if a game is in progress */}
@@ -4116,6 +4149,64 @@ function ConfidenceComparison({ ratings, singleBreakdown, doubleBreakdown }) {
 }
 
 // ─── Score Sparkline ──────────────────────────────────────────────────────────
+// Daily Doubles are the one part of board play Coryat cannot see, because it counts
+// them at face value and ignores the wager entirely.
+function DailyDoublePanel({ gameHistory }) {
+  const dd = useMemo(() => buildDailyDoubleStats(gameHistory), [gameHistory])
+  if (!dd.gamesWithNet) return null
+
+  const good = dd.net >= 0
+  return (
+    <div style={{ background: '#0a0f2e', borderRadius: 10, padding: '14px 16px', border: '1px solid #1a2460', marginTop: 12 }}>
+      <div style={{ fontSize: 9, letterSpacing: 3, color: '#6070a0', marginBottom: 10 }}>DAILY DOUBLE WAGERING</div>
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
+        <div>
+          <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 34, lineHeight: 1, color: good ? '#4caf7d' : '#e57373' }}>
+            {good ? '+' : ''}{dd.net.toLocaleString()}
+          </div>
+          <div style={{ fontSize: 10, color: '#4060a0', letterSpacing: 1 }}>
+            LIFETIME · {good ? 'ahead of' : 'behind'} flat Coryat
+          </div>
+        </div>
+        <div style={{ textAlign: 'right' }}>
+          <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 22, color: '#c0c8e8' }}>
+            {dd.netPerGame >= 0 ? '+' : ''}{dd.netPerGame?.toLocaleString()}
+          </div>
+          <div style={{ fontSize: 10, color: '#4060a0', letterSpacing: 1 }}>PER GAME</div>
+        </div>
+      </div>
+
+      {dd.logged > 0 ? (
+        <>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginTop: 12 }}>
+            {[
+              ['HIT RATE', dd.hitRate === null ? '—' : dd.hitRate + '%', dd.hitRate >= 50 ? '#4caf7d' : '#ffb74d'],
+              ['AVG WAGER', dd.avgWager === null ? '—' : '$' + dd.avgWager.toLocaleString(), '#4dd0e1'],
+              ['BEST HIT', dd.biggestWin ? '$' + dd.biggestWin.toLocaleString() : '—', '#4caf7d'],
+            ].map(([lbl, val, col]) => (
+              <div key={lbl} style={{ ...S.statCell, padding: '10px 4px' }}>
+                <div style={{ ...S.statN, fontSize: 18, color: col }}>{val}</div>
+                <div style={S.statLbl}>{lbl}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ fontSize: 10, color: '#4060a0', marginTop: 8, letterSpacing: 1 }}>
+            {dd.hits} hit · {dd.misses} missed{dd.passes ? ` · ${dd.passes} passed` : ''}
+            {dd.trueDDs > 0 && ` · ${dd.trueDDs} true DD${dd.trueDDs !== 1 ? 's' : ''}`}
+            {dd.biggestLoss > 0 && ` · worst loss $${dd.biggestLoss.toLocaleString()}`}
+          </div>
+        </>
+      ) : (
+        <div style={{ fontSize: 10, color: '#4060a0', marginTop: 10, lineHeight: 1.5, letterSpacing: 1 }}>
+          Net is derived from past scores. Hit rate and wager size need per-wager
+          detail, which is recorded from v2.5.8 onward — play a game to start it.
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ScoreSparkline({ games }) {
   const scores = games.map(g => g.coryatScore)
   const min = Math.min(...scores)

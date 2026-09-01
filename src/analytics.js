@@ -360,3 +360,43 @@ export async function exportToApkg(cards) {
   a.click()
   URL.revokeObjectURL(url)
 }
+
+// ─── Daily Double wagering ────────────────────────────────────────────────────
+// Coryat deliberately ignores Daily Doubles, so this is the one part of board play
+// the score can't tell you anything about. Games from v2.5.8 carry a per-wager log;
+// older games only have ddNet, derived from the score identity, so counts and rates
+// are computed from the logged subset while the net uses everything available.
+export function buildDailyDoubleStats(gameHistory) {
+  let net = 0, gamesWithNet = 0
+  let hits = 0, misses = 0, passes = 0
+  let wagerTotal = 0, wagerCount = 0, biggestWin = 0, biggestLoss = 0
+  let trueDDs = 0 // wagered the whole score or more
+
+  for (const g of gameHistory) {
+    if (typeof g.ddNet === 'number') { net += g.ddNet; gamesWithNet++ }
+
+    if (!Array.isArray(g.dailyDoubles)) continue
+    for (const d of g.dailyDoubles) {
+      const w = d.wager || 0
+      if (d.result === 'correct') { hits++; biggestWin = Math.max(biggestWin, w) }
+      else if (d.result === 'incorrect') { misses++; biggestLoss = Math.max(biggestLoss, w) }
+      else passes++
+      if (d.wagered) { wagerTotal += w; wagerCount++ }
+      if (d.wagered && w >= (d.value || 0) * 5) trueDDs++
+    }
+  }
+
+  const attempted = hits + misses
+  return {
+    net,
+    gamesWithNet,
+    netPerGame: gamesWithNet ? Math.round(net / gamesWithNet) : null,
+    // Null rather than 0 when nothing is logged yet — "no data" and "0%" are
+    // different claims, and per-wager logging only began in v2.5.8.
+    hitRate: attempted ? Math.round((hits / attempted) * 100) : null,
+    hits, misses, passes,
+    logged: hits + misses + passes,
+    avgWager: wagerCount ? Math.round(wagerTotal / wagerCount) : null,
+    biggestWin, biggestLoss, trueDDs,
+  }
+}

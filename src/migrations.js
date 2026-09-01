@@ -52,3 +52,46 @@ export function migrateFJWagers(games) {
 
   return { games: migrated, changed }
 }
+
+// Daily Double wagers were only recorded from v2.5.8 onward, but their net effect on
+// older games can be recovered exactly. Coryat ignores Daily Doubles entirely, so
+// whatever separates the pre-Final show score from Coryat is the DD wagering:
+//
+//   ddNet = (actualScore − finalJeopardyDelta) − coryatScore
+//
+// Must run after migrateFJWagers, since it reads actualScore.
+export function backfillDdNet(games) {
+  let changed = 0
+
+  const migrated = games.map(game => {
+    if (game.ddNetBackfilled) return game
+
+    // actualScore may still be pre-repair — come back once the FJ migration has run.
+    if (!game.fjWagerApplied) return game
+
+    // Games played from v2.5.8 on carry a real per-DD log and a directly computed
+    // ddNet. Never overwrite a measured value with a derived one.
+    if (Array.isArray(game.dailyDoubles)) return { ...game, ddNetBackfilled: true }
+
+    // Predates actualScore tracking — leave ddNet absent. A fabricated 0 would read
+    // as "wagered and broke even", which is a different claim from "unknown".
+    if (typeof game.actualScore !== 'number' || typeof game.coryatScore !== 'number') {
+      return { ...game, ddNetBackfilled: true }
+    }
+
+    const fj = game.finalJeopardy
+    const fjDelta = fj?.wager && fj?.result
+      ? (fj.result === 'correct' ? fj.wager : -fj.wager)
+      : 0
+
+    changed++
+    return {
+      ...game,
+      ddNet: (game.actualScore - fjDelta) - game.coryatScore,
+      ddNetDerived: true, // inferred from the score identity, not from a wager log
+      ddNetBackfilled: true,
+    }
+  })
+
+  return { games: migrated, changed }
+}

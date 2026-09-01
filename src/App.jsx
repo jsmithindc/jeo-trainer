@@ -3,7 +3,7 @@ import { sm2, newCard, formatRelative, nextDueLabel } from './srs.js'
 import { loadCards, saveCards, loadGameHistory, saveGameHistory } from './storage.js'
 import { parseApkg, migrateLocalMediaToSupabase } from './ankiImport.js'
 import { SAMPLE_BOARD } from './boardData.js'
-import { migrateFJWagers } from './migrations.js'
+import { migrateFJWagers, backfillDdNet } from './migrations.js'
 import { fetchEpisode, episodeToBoard, searchEpisodesByCategory } from './jarchive.js'
 import { supabase, signIn, signUp, resetPassword, signOut, loadRemoteData, saveRemoteData, mergeData, saveGameStateRemote, loadGameStateRemote, uploadMedia } from './supabase.js'
 import { buildCategoryHeatMap, buildValueBreakdown, predictCoryat, exportToApkg, getMetaCategory, META_CATEGORY_NAMES } from './analytics.js'
@@ -13,7 +13,7 @@ import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpi
 import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
 import { DrillsView } from './drills.jsx'
 
-const APP_VERSION = '2.5.8'
+const APP_VERSION = '2.5.9'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -143,9 +143,11 @@ export default function App() {
   // ── Load local data ───────────────────────────────────────────────────────
   useEffect(() => {
     setCards(loadCards())
-    const { games, changed } = migrateFJWagers(loadGameHistory())
-    if (changed) console.info(`[migration] repaired FJ wager on ${changed} game(s)`)
-    setGameHistory(games)
+    const fjPass = migrateFJWagers(loadGameHistory())
+    if (fjPass.changed) console.info(`[migration] repaired FJ wager on ${fjPass.changed} game(s)`)
+    const ddPass = backfillDdNet(fjPass.games)
+    if (ddPass.changed) console.info(`[migration] derived ddNet for ${ddPass.changed} game(s)`)
+    setGameHistory(ddPass.games)
     setStorageReady(true)
     setHistoryReady(true)
   }, [])
@@ -264,8 +266,11 @@ export default function App() {
         // Run after the merge, not before: remote wins on conflict for games that
         // already exist there, so repairing local first would just be overwritten.
         // Repairing the merged result means the fix propagates back up on the next save.
-        const { games: repairedHistory, changed } = migrateFJWagers(merged.gameHistory)
-        if (changed) console.info(`[migration] repaired FJ wager on ${changed} game(s)`)
+        const fjPass = migrateFJWagers(merged.gameHistory)
+        if (fjPass.changed) console.info(`[migration] repaired FJ wager on ${fjPass.changed} game(s)`)
+        const ddPass = backfillDdNet(fjPass.games)
+        if (ddPass.changed) console.info(`[migration] derived ddNet for ${ddPass.changed} game(s)`)
+        const repairedHistory = ddPass.games
         setCards(merged.cards)
         setGameHistory(repairedHistory)
         saveCards(merged.cards)

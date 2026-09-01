@@ -5,6 +5,7 @@ import { loadCards, saveCards, loadGameHistory, saveGameHistory } from './storag
 import { parseApkg, migrateLocalMediaToSupabase } from './ankiImport.js'
 import { SAMPLE_BOARD } from './boardData.js'
 import { migrateFJWagers, backfillDdNet, migrateToFsrs } from './migrations.js'
+import { buildPlayedIndex, findPlayed } from './played.js'
 import { saveDeckSnapshot, getDeckSnapshots, restoreSnapshot, ensureSnapshotsMigrated } from './snapshotStore.js'
 import { fetchEpisode, episodeToBoard, searchEpisodesByCategory } from './jarchive.js'
 import { supabase, signIn, signUp, resetPassword, signOut, loadRemoteData, saveRemoteData, mergeData, saveGameStateRemote, uploadMedia } from './supabase.js'
@@ -17,7 +18,7 @@ import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, T
 // than half the bundle, and none of it is needed unless the Drills tab is opened.
 const DrillsView = lazy(() => import('./drills.jsx').then(m => ({ default: m.DrillsView })))
 
-const APP_VERSION = '2.7.5'
+const APP_VERSION = '2.7.6'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -411,7 +412,9 @@ export default function App() {
   }
 
   async function loadRandomUnplayed() {
-    const playedIds = new Set(gameHistory.map(g => String(g.gameId)).filter(Boolean))
+    // Matches on air date as well as id, so the 30-odd games recorded before gameId
+    // existed aren't offered up again as "unplayed".
+    const playedIdx = buildPlayedIndex(gameHistory)
     try {
       // Fetch all seasons to pick from the full archive
       const res = await fetch('/.netlify/functions/episodes')
@@ -419,7 +422,7 @@ export default function App() {
       const allSeasons = data.seasons || []
       if (!allSeasons.length) {
         // Fallback to current episodeList
-        const pool = episodeList.filter(ep => !playedIds.has(String(ep.gameId)))
+        const pool = episodeList.filter(ep => !findPlayed(playedIdx, ep))
         const pick = (pool.length ? pool : episodeList)[Math.floor(Math.random() * (pool.length || episodeList.length))]
         if (pick) loadEpisode(pick.gameId)
         return
@@ -429,7 +432,7 @@ export default function App() {
       const res2 = await fetch(`/.netlify/functions/episodes?season=${randomSeason.id}`)
       const data2 = await res2.json()
       const eps = data2.episodes || []
-      const unplayed = eps.filter(ep => !playedIds.has(String(ep.gameId)))
+      const unplayed = eps.filter(ep => !findPlayed(playedIdx, ep))
       const pool = unplayed.length > 0 ? unplayed : eps
       const pick = pool[Math.floor(Math.random() * pool.length)]
       if (pick) {
@@ -1188,13 +1191,7 @@ export default function App() {
       {showBrowser && (
         <EpisodeBrowser
           currentEpisodeId={episodeMeta?.episodeId}
-          // Oldest first so the newest entry wins if an episode was replayed.
-          // Ids are stringified because older history rows stored them as numbers.
-          playedGames={new Map(
-            [...gameHistory].reverse()
-              .filter(g => g.gameId)
-              .map(g => [String(g.gameId), g])
-          )}
+          playedIndex={buildPlayedIndex(gameHistory)}
           lastPlayedGameId={gameHistory.length > 0 ? String(gameHistory[0].gameId) : null}
           onSelect={(gameId, episodes, index) => {
             setShowBrowser(false)
@@ -2176,7 +2173,7 @@ function CategorySearch({ onSelect, onClose }) {
 }
 
 // ─── Episode Browser Modal ────────────────────────────────────────────────────
-function EpisodeBrowser({ onSelect, onClose, currentEpisodeId, playedGames = new Map(), lastPlayedGameId }) {
+function EpisodeBrowser({ onSelect, onClose, currentEpisodeId, playedIndex, lastPlayedGameId }) {
   const [episodes, setEpisodes] = useState([])
   const [seasons, setSeasons] = useState([])
   const [selectedSeason, setSelectedSeason] = useState('')
@@ -2227,7 +2224,7 @@ function EpisodeBrowser({ onSelect, onClose, currentEpisodeId, playedGames = new
           </select>
         </div>
         {!loading && !error && episodes.length > 0 && (() => {
-          const playedHere = episodes.filter(ep => playedGames.has(String(ep.gameId))).length
+          const playedHere = episodes.filter(ep => findPlayed(playedIndex, ep)).length
           return (
             <div style={S.browserCount}>
               <span>{episodes.length} episode{episodes.length !== 1 ? 's' : ''}</span>
@@ -2244,7 +2241,7 @@ function EpisodeBrowser({ onSelect, onClose, currentEpisodeId, playedGames = new
           {!loading && episodes.map((ep, i) => {
             const id = String(ep.gameId)
             const isCurrent = id === String(currentEpisodeId)
-            const played = playedGames.get(id)
+            const played = findPlayed(playedIndex, ep)
             const isLastPlayed = id === lastPlayedGameId
             return (
               <button key={ep.gameId} style={{

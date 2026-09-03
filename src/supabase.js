@@ -152,14 +152,14 @@ export async function saveRemoteData(cards, gameHistory, dailyStats = null, tomb
   } else {
     const { error } = await supabase
       .from('user_data')
-      .insert({ user_id: user.id, cards, game_history: gameHistory, ...(dailyStats ? { daily_stats: dailyStats } : {}), updated_at: new Date().toISOString() })
+      .insert({ user_id: user.id, cards, game_history: gameHistory, ...(dailyStats ? { daily_stats: dailyStats } : {}), ...(tombstones ? { tombstones } : {}), updated_at: new Date().toISOString() })
     if (error) throw error
   }
 }
 
 const TOMBSTONE_LIMIT = 1000
 
-export function mergeData(local, remote, remoteUpdatedAt = null) {
+export function mergeData(local, remote) {
   // Deletions are recorded explicitly. Previously a card missing from remote and
   // created before the last sync was assumed deleted — but that is also exactly what
   // a failed upload looks like, so any card that never made it up was destroyed on
@@ -189,14 +189,17 @@ export function mergeData(local, remote, remoteUpdatedAt = null) {
     .sort((a, b) => (b.deletedAt || 0) - (a.deletedAt || 0))
     .slice(0, TOMBSTONE_LIMIT)
 
-  const syncCutoff = remoteUpdatedAt ? new Date(remoteUpdatedAt).getTime() : 0
-
-  // For game history, merge by unique game ID — remote wins on conflict
+  // Game history merges by id, remote winning on conflict. Local-only games are always
+  // kept: a game missing from remote is an upload that never landed, never a deletion,
+  // because nothing in the app can delete a game.
+  //
+  // This used to keep a local-only game only if it was played after remote.updated_at,
+  // which destroyed exactly the games that most needed rescuing. The timestamp moved for
+  // reasons that had nothing to do with game history — saveGameStateRemote wrote it every
+  // 30 seconds of board play — so one game finished offline and a second played online
+  // was enough to push the cutoff past the first game and delete it on the next login.
   const remoteGameIds = new Set(remote.gameHistory.map(g => g.id))
-  const localOnlyGames = local.gameHistory.filter(g =>
-    !remoteGameIds.has(g.id) &&
-    (new Date(g.playedAt).getTime() || 0) > syncCutoff
-  )
+  const localOnlyGames = local.gameHistory.filter(g => !remoteGameIds.has(g.id))
   const gameHistory = [...remote.gameHistory, ...localOnlyGames]
     .sort((a, b) => new Date(b.playedAt) - new Date(a.playedAt))
 
@@ -214,10 +217,11 @@ export async function saveGameStateRemote(gameState) {
     .eq('user_id', user.id)
     .single()
 
-  const payload = {
-    game_state: gameState,
-    updated_at: new Date().toISOString(),
-  }
+  // Deliberately does not touch updated_at. That column means "when the deck and game
+  // history last changed", and the merge and any future write-conflict check read it
+  // that way. An in-progress board is scratch state, saved every 30 seconds; letting it
+  // move the timestamp made the column mean "last touched", which is a different claim.
+  const payload = { game_state: gameState }
 
   if (existing) {
     await supabase.from('user_data').update(payload).eq('user_id', user.id)
@@ -226,13 +230,33 @@ export async function saveGameStateRemote(gameState) {
   }
 }
 
+// Scoped to the signed-in user like every other read here. It was the one query that
+// leaned on row-level security alone — and it was also never called, so the game state
+// being written every 30 seconds of play had nothing reading it back.
 export async function loadGameStateRemote() {
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return null
+
   const { data, error } = await supabase
     .from('user_data')
     .select('game_state')
+    .eq('user_id', user.id)
     .single()
   if (error || !data) return null
   return data.game_state || null
+}
+
+/**
+ * Drop the remote in-progress game.
+ *
+ * Without this the column would keep the last unfinished board for ever: clearGameState()
+ * only touches localStorage, so a game finished on one device would go on being offered
+ * as resumable on every other one.
+ */
+export async function clearGameStateRemote() {
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return
+  await supabase.from('user_data').update({ game_state: null }).eq('user_id', user.id)
 }
 
 // ── Media storage (Supabase Storage bucket) ───────────────────────────────────
@@ -264,29 +288,8 @@ export async function uploadMedia(filename, arrayBuffer, mimeType) {
   return publicUrl
 }
 
-export async function deleteMediaRemote(filename) {
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return
-
-  const path = `${user.id}/${filename}`
-  await supabase.storage.from('media').remove([path])
-}
-
-export async function listMediaRemote() {
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return []
-
-  const { data, error } = await supabase.storage
-    .from('media')
-    .list(user.id)
-
-  if (error) return []
-  return data || []
-}
-
-export function getMediaPublicUrl(filename, userId) {
-  const { data: { publicUrl } } = supabase.storage
-    .from('media')
-    .getPublicUrl(`${userId}/${filename}`)
-  return publicUrl
-}
+// deleteMediaRemote / listMediaRemote / getMediaPublicUrl lived here and were never
+// called from anywhere. Their absence is a real gap, not just dead weight: media uploaded
+// with an Anki deck is never removed, and "Clear" in the deck view only empties IndexedDB,
+// so the Supabase bucket grows and never shrinks. Deleting them makes that visible rather
+// than leaving code that looks like it handles the problem.

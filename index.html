@@ -2,7 +2,11 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <!-- No maximum-scale / user-scalable=no: blocking pinch zoom is an accessibility
+         failure, and doubly odd in an app that ships a Large Font setting. iOS only
+         zooms on input focus when the field is under 16px, which the form styles now
+         satisfy, so the usual reason for the restriction does not apply. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -13,8 +17,12 @@
     <title>Jeo Trainer</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@300;400;600&display=block">
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@300;400;600&display=block">
+  <!-- One request for every family and weight the app uses. There were two: this one
+       asked for Barlow Condensed 300/400/600, and a second @import inside the runtime
+       stylesheet asked for 400/600/700 plus Barlow — so the 700 weight the UI leans on
+       arrived late, from a separate round trip, after the app had already rendered. -->
+  <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@300;400;600;700&family=Barlow:wght@400;500&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@300;400;600;700&family=Barlow:wght@400;500&display=swap">
   <style>
     /* Prevent FOUC - hide root until fonts load */
     html { background: #060b1a; }
@@ -26,22 +34,6 @@
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
-  <script>
-    // Mark fonts as loaded to prevent FOUC
-    document.fonts.ready.then(() => document.documentElement.classList.add('fonts-loaded'))
-    // Fallback in case fonts.ready doesn't fire
-    setTimeout(() => document.documentElement.classList.add('fonts-loaded'), 500)
-
-    // Force service worker to check for updates on every page load
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.getRegistrations().then(regs => {
-        regs.forEach(reg => reg.update())
-      })
-      // If a new SW is waiting, claim it immediately
-      navigator.serviceWorker.addEventListener('controllerchange', () => {
-        window.location.reload()
-      })
-    }
-  </script>
+  <script src="/boot.js"></script>
   </body>
 </html>

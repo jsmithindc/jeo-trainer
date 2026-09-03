@@ -10,3 +10,17 @@
   for = "/*"
   [headers.values]
     Cross-Origin-Opener-Policy = "same-origin"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    # Anki decks are downloaded from the internet and their HTML is injected into the
+    # page, so DOMPurify is doing real work at render. This is the layer behind it: even
+    # if something slipped past the sanitiser it could not load a script.
+    #
+    # script-src stays strict because the one inline script was moved to /boot.js.
+    # 'wasm-unsafe-eval' is for sql.js, which the .apkg import and export both need.
+    # style-src keeps 'unsafe-inline': the app injects its stylesheet as a <style>
+    # element at runtime, and CSS injection is a far weaker vector than script injection.
+    #
+    # Mirrored in vite.config.js under `preview`, so `vite preview` exercises the real
+    # policy against the real bundle.
+    Content-Security-Policy = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https://j-archive.com https://www.j-archive.com https://uramupgwxuugdcmmklds.supabase.co; media-src 'self' data: blob: https://uramupgwxuugdcmmklds.supabase.co; connect-src 'self' https://uramupgwxuugdcmmklds.supabase.co wss://uramupgwxuugdcmmklds.supabase.co https://raw.githubusercontent.com; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"

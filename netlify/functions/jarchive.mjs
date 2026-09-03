@@ -1,5 +1,42 @@
 import { parse } from 'node-html-parser'
 
+// An episode that has aired never changes, so it can be cached hard. Which episode is
+// "latest" does change, so that one gets a short window. Nothing here was cacheable at
+// all before.
+const EPISODE_CACHE = { 'Cache-Control': 'public, max-age=86400', 'Netlify-CDN-Cache-Control': 'public, s-maxage=86400, stale-while-revalidate=604800' }
+const LATEST_CACHE  = { 'Cache-Control': 'public, max-age=900',   'Netlify-CDN-Cache-Control': 'public, s-maxage=900, stale-while-revalidate=3600' }
+
+// Resolving "latest" costs a season list, a season page and a forward probe. Serverless
+// containers stay warm between invocations, so remembering the answer for a while turns
+// most of those calls into no work at all. A miss just does the full resolve again.
+let latestCache = { id: null, at: 0 }
+const LATEST_TTL_MS = 15 * 60 * 1000
+
+const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+
+/**
+ * How far past the season page's highest game_id the archive actually goes.
+ *
+ * This used to be a sequential loop of up to twenty HEAD requests, every single time
+ * "latest" was asked for — twenty round trips to a volunteer-run site to answer one
+ * question. The probes don't depend on each other, so they all go at once and the answer
+ * is the highest unbroken run, which is exactly what the loop computed.
+ */
+export async function probeForward(maxId, span = 20) {
+  const ids = Array.from({ length: span }, (_, i) => maxId + i + 1)
+  const ok = await Promise.all(ids.map(id =>
+    fetch(`https://j-archive.com/showgame.php?game_id=${id}`, { method: 'HEAD', headers: { 'User-Agent': UA } })
+      .then(r => r.ok)
+      .catch(() => false)
+  ))
+  let highest = maxId
+  for (let i = 0; i < ok.length; i++) {
+    if (!ok[i]) break          // stop at the first gap, as the sequential version did
+    highest = ids[i]
+  }
+  return highest
+}
+
 export const handler = async (event) => {
   const headers = {
     'Access-Control-Allow-Origin': '*',
@@ -12,63 +49,65 @@ export const handler = async (event) => {
     let episodeId = event.queryStringParameters?.episode || 'latest'
 
     // ── Find latest episode ID ────────────────────────────────────────────────
-    if (episodeId === 'latest') {
-      try {
-        // Fetch the latest season page and find the highest game_id
-        const seasonsRes = await fetch('https://j-archive.com/listseasons.php', {
-          headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
-        })
-        const seasonsHtml = await seasonsRes.text()
-        const seasonMatches = [...seasonsHtml.matchAll(/showseason\.php\?season=(\d+)/g)]
-        const maxSeason = seasonMatches.reduce((max, m) => Math.max(max, parseInt(m[1])), 0)
-        if (maxSeason > 0) {
-          const epRes = await fetch(`https://j-archive.com/showseason.php?season=${maxSeason}`, {
-            headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
-          })
-          const epHtml = await epRes.text()
-          const gameIds = [...epHtml.matchAll(/game_id=(\d+)/g)].map(m => parseInt(m[1]))
-          const maxId = gameIds.length > 0 ? Math.max(...gameIds) : 0
-          if (maxId > 0) {
-            // Probe forward from the season's max to find the true latest
-            // (season page may be truncated by server, missing newest episodes)
-            let probeId = maxId
-            for (let i = 1; i <= 20; i++) {
-              try {
-                const probeRes = await fetch(`https://j-archive.com/showgame.php?game_id=${maxId + i}`, {
-                  method: 'HEAD',
-                  headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }
-                })
-                if (probeRes.ok) probeId = maxId + i
-                else break
-              } catch { break }
-            }
-            episodeId = String(probeId)
+    const wantsLatest = episodeId === 'latest'
+    if (wantsLatest) {
+      if (latestCache.id && Date.now() - latestCache.at < LATEST_TTL_MS) {
+        episodeId = latestCache.id
+      } else {
+        try {
+          // Highest game_id on the newest season page…
+          const seasonsRes = await fetch('https://j-archive.com/listseasons.php', { headers: { 'User-Agent': UA } })
+          const seasonsHtml = await seasonsRes.text()
+          const seasonMatches = [...seasonsHtml.matchAll(/showseason\.php\?season=(\d+)/g)]
+          const maxSeason = seasonMatches.reduce((max, m) => Math.max(max, parseInt(m[1])), 0)
+          if (maxSeason > 0) {
+            const epRes = await fetch(`https://j-archive.com/showseason.php?season=${maxSeason}`, { headers: { 'User-Agent': UA } })
+            const epHtml = await epRes.text()
+            const gameIds = [...epHtml.matchAll(/game_id=(\d+)/g)].map(m => parseInt(m[1]))
+            const maxId = gameIds.length > 0 ? Math.max(...gameIds) : 0
+            // …then probe past it, because the season page can lag the newest shows.
+            episodeId = maxId > 0 ? String(await probeForward(maxId)) : '9466'
           } else {
             episodeId = '9466'
           }
-        } else {
+          latestCache = { id: episodeId, at: Date.now() }
+        } catch {
           episodeId = '9466'
         }
-      } catch {
-        episodeId = '9466'
       }
     }
 
-    // ── Fetch episode page ────────────────────────────────────────────────────
+    // ── Get the episode page ──────────────────────────────────────────────────
+    // The client has a fallback for episodes this function fails to parse: it pulls the
+    // page through proxy.mjs and POSTs the HTML back here to be parsed. That HTML was
+    // never read — there was no POST handling at all, so the function refetched the page
+    // from j-archive and produced exactly the answer the original GET had. The fallback
+    // cost two extra requests and changed nothing. Now the POSTed page is used.
     const url = `https://j-archive.com/showgame.php?game_id=${episodeId}`
-    const res = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Referer': 'https://j-archive.com/',
-      }
-    })
+    let html = null
 
-    if (!res.ok) {
-      return { statusCode: 404, headers, body: JSON.stringify({ error: `Episode ${episodeId} not found (HTTP ${res.status})` }) }
+    if (event.httpMethod === 'POST' && event.body) {
+      try {
+        const posted = JSON.parse(event.body)
+        if (typeof posted?.html === 'string' && posted.html.length > 1000) html = posted.html
+      } catch { /* fall through to fetching it ourselves */ }
     }
 
-    const html = await res.text()
+    if (html === null) {
+      const res = await fetch(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Referer': 'https://j-archive.com/',
+        }
+      })
+
+      if (!res.ok) {
+        return { statusCode: 404, headers, body: JSON.stringify({ error: `Episode ${episodeId} not found (HTTP ${res.status})` }) }
+      }
+      html = await res.text()
+    }
+
     const doc = parse(html)
 
     // ── Debug mode ────────────────────────────────────────────────────────────
@@ -383,15 +422,16 @@ export const handler = async (event) => {
 
     return {
       statusCode: 200,
-      headers,
+      headers: { ...headers, ...(event.httpMethod === 'POST' ? {} : wantsLatest ? LATEST_CACHE : EPISODE_CACHE) },
       body: JSON.stringify({ episodeId, episodeNumber, airDate, url, singleJeopardy, doubleJeopardy, finalJeopardy, contestants })
     }
 
   } catch (err) {
+    console.error('[jarchive]', err)
     return {
       statusCode: 500,
       headers,
-      body: JSON.stringify({ error: err.message, stack: err.stack?.slice(0, 500) })
+      body: JSON.stringify({ error: err.message })
     }
   }
 }

@@ -1,3 +1,17 @@
+// j-archive is a volunteer-run site and none of this data changes minute to minute: a
+// season gains an episode a day at most, and a past season never changes at all. Nothing
+// here was cacheable before — no Cache-Control at all — so every visit re-scraped two
+// pages, and the app calls this on startup, on opening the browser, on changing season
+// and twice more for a random game.
+//
+// Netlify-CDN-Cache-Control is Netlify's edge directive; browsers ignore it and use
+// Cache-Control. Anything that doesn't understand either header just refetches, so both
+// are safe to send.
+const CACHE_HEADERS = {
+  'Cache-Control': 'public, max-age=3600',
+  'Netlify-CDN-Cache-Control': 'public, s-maxage=3600, stale-while-revalidate=86400',
+}
+
 export const handler = async (event) => {
   const headers = { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' }
 
@@ -29,7 +43,7 @@ export const handler = async (event) => {
         return { gameId: m[1], showNumber: showMatch?.[1] || '', airDate: dateMatch?.[1]?.trim() || text, season: '' }
       }).filter(e => e.showNumber)
       const combined = episodes.length > 0 ? episodes : altEps
-      return { statusCode: 200, headers, body: JSON.stringify({ episodes: combined.slice(0, 50), seasons: [] }) }
+      return { statusCode: 200, headers: { ...headers, ...CACHE_HEADERS }, body: JSON.stringify({ episodes: combined.slice(0, 50), seasons: [] }) }
     }
 
     const fetchOpts = {
@@ -137,11 +151,12 @@ export const handler = async (event) => {
     // browser could only reach ~2 months back from the latest episode.
     return {
       statusCode: 200,
-      headers,
+      headers: { ...headers, ...CACHE_HEADERS },
       body: JSON.stringify({ episodes: filtered.slice(0, 500), seasons })
     }
 
   } catch (err) {
-    return { statusCode: 500, headers, body: JSON.stringify({ error: err.message, stack: err.stack?.slice(0, 300) }) }
+    console.error('[episodes]', err)
+    return { statusCode: 500, headers, body: JSON.stringify({ error: err.message }) }
   }
 }

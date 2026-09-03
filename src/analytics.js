@@ -1,3 +1,5 @@
+import { LEECH_LAPSES } from './leech.js'
+
 // ─── Meta-category mapping ────────────────────────────────────────────────────
 // Maps Jeopardy category names to broad meta-categories
 const META_CATEGORIES = {
@@ -103,10 +105,14 @@ export const META_CATEGORY_NAMES = Object.keys(META_CATEGORIES)
 
 // ─── Analytics ────────────────────────────────────────────────────────────────
 
+// `avg` is the average score per *category*, which is the right unit for a heat map —
+// one game can field three History categories and no Science at all. The count of those
+// categories was being called `games` and displayed as "· 12g", claiming a dozen games
+// where there might have been four. Both numbers are now reported under their own names.
 export function buildCategoryHeatMap(gameHistory) {
   const metaMap = {}
   META_CATEGORY_NAMES.forEach(m => {
-    metaMap[m] = { meta: m, totalScore: 0, games: 0, cluesCorrect: 0, cluesTotal: 0 }
+    metaMap[m] = { meta: m, totalScore: 0, appearances: 0, gameIds: new Set() }
   })
 
   gameHistory.forEach(game => {
@@ -115,16 +121,18 @@ export function buildCategoryHeatMap(gameHistory) {
       breakdown.forEach(cat => {
         const meta = getMetaCategory(cat.name)
         metaMap[meta].totalScore += cat.score
-        metaMap[meta].games++
+        metaMap[meta].appearances++
+        metaMap[meta].gameIds.add(game.id ?? game.playedAt)
       })
     }
     processBreakdown(game.singleBreakdown)
     processBreakdown(game.doubleBreakdown)
   })
 
-  return Object.values(metaMap).filter(m => m.games > 0).map(m => ({
+  return Object.values(metaMap).filter(m => m.appearances > 0).map(({ gameIds, ...m }) => ({
     ...m,
-    avg: Math.round(m.totalScore / m.games),
+    games: gameIds.size,
+    avg: Math.round(m.totalScore / m.appearances),
   })).sort((a, b) => a.avg - b.avg)
 }
 
@@ -434,7 +442,7 @@ export function buildDeckHealth(cards, { matureDays = 21 } = {}) {
     if ((c.repetitions || 0) > 0) learned++
     if ((c.interval || 0) >= matureDays) mature++
     if ((c.lapses || 0) > 0) lapsed++
-    if ((c.lapses || 0) >= 4) leeches++
+    if ((c.lapses || 0) >= LEECH_LAPSES) leeches++
     if (c.easeFactor) { easeSum += c.easeFactor; easeCount++ }
   }
   return {

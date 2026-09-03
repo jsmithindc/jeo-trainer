@@ -195,9 +195,11 @@ export function getReviewLog() {
   try { return JSON.parse(localStorage.getItem(REVIEW_LOG_KEY) || '[]') } catch { return [] }
 }
 
-export function logReview(quality, wasLearned) {
+export function logReview(quality, wasLearned, ms = null) {
   const log = getReviewLog()
-  log.push({ t: Date.now(), q: quality, l: wasLearned ? 1 : 0 })
+  const entry = { t: Date.now(), q: quality, l: wasLearned ? 1 : 0 }
+  if (typeof ms === 'number') entry.ms = ms // retrieval time, absent on older entries
+  log.push(entry)
   // Trim from the front so the newest reviews are the ones that survive.
   set(REVIEW_LOG_KEY, log.length > REVIEW_LOG_LIMIT ? log.slice(-REVIEW_LOG_LIMIT) : log)
 }

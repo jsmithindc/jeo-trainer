@@ -113,6 +113,10 @@ export function getMimeType(filename) {
     webp: 'image/webp', svg: 'image/svg+xml',
     mp3: 'audio/mpeg', ogg: 'audio/ogg',
     mp4: 'video/mp4', m4a: 'audio/mp4',
+    // isAudio accepts .wav, so leaving it out here stored WAV media as
+    // application/octet-stream, which browsers will not play.
+    wav: 'audio/wav',
+    flac: 'audio/flac', webm: 'audio/webm', opus: 'audio/ogg',
   }
   return map[ext] || 'application/octet-stream'
 }
@@ -124,5 +128,5 @@ export function isImage(filename) {
 
 export function isAudio(filename) {
   const ext = filename.split('.').pop().toLowerCase()
-  return ['mp3', 'ogg', 'm4a', 'wav'].includes(ext)
+  return ['mp3', 'ogg', 'm4a', 'wav', 'flac', 'webm', 'opus'].includes(ext)
 }

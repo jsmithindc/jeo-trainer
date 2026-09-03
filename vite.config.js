@@ -25,11 +25,22 @@ export default defineConfig({
         ]
       },
       workbox: {
-        globPatterns: ['**/*.{js,css,html,ico,png,svg,wasm}'],
+        // wasm is deliberately not precached: sql-wasm.wasm is ~1.5 MB and only the
+        // .apkg import and export need it, so every visitor was downloading it up front
+        // for a feature most never touch. The runtime rule below caches it on first use.
+        globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
         maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
         skipWaiting: true,
         clientsClaim: true,
         runtimeCaching: [
+          {
+            urlPattern: /sql-wasm\.wasm$/,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'wasm-cache',
+              expiration: { maxEntries: 2, maxAgeSeconds: 60 * 60 * 24 * 30 },
+            }
+          },
           {
             urlPattern: /^https:\/\/jeotrainer\.netlify\.app\/assets\/.*/,
             handler: 'NetworkFirst',
@@ -50,6 +61,14 @@ export default defineConfig({
     headers: {
       'Cross-Origin-Opener-Policy': 'same-origin',
       'Cross-Origin-Embedder-Policy': 'require-corp'
+    }
+  },
+  // The production Content-Security-Policy, mirrored from netlify.toml so that
+  // `vite preview` serves the real bundle under the real policy. Keep the two in step —
+  // netlify.toml is the one that actually ships.
+  preview: {
+    headers: {
+      'Content-Security-Policy': "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https://j-archive.com https://www.j-archive.com https://uramupgwxuugdcmmklds.supabase.co; media-src 'self' data: blob: https://uramupgwxuugdcmmklds.supabase.co; connect-src 'self' https://uramupgwxuugdcmmklds.supabase.co wss://uramupgwxuugdcmmklds.supabase.co https://raw.githubusercontent.com; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
     }
   }
 })

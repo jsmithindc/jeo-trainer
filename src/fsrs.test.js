@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { rateCard, previewIntervals, seedFsrsState, hasFsrsState, difficultyToEase, easeToDifficulty } from './fsrs.js'
+import { rateCard, previewIntervals, seedFsrsState, hasFsrsState, difficultyToEase, easeToDifficulty , resetSchedule } from './fsrs.js'
 import { newCard } from './srs.js'
 
 const DAY = 86400000
@@ -120,5 +120,62 @@ describe('previewIntervals', () => {
     const actual = Math.round((rateCard(c, 2, now).dueAt - now.getTime()) / DAY)
     // Fuzz can shift the two calls apart by a day; the label must still be close.
     expect(Math.abs(parseInt(preview) - actual)).toBeLessThanOrEqual(2)
+  })
+})
+
+describe('resetSchedule', () => {
+  // The bug this guards: clearing only the SM-2 fields left stability/difficulty behind,
+  // so hasFsrsState stayed true and FSRS carried on from the old memory state — the card
+  // came due at once and then jumped straight back out to its old interval.
+  // Reviews have to land on the due date to build real stability — rating the same card
+  // repeatedly at one instant leaves FSRS with zero elapsed time and it never matures.
+  const studied = (reviews = 6) => {
+    let c = newCard('front', 'back')
+    let at = Date.now()
+    for (let i = 0; i < reviews; i++) {
+      c = rateCard(c, 2, new Date(at))
+      at = c.dueAt
+    }
+    return { card: c, at }
+  }
+
+  it('clears the FSRS memory state, not just the legacy fields', () => {
+    const { card: c } = studied()
+    expect(c.stability).toBeGreaterThan(0)
+
+    const r = resetSchedule(c)
+    expect(r.stability).toBe(0)
+    expect(r.difficulty).toBe(0)
+    expect(hasFsrsState(r)).toBe(true)   // present, but both zero — a valid New card
+    expect(seedFsrsState(r).fsrsState).toBe(r.fsrsState)
+  })
+
+  it('resets the legacy fields too', () => {
+    const r = resetSchedule(studied().card)
+    expect(r.interval).toBe(0)
+    expect(r.repetitions).toBe(0)
+    expect(r.easeFactor).toBe(2.5)
+    expect(r.lastReviewed).toBeNull()
+  })
+
+  it('comes due now and then schedules like a new card, not like the old one', () => {
+    const { card: before, at } = studied()
+    const beforeNext = days(rateCard(before, 2, new Date(at)), at)
+    expect(beforeNext).toBeGreaterThan(20) // a matured card goes a long way out
+
+    const after = resetSchedule(before)
+    expect(after.dueAt).toBeLessThanOrEqual(Date.now())
+
+    const afterNext = days(rateCard(after, 2))
+    expect(afterNext).toBeLessThan(beforeNext)
+    expect(afterNext).toBe(days(rateCard(newCard('f', 'b'), 2))) // same as never-studied
+  })
+
+  it('keeps the lifetime lapse count and the card content', () => {
+    const c = { ...studied().card, lapses: 6, front: 'Q', back: 'A', category: 'History' }
+    const r = resetSchedule(c)
+    expect(r.lapses).toBe(6)
+    expect(r.front).toBe('Q')
+    expect(r.category).toBe('History')
   })
 })

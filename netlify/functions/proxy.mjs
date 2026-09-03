@@ -1,6 +1,9 @@
 // CORS proxy for j-archive pages — uses v1 handler format to match jarchive.mjs
+// The app calls this same-origin, so it needs no CORS grant at all — the wildcard only
+// ever let other sites spend our bandwidth scraping j-archive through us. Pinned to the
+// app's own origin, matching imgproxy, which was already doing this.
 const headers = {
-  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Origin': 'https://jeotrainer.netlify.app',
   'Access-Control-Allow-Headers': 'Content-Type',
 }
 

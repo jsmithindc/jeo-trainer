@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { getMetaCategory } from './analytics.js'
+import { getMetaCategory, buildCategoryHeatMap } from './analytics.js'
 
 describe('getMetaCategory — substring false positives', () => {
   // Each of these was misfiled by plain substring matching, which quietly skewed the
@@ -203,5 +203,37 @@ describe('buildStudyStreak', () => {
   it('handles an empty log', () => {
     const s = buildStudyStreak([], { now: NOW })
     expect(s).toEqual({ current: 0, longest: 0, studiedToday: false, totalDays: 0 })
+  })
+})
+
+
+describe('buildCategoryHeatMap counting', () => {
+  const game = (id, cats) => ({ id, playedAt: '2026-01-01', singleBreakdown: cats })
+
+  it('separates how many categories appeared from how many games they appeared in', () => {
+    // One game fielding three History categories is one game, not three.
+    const [history] = buildCategoryHeatMap([
+      game('g1', [
+        { name: 'AMERICAN HISTORY', score: 1000 },
+        { name: 'WORLD WAR II', score: 600 },
+        { name: 'THE CONSTITUTION', score: 200 },
+      ]),
+    ]).filter(m => m.meta === 'History')
+
+    expect(history.appearances).toBe(3)
+    expect(history.games).toBe(1)
+    // The average stays per category, which is the unit a heat map wants.
+    expect(history.avg).toBe(600)
+  })
+
+  it('counts a category appearing across separate games as separate games', () => {
+    const [history] = buildCategoryHeatMap([
+      game('g1', [{ name: 'AMERICAN HISTORY', score: 800 }]),
+      game('g2', [{ name: 'AMERICAN HISTORY', score: 400 }]),
+    ]).filter(m => m.meta === 'History')
+
+    expect(history.appearances).toBe(2)
+    expect(history.games).toBe(2)
+    expect(history.avg).toBe(600)
   })
 })

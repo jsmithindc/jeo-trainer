@@ -86,6 +86,35 @@ function merge(card, f, now) {
   }
 }
 
+/**
+ * Return a card to the state of one never studied.
+ *
+ * The deck view used to do this inline, clearing only the SM-2 fields and leaving
+ * stability, difficulty and fsrsState behind. hasFsrsState() still returned true, so
+ * FSRS kept the old memory state and State.Review: the card came due immediately and
+ * then jumped straight back out to roughly its old interval on the first rating. The
+ * button looked like it worked and didn't.
+ *
+ * lapses survives deliberately. It is a lifetime count, the same as Anki's, and
+ * resetting the schedule is not a claim that the failures never happened. Rewriting a
+ * card is the operation that forgives them — see releaseRewritten in leech.js.
+ */
+export function resetSchedule(card, now = Date.now()) {
+  return {
+    ...card,
+    // A New card needs stability AND difficulty at zero; FSRS rejects a partial state.
+    stability: 0,
+    difficulty: 0,
+    fsrsState: State.New,
+    elapsedDays: 0,
+    interval: 0,
+    repetitions: 0,
+    easeFactor: 2.5,
+    dueAt: now,
+    lastReviewed: null,
+  }
+}
+
 /** Grade a card. quality: 0=Again 1=Hard 2=Good 3=Easy. */
 export function rateCard(card, quality, now = new Date()) {
   const result = scheduler.repeat(toFsrsCard(card), now)[RATING[quality] ?? Rating.Good]

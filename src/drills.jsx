@@ -1,4 +1,5 @@
 import { normalize, levenshtein, fuzzyMatch } from './fuzzy.js'
+import { shuffled } from './shuffle.js'
 import { evaluateFinalWager, generateFinalScenario } from './wager.js'
 import { useState, useEffect, useRef } from 'react'
 import { saveCards, loadCards } from './storage.js'
@@ -32,20 +33,75 @@ function makeMapSnapshot(targetPath, allPaths, viewPad = 30) {
 }
 
 // ─── Make flashcard from missed drill item ───────────────────────────────────
-function makeFlashCard(front, back, category = 'Drill') {
+export function makeFlashCard(front, back, category = 'Drill') {
   return {
     id: `drill-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     front,
     back,
     category,
     dueAt: Date.now(),
-    interval: 1,
+    // Zero, not one. seedFsrsState treats `interval > 0` as evidence the card has been
+    // learned, so an interval of 1 on a card you have never seen made FSRS start it in
+    // Review state with a day of stability instead of giving it the new-card curve.
+    interval: 0,
     easeFactor: 2.5,
     repetitions: 0,
     lapses: 0,
+    // Without this the study screen's source badge fell through to "MANUAL".
+    source: 'drill',
     lastReviewed: null,
     createdAt: Date.now(),
   }
+}
+
+// ─── Add cards to the deck ────────────────────────────────────────────────────
+// Every "add to deck" button in this file used to save and then announce success
+// without checking whether the save worked. saveCards reports a failure by returning
+// false — it used to throw, and three callers still carried the try/catch that went
+// with that, so the retry-without-images path had quietly become unreachable. On a full
+// quota the write failed, nothing was retried, and the user was told the cards had been
+// added. They were gone on the next reload.
+//
+// Map cards embed an inline SVG snapshot, which is most of their size and is cheap to
+// regenerate, so dropping the images is worth trying before giving up on the cards.
+export function addDrillCards(candidates, setCards) {
+  const freshCards = loadCards()
+  const existing = new Set(freshCards.map(c => c.front))
+  const toAdd = candidates.filter(c => !existing.has(c.front))
+  const skipped = candidates.length - toAdd.length
+  if (!toAdd.length) return { added: 0, skipped, imagesDropped: false, failed: false }
+
+  const commit = cards => {
+    const updated = [...freshCards, ...cards]
+    if (!saveCards(updated)) return false
+    setCards(updated)
+    return true
+  }
+
+  if (commit(toAdd)) return { added: toAdd.length, skipped, imagesDropped: false, failed: false }
+
+  if (toAdd.some(c => c.image)) {
+    const stripped = toAdd.map(({ image, ...rest }) => rest)
+    if (commit(stripped)) return { added: stripped.length, skipped, imagesDropped: true, failed: false }
+  }
+
+  return { added: 0, skipped, imagesDropped: false, failed: true }
+}
+
+/** Tell the user what actually happened. Returns true if anything was saved. */
+function reportDrillCards(result, { noneMessage = 'No new cards to add', addedMessage = null } = {}) {
+  const { added, skipped, imagesDropped, failed } = result
+  if (failed) {
+    alert('Could not save — this device is out of local storage. Delete some cards in My Deck, then try again.')
+    return false
+  }
+  if (!added) { alert(noneMessage); return false }
+  alert(
+    (addedMessage || `Added ${added} card${added !== 1 ? 's' : ''} to your deck`) +
+    (skipped ? ` (${skipped} already existed)` : '') +
+    (imagesDropped ? ' — without map images, storage was full' : '')
+  )
+  return true
 }
 
 // ─── Fuzzy Match ─────────────────────────────────────────────────────────────
@@ -378,7 +434,7 @@ export function PresidentsDrill({ onBack, cards = [], setCards = () => {} }) {
   const inputRef = useRef(null)
 
   function startQuiz() {
-    const q = order === 'sequential' ? [...PRESIDENTS] : [...PRESIDENTS].sort(() => Math.random() - 0.5)
+    const q = order === 'sequential' ? [...PRESIDENTS] : shuffled(PRESIDENTS)
     setQueue(q)
     setIdx(0)
     setResults([])
@@ -517,14 +573,7 @@ export function PresidentsDrill({ onBack, cards = [], setCards = () => {} }) {
             `#${r.president.num} ${r.president.name} (${r.president.years})`,
             'US Presidents'
           ))
-          const freshCards = loadCards()
-          const existing = new Set(freshCards.map(c => c.front))
-          const newCards = missed.filter(c => !existing.has(c.front))
-          if (newCards.length) {
-            const updated = [...freshCards, ...newCards]
-            saveCards(updated); setCards(updated)
-            alert(`Added ${newCards.length} card${newCards.length !== 1 ? 's' : ''} to your deck${missed.length - newCards.length > 0 ? ` (${missed.length - newCards.length} already existed)` : ''}`)
-          } else { alert('All missed items already in your deck') }
+          reportDrillCards(addDrillCards(missed, setCards), { noneMessage: 'All missed items already in your deck' })
         }}>+ Add missed to deck ({results.filter(r => !r.correct).length})</button>
       )}
       <button style={S.btn} onClick={() => { setMode('setup') }}>Try Again</button>
@@ -582,12 +631,9 @@ export function PresidentsDrill({ onBack, cards = [], setCards = () => {} }) {
         const pres = queue[idx]
         const front = `#${pres.num} · ${pres.years} · ${pres.party}`
         const back = `#${pres.num} ${pres.name} (${pres.years})`
-        const freshCards = loadCards()
-        if (freshCards.some(c => c.front === front)) { alert('Already in deck'); return }
         const card = makeFlashCard(front, back, 'US Presidents')
-        const updated = [...freshCards, card]
-        saveCards(updated); setCards(updated)
-        alert(`Added ${pres.name} to deck`)
+        reportDrillCards(addDrillCards([card], setCards),
+          { noneMessage: 'Already in deck', addedMessage: `Added ${pres.name} to deck` })
       }}>＋ Add this card to deck</button>
     </div>
   )
@@ -903,11 +949,9 @@ function WaterBodiesDrill({ onBack, cards = [], setCards = () => {}, preloadedPa
           <div style={{ display:'flex', gap:8 }}>
             <button style={{ ...S.btn, flex:1 }} onClick={() => { setSelected(null); setResult(null) }}>TAP ANOTHER</button>
             <button style={{ fontSize:10, color:'#4caf7d', border:'1px solid #2e8c50', borderRadius:8, padding:'6px 12px', background:'#0a1e10', cursor:'pointer' }} onClick={() => {
-              const freshCards = loadCards()
-              if (freshCards.some(c => c.front === result.name)) { alert('Already in deck'); return }
               const card = makeFlashCard(result.name, `${result.name} (${WATER_BODY_MAP[result.name]?.type})`, 'Geography · Water Bodies')
-              const updated = [...freshCards, card]; saveCards(updated); setCards(updated)
-              alert('Added to deck')
+              reportDrillCards(addDrillCards([card], setCards),
+                { noneMessage: 'Already in deck', addedMessage: `Added ${result.name} to deck` })
             }}>＋ Deck</button>
           </div>
         </div>
@@ -1288,22 +1332,7 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids, card
                 if (img) card.image = img
                 return card
               })
-              const freshCards = loadCards()
-              const existing = new Set(freshCards.map(c => c.front))
-              const newCards = missed.filter(c => !existing.has(c.front))
-              if (newCards.length) {
-                const updated = [...freshCards, ...newCards]
-                try {
-                  saveCards(updated)
-                  setCards(updated)
-                  alert(`Added ${newCards.length} card${newCards.length !== 1 ? 's' : ''} to your deck`)
-                } catch {
-                  const stripped = newCards.map(c => { const {image, ...rest} = c; return rest })
-                  const updated2 = [...freshCards, ...stripped]
-                  saveCards(updated2); setCards(updated2)
-                  alert(`Added ${newCards.length} card${newCards.length !== 1 ? 's' : ''} to your deck (without map images - storage full)`)
-                }
-              } else { alert('No new cards to add') }
+              reportDrillCards(addDrillCards(missed, setCards))
             }}>+ Add missed ({Object.entries(attemptResults).filter(([,r]) => !r.correct).length})</button>
           )}
         </div>
@@ -1387,15 +1416,13 @@ export function WorldMapDrill({ onBack, preloadedPaths, preloadedCentroids, card
               <button style={{ fontSize:10, color:'#4dd0e1', border:'1px solid #1a4060', borderRadius:6, padding:'3px 10px', background:'#0a1e20', cursor:'pointer', marginTop:6 }} onClick={() => {
                 const country = COUNTRY_MAP[selected]
                 if (!country) return
-                const freshCards = loadCards()
                 const p = paths.find(p2 => p2.id === selected)
                 const img = p ? makeMapSnapshot(p, paths) : null
                 const front = img ? `[Map] ${country.name}` : country.name
-                if (freshCards.some(c => c.front === front)) { alert('Already in deck'); return }
                 const card = makeFlashCard(front, `${country.name} · Capital: ${country.capital}`, 'Geography · World Map')
                 if (img) card.image = img
-                const updated = [...freshCards, card]; saveCards(updated); setCards(updated)
-                alert(`Added ${country.name} to deck`)
+                reportDrillCards(addDrillCards([card], setCards),
+                  { noneMessage: 'Already in deck', addedMessage: `Added ${country.name} to deck` })
               }}>＋ Add to deck</button>
                 TAP ANOTHER COUNTRY
               </button>
@@ -1497,7 +1524,7 @@ export function DrillsView({ cards = [], setCards = () => {} }) {
   }, [])
 
   if (drill === 'knowledge') return <KnowledgeHub onBack={handleBack} onSelect={setDrill} stats={stats} />
-  if (drill === 'wager') return <WagerDrill onBack={() => { setDrill('knowledge'); setStats(loadDrillStats()) }} />
+  if (drill === 'wager') return <WagerDrill onBack={handleBack} />
   if (drill === 'presidents') return <PresidentsDrill onBack={() => { setDrill('knowledge'); setStats(loadDrillStats()) }} cards={cards} setCards={setCards} />
   if (drill && FLASH_DRILLS[drill]) return <FlashDrill drillKey={drill} onBack={() => { setDrill('knowledge'); setStats(loadDrillStats()) }} cards={cards} setCards={setCards} />
   if (drill === 'geography') return (
@@ -1508,9 +1535,9 @@ export function DrillsView({ cards = [], setCards = () => {} }) {
       worldLoading={worldLoading}
     />
   )
-  if (drill === 'worldmap') return <WorldMapDrill onBack={() => { setDrill('geography'); setStats(loadDrillStats()) }} preloadedPaths={worldPaths} preloadedCentroids={worldCentroids} />
+  if (drill === 'worldmap') return <WorldMapDrill onBack={() => { setDrill('geography'); setStats(loadDrillStats()) }} preloadedPaths={worldPaths} preloadedCentroids={worldCentroids} cards={cards} setCards={setCards} />
   if (drill === 'water-bodies') return <WaterBodiesDrill onBack={() => { setDrill('geography'); setStats(loadDrillStats()) }} cards={cards} setCards={setCards} preloadedPaths={worldPaths} />
-  if (drill?.startsWith('region-')) return <RegionalMapDrill regionKey={drill.replace('region-','')} onBack={() => { setDrill('geography'); setStats(loadDrillStats()) }} worldPaths={worldPaths} worldCentroids={worldCentroids} />
+  if (drill?.startsWith('region-')) return <RegionalMapDrill regionKey={drill.replace('region-','')} onBack={() => { setDrill('geography'); setStats(loadDrillStats()) }} worldPaths={worldPaths} worldCentroids={worldCentroids} cards={cards} setCards={setCards} />
   if (drill === 'us-states') return <SubnationalMapDrill onBack={() => { setDrill('geography'); setStats(loadDrillStats()) }} config={{ geojsonUrl:'https://raw.githubusercontent.com/PublicaMundi/MappingAPI/master/data/geojson/us-states.json', data:US_STATES, regionLabel:'State', bounds:[-125,-66,24,50], width:960, height:560 }} cards={cards} setCards={setCards} />
   if (drill === 'canada') return <SubnationalMapDrill onBack={() => { setDrill('geography'); setStats(loadDrillStats()) }} config={{ geojsonUrl:'https://raw.githubusercontent.com/codeforamerica/click_that_hood/master/public/data/canada.geojson', data:CANADA_PROVINCES, regionLabel:'Province', bounds:[-141,-52,41,84], width:960, height:640 }} cards={cards} setCards={setCards} />
   if (drill === 'mexico') return <SubnationalMapDrill onBack={() => { setDrill('geography'); setStats(loadDrillStats()) }} config={{ geojsonUrl:'https://raw.githubusercontent.com/codeforamerica/click_that_hood/master/public/data/mexico.geojson', data:MEXICO_STATES, regionLabel:'State', bounds:[-118,-86,14,33], width:960, height:500 }} cards={cards} setCards={setCards} />
@@ -1526,6 +1553,9 @@ export function DrillsView({ cards = [], setCards = () => {} }) {
       {[
         { id: 'geography', emoji: '🌍', label: 'GEOGRAPHY', desc: 'World & regional maps, states & capitals' },
         { id: 'knowledge', emoji: '🧠', label: 'KNOWLEDGE', desc: 'Presidents, arts, science, language & more' },
+        // Not a recall drill like the other two — it trains the wagering maths, which
+        // is the part of the game Coryat cannot see. Stands on its own accordingly.
+        { id: 'wager', emoji: '💰', label: 'WAGER TRAINER', desc: 'Final Jeopardy wagering — locks, covers & catching up' },
       ].map((d, i) => {
         if (d.isHeader) return <div key={i} style={{ fontSize: 9, color: '#2a3460', letterSpacing: 3, textAlign: 'center', padding: '4px 0' }}>{d.label}</div>
         const history = stats[d.id] || []
@@ -1676,7 +1706,6 @@ function WagerDrill({ onBack }) {
 
 function KnowledgeHub({ onBack, onSelect, stats }) {
   const knowledgeDrills = [
-    { id: 'wager', emoji: '💰', label: 'WAGER TRAINER', desc: 'Final Jeopardy wagering — locks, covers & catching up' },
     { id: 'presidents', emoji: '🇺🇸', label: 'US PRESIDENTS', desc: 'All 47 presidents · number, name & years' },
     { id: 'vice_presidents', emoji: '🏛', label: 'US VICE PRESIDENTS', desc: '49 VPs · name, number & president served' },
     { id: 'astronomy', emoji: '🪐', label: 'PLANETS & ASTRONOMY', desc: 'Solar system, moons & space facts' },
@@ -2202,22 +2231,7 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
                 if (img) card.image = img
                 return card
               })
-              const freshCards = loadCards()
-              const existing = new Set(freshCards.map(c => c.front))
-              const newCards = missed.filter(c => !existing.has(c.front))
-              if (newCards.length) {
-                const updated = [...freshCards, ...newCards]
-                try {
-                  saveCards(updated)
-                  setCards(updated)
-                  alert(`Added ${newCards.length} card${newCards.length !== 1 ? 's' : ''} to your deck`)
-                } catch {
-                  const stripped = newCards.map(c => { const {image, ...rest} = c; return rest })
-                  const updated2 = [...freshCards, ...stripped]
-                  saveCards(updated2); setCards(updated2)
-                  alert(`Added ${newCards.length} card${newCards.length !== 1 ? 's' : ''} to your deck (without map images - storage full)`)
-                }
-              } else { alert('No new cards to add') }
+              reportDrillCards(addDrillCards(missed, setCards))
             }}>+ Add missed ({Object.entries(attemptResults).filter(([,r]) => !r.correct).length})</button>
           )}
         </div>
@@ -2285,15 +2299,13 @@ function SubnationalMapDrill({ config, onBack, cards = [], setCards = () => {} }
               <button style={{ fontSize:10, color:'#4dd0e1', border:'1px solid #1a4060', borderRadius:6, padding:'3px 10px', background:'#0a1e20', cursor:'pointer', marginTop:6 }} onClick={() => {
                 const data = getRegionData(selected)
                 if (!data) return
-                const freshCards = loadCards()
                 const p = paths.find(p2 => p2.name === selected)
                 const img = p ? makeMapSnapshot(p, paths) : null
                 const front = img ? `[Map] ${selected}` : selected
-                if (freshCards.some(c => c.front === front)) { alert('Already in deck'); return }
                 const card = makeFlashCard(front, `${selected} · Capital: ${data.capital}`, config.regionLabel === 'State' ? 'US States' : 'Geography')
                 if (img) card.image = img
-                const updated = [...freshCards, card]; saveCards(updated); setCards(updated)
-                alert(`Added ${selected} to deck`)
+                reportDrillCards(addDrillCards([card], setCards),
+                  { noneMessage: 'Already in deck', addedMessage: `Added ${selected} to deck` })
               }}>＋ Add to deck</button>
               <button style={{ ...S.btn, marginTop:12, fontSize:14 }} onClick={() => setSelected(null)}>TAP ANOTHER</button>
             </div>
@@ -2617,22 +2629,7 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
                 if (img) card.image = img
                 return card
               })
-              const freshCards = loadCards()
-              const existing = new Set(freshCards.map(c => c.front))
-              const newCards = missed.filter(c => !existing.has(c.front))
-              if (newCards.length) {
-                const updated = [...freshCards, ...newCards]
-                try {
-                  saveCards(updated)
-                  setCards(updated)
-                  alert(`Added ${newCards.length} card${newCards.length !== 1 ? 's' : ''} to your deck`)
-                } catch {
-                  const stripped = newCards.map(c => { const {image, ...rest} = c; return rest })
-                  const updated2 = [...freshCards, ...stripped]
-                  saveCards(updated2); setCards(updated2)
-                  alert(`Added ${newCards.length} card${newCards.length !== 1 ? 's' : ''} to your deck (without map images - storage full)`)
-                }
-              } else { alert('No new cards to add') }
+              reportDrillCards(addDrillCards(missed, setCards))
             }}>+ Add missed ({Object.entries(attemptResults).filter(([,r]) => !r.correct).length})</button>
           )}
         </div>
@@ -2694,15 +2691,13 @@ function RegionalMapDrill({ regionKey, onBack, worldPaths, worldCentroids, cards
               <button style={{ fontSize:10, color:'#4dd0e1', border:'1px solid #1a4060', borderRadius:6, padding:'3px 10px', background:'#0a1e20', cursor:'pointer', marginTop:6 }} onClick={() => {
                 const country = COUNTRY_MAP[selected]
                 if (!country) return
-                const freshCards = loadCards()
                 const p = regionPaths.find(p2 => p2.id === selected)
                 const img = p ? makeMapSnapshot(p, regionPaths) : null
                 const front = img ? `[Map] ${country.name}` : country.name
-                if (freshCards.some(c => c.front === front)) { alert('Already in deck'); return }
                 const card = makeFlashCard(front, `${country.name} · Capital: ${country.capital}`, `Geography · ${region.label}`)
                 if (img) card.image = img
-                const updated = [...freshCards, card]; saveCards(updated); setCards(updated)
-                alert(`Added ${country.name} to deck`)
+                reportDrillCards(addDrillCards([card], setCards),
+                  { noneMessage: 'Already in deck', addedMessage: `Added ${country.name} to deck` })
               }}>＋ Add to deck</button>
               <button style={{ ...S.btn, marginTop:12, fontSize:14 }} onClick={() => setSelected(null)}>TAP ANOTHER</button>
             </div>
@@ -3323,7 +3318,7 @@ function FlashDrill({ drillKey, onBack, cards = [], setCards = () => {} }) {
 
   function startQuiz() {
     const allItems = modeConfig.qField === 'image' ? drill.items.filter(it => it.image) : modeConfig.skipIfNoField ? drill.items.filter(it => it[modeConfig.qField]) : drill.items
-    const q = order === 'sequential' ? [...allItems] : [...allItems].sort(() => Math.random() - 0.5)
+    const q = order === 'sequential' ? [...allItems] : shuffled(allItems)
     setQueue(q)
     setIdx(0)
     setResults([])
@@ -3488,14 +3483,7 @@ function FlashDrill({ drillKey, onBack, cards = [], setCards = () => {} }) {
             const back = String(r.expected || r.item[modeConfig.aField] || '')
             return makeFlashCard(front, back, drill.label)
           })
-          const freshCards = loadCards()
-          const existing = new Set(freshCards.map(c => c.front))
-          const newCards = missed.filter(c => !existing.has(c.front))
-          if (newCards.length) {
-            const updated = [...freshCards, ...newCards]
-            saveCards(updated); setCards(updated)
-            alert(`Added ${newCards.length} card${newCards.length !== 1 ? 's' : ''} to your deck${missed.length - newCards.length > 0 ? ` (${missed.length - newCards.length} already existed)` : ''}`)
-          } else { alert('All missed items already in your deck') }
+          reportDrillCards(addDrillCards(missed, setCards), { noneMessage: 'All missed items already in your deck' })
         }}>+ Add missed to deck ({results.filter(r => !r.correct).length})</button>
       )}
       <button style={S.btn} onClick={() => setMode('setup')}>Try Again</button>
@@ -3579,12 +3567,8 @@ function FlashDrill({ drillKey, onBack, cards = [], setCards = () => {} }) {
       <button style={{ ...S.btnSecondary, fontSize:10, padding:'4px 0', color:'#4caf7d', borderColor:'#2e8c50' }} onClick={() => {
         const front = modeConfig.qField === 'image' ? `[Map] ${item.work || item[modeConfig.qField]}` : String(item[modeConfig.qField])
         const back = String(item[modeConfig.aField] || item.work_and_artist || '')
-        const freshCards = loadCards()
-        if (freshCards.some(c => c.front === front)) { alert('Already in deck'); return }
         const card = makeFlashCard(front, back, drill.label)
-        const updated = [...freshCards, card]
-        saveCards(updated); setCards(updated)
-        alert('Added to deck')
+        reportDrillCards(addDrillCards([card], setCards), { noneMessage: 'Already in deck' })
       }}>＋ Add this card to deck</button>
       <button style={S.btnSecondary} onClick={() => setMode('setup')}>← Setup</button>
     </div>

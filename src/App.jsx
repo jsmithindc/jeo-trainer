@@ -1,25 +1,28 @@
 import { useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense } from 'react'
+import { shuffled } from './shuffle.js'
 import { newCard, formatRelative } from './srs.js'
-import { rateCard, nextDueLabel } from './fsrs.js'
+import { rateCard, nextDueLabel, resetSchedule } from './fsrs.js'
 import { loadCards, saveCards, loadGameHistory, saveGameHistory } from './storage.js'
 import { parseApkg, migrateLocalMediaToSupabase } from './ankiImport.js'
 import { SAMPLE_BOARD } from './boardData.js'
 import { migrateFJWagers, backfillDdNet, migrateToFsrs } from './migrations.js'
-import { buildPlayedIndex, findPlayed } from './played.js'
+import { buildPlayedIndex, findPlayed, normalizeAirDate } from './played.js'
 import { matchesAnswer } from './fuzzy.js'
+import { recallMs, suggestGrade, formatRecall, summariseRecall } from './recall.js'
+import { isSuspended, shouldQuarantine, suspendCard, releaseCard, releaseRewritten, partitionByHealth, LEECH_LAPSES, QUARANTINE_LAPSES } from './leech.js'
 import { saveDeckSnapshot, getDeckSnapshots, restoreSnapshot, ensureSnapshotsMigrated } from './snapshotStore.js'
 import { fetchEpisode, episodeToBoard, searchEpisodesByCategory } from './jarchive.js'
-import { supabase, signIn, signUp, resetPassword, signOut, loadRemoteData, saveRemoteData, mergeData, saveGameStateRemote, uploadMedia } from './supabase.js'
+import { supabase, signIn, signUp, resetPassword, signOut, loadRemoteData, saveRemoteData, mergeData, saveGameStateRemote, loadGameStateRemote, clearGameStateRemote, uploadMedia } from './supabase.js'
 import { buildCategoryHeatMap, buildValueBreakdown, predictCoryat, exportToApkg, getMetaCategory, META_CATEGORY_NAMES, buildDailyDoubleStats, buildRetentionSeries, buildDeckHealth, buildStudyStreak } from './analytics.js'
 import { CardContent, cardIsHtml } from './CardContent.jsx'
 import { getMediaStats, clearAllMedia, getMedia } from './mediaStore.js'
 import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpisodeToCache, getEpisodeFromCache, pinEpisode, unpinEpisode, removeEpisodeFromCache, getCacheStats, getDailyStats, incrementDailyCards, addToTrash, getTrash, restoreFromTrash, setStorageErrorHandler, logReview, removeLastReview, getReviewLog, getTombstones, addTombstones, saveTombstones, removeTombstone } from './storage.js'
-import { WeaknessTracker, SpeedTracker, CategoryConfidenceModal, WagerTrainer, TournamentSetup, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent, HISTORICAL_CORYAT } from './training.jsx'
+import { WeaknessTracker, SpeedTracker, WagerTrainer, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent } from './training.jsx'
 // drills.jsx pulls in the Natural Earth water-body polygons; together they are more
 // than half the bundle, and none of it is needed unless the Drills tab is opened.
 const DrillsView = lazy(() => import('./drills.jsx').then(m => ({ default: m.DrillsView })))
 
-const APP_VERSION = '2.8.0'
+const APP_VERSION = '2.9.0'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -30,12 +33,44 @@ function isResumable(state) {
   return !!(state && state.episodeMeta && !state.fjAnswered)
 }
 
+// Merge only the font overrides that are actually switched on.
+//
+// The board and clue modals used to inline `fontSize: largeFont && fontSettings?.size ? N
+// : undefined` on top of a style that already set fontSize. Spreading `undefined` over a
+// real value deletes the key — React then sets no font-size at all and the element
+// inherits from its parent. With Large font off, category headers rendered at the
+// inherited 16px instead of their designed 12px and tile values at 16px instead of 18px,
+// so the setting's only visible effect was putting the defaults back.
+function fontOverride(largeFont, fontSettings, { size, weight, lineHeight } = {}) {
+  if (!largeFont) return null
+  const out = {}
+  if (size != null && fontSettings?.size) out.fontSize = size
+  if (weight != null && fontSettings?.weight) out.fontWeight = weight
+  if (lineHeight != null && fontSettings?.lineHeight) out.lineHeight = lineHeight
+  return out
+}
+
 function initClueStates(board) {
   const s = {}
   board.categories.forEach((cat, ci) =>
     cat.clues.forEach((_, ri) => { s[`${ci}-${ri}`] = CLUE_STATES.UNANSWERED })
   )
   return s
+}
+
+// Per-category Coryat for one round. Two identical copies of this existed — one inside
+// saveGame, one inside SummaryView — so a change to how a breakdown is scored had to be
+// made twice or the saved record and the on-screen summary would disagree.
+function categoryBreakdown(board, states) {
+  if (!board) return []
+  return board.categories.map((cat, ci) => {
+    let score = 0
+    cat.clues.forEach((clue, ri) => {
+      const state = (states || {})[`${ci}-${ri}`] || 'unanswered'
+      if (!clue.isDailyDouble) score += CORYAT_VAL[state](clue.value)
+    })
+    return { name: cat.name, score }
+  })
 }
 
 function calcCoryat(states, board) {
@@ -84,7 +119,10 @@ export default function App() {
   const [confidenceRatings, setConfidenceRatings] = useState(null)
   const [wagerState, setWagerState] = useState(null) // { type, resolve }
   const [dailyDoubles, setDailyDoubles] = useState([]) // per-DD wager log for this game
-  const [buzzTimeRef] = useState({ start: null }) // for tracking buzz times
+  // Reaction times from Timed Mode, in ms from the buzz window opening to the buzz.
+  // TimedClueModal measured these and threw them away; the Speed tab filtered game
+  // history on a timedStats field that nothing ever wrote, so it could never show data.
+  const [buzzTimes, setBuzzTimes] = useState([])
 
   const [cards, setCards] = useState([])
   // Re-sync cards from storage when window regains focus (catches drill updates)
@@ -103,7 +141,6 @@ export default function App() {
   const [wagerAmount, setWagerAmount] = useState(null) // pending wager
   const [lastClueResult, setLastClueResult] = useState(null) // 'correct' | 'incorrect' | 'pass'
   const [boardControl, setBoardControl] = useState('player') // 'player' | 'opponent'
-  const [opponentPickTimeout, setOpponentPickTimeout] = useState(null)
   const boardControlRef = useRef('player')
   const opponentCategoryRef = useRef(null)
   const boardRef = useRef(null)
@@ -116,7 +153,6 @@ export default function App() {
   const roundRef = useRef('single')
   const gameCompleteRef = useRef(false)
   const triggerOpponentPickRef = useRef(null)
-  const openClueRef = useRef(null)
   const [showDJPrompt, setShowDJPrompt] = useState(false)
   const [resumePrompt, setResumePrompt] = useState(null) // saved game state to restore
   const [pendingOpponentPick, setPendingOpponentPick] = useState(null)
@@ -152,6 +188,23 @@ export default function App() {
     })
     return () => subscription.unsubscribe()
   }, [])
+
+  // Tells boot.js not to reload the page when a new service worker takes over: a board
+  // autosaves and would survive it, but a study session lives only in memory.
+  const [studying, setStudying] = useState(false)
+  useEffect(() => {
+    const busy = studying || gameStarted
+    window.__jeoBusy = busy
+    // boot.js defers a service-worker reload while busy rather than dropping a session.
+    // Take it as soon as we are idle again, so an update lands promptly instead of the
+    // app running superseded code until the next manual navigation. Going idle means a
+    // session just ended, so there is nothing in memory left to lose.
+    if (!busy && window.__jeoUpdatePending) {
+      window.__jeoUpdatePending = false
+      window.location.reload()
+    }
+    return () => { window.__jeoBusy = false }
+  }, [studying, gameStarted])
 
   // Surface failed local writes through the same banner as sync errors, rather
   // than letting the app show cards that were never actually saved.
@@ -190,6 +243,24 @@ export default function App() {
     if (isResumable(saved)) setResumePrompt(saved)
   }, [authChecked])
 
+  // The remote half of that. An in-progress board has been pushed to Supabase every 30
+  // seconds of play since the feature was written, and nothing ever read it back — so the
+  // cross-device resume it exists for never actually worked. Offer it when it is genuinely
+  // ahead of whatever is on this device; savedAt is what decides, since both sides stamp it.
+  useEffect(() => {
+    if (!user || !authChecked) return
+    let cancelled = false
+    loadGameStateRemote()
+      .then(remote => {
+        if (cancelled || !isResumable(remote)) return
+        const local = loadGameState()
+        const newer = new Date(remote.savedAt || 0) > new Date(local?.savedAt || 0)
+        if (!isResumable(local) || newer) setResumePrompt(remote)
+      })
+      .catch(() => {}) // a missing remote game is not worth surfacing
+    return () => { cancelled = true }
+  }, [user, authChecked])
+
   const [dailyCards, setDailyCards] = useState(() => getDailyStats().cardsReviewed)
   const _todayCheck = new Date().toDateString()
   useEffect(() => { setDailyCards(getDailyStats().cardsReviewed) }, [_todayCheck])
@@ -197,16 +268,21 @@ export default function App() {
   // ── Auto-load latest episode + episode list on mount ────────────────────
   const [historyReady, setHistoryReady] = useState(false)
 
+  const startupLoaded = useRef(false)
+
   useEffect(() => {
-    if (!authChecked) return
-    // Load next unplayed episode after the last completed one
-    // gameHistory[0] is most recent; gameId is numeric j-archive ID (added v1.5.0)
-    // Fall back to episodeId (show number) for older history entries
+    // Wait for both. The effect re-runs as each flips, and it used to act on the first
+    // one — so a cold start fetched the list twice and, worse, kicked off two competing
+    // loadEpisode calls: the first with an empty history (landing on the latest episode)
+    // and the second with the real history (landing on the next unplayed one). Whichever
+    // resolved last won, so which board you got was a race.
+    if (!authChecked || !historyReady || startupLoaded.current) return
+    startupLoaded.current = true
+
+    // gameHistory[0] is the most recent game. gameId is the numeric j-archive id;
+    // older records only have episodeId (the show number) and an air date.
     const lastEntry = gameHistory.length > 0 ? gameHistory[0] : null
-    // gameId is the numeric j-archive game_id (added v1.5.2+)
-    // episodeId is the show number (e.g. "9582") — use to look up gameId from episode list
     const lastGameId = lastEntry?.gameId || null
-    const lastEpisodeId = lastEntry?.episodeId || null // show number
 
     const loadLatestFallback = () => {
       loadEpisode('latest', true).catch(() => {
@@ -220,8 +296,7 @@ export default function App() {
     }
 
     // One request serves both consumers: populating prev/next, and finding the next
-    // unplayed episode. This used to be fetched twice here, and the effect re-runs when
-    // historyReady flips — so a cold start hit the function up to four times.
+    // unplayed episode.
     fetch('/.netlify/functions/episodes')
       .then(r => r.json())
       .then(data => {
@@ -237,16 +312,10 @@ export default function App() {
           lastIdx = data.episodes.findIndex(e => e.gameId === lastGameId)
         }
         if (lastIdx === -1 && lastEntry?.airDate) {
-          // Match by air date - normalize both to just the date portion
-          const normalizeDate = (d) => {
-            if (!d) return ''
-            // Handle "Tuesday, June 10, 2026" → "June 10, 2026"
-            // Handle "June 10, 2026" → "June 10, 2026"
-            // Handle "2026-06-10" → try to match
-            return d.replace(/^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\s*/, '').trim()
-          }
-          const lastAir = normalizeDate(lastEntry.airDate)
-          lastIdx = data.episodes.findIndex(e => normalizeDate(e.airDate) === lastAir)
+          // Air date is the one field both sides have always carried. Uses the same
+          // normaliser as the played-episode index rather than a second copy of it.
+          const lastAir = normalizeAirDate(lastEntry.airDate)
+          lastIdx = data.episodes.findIndex(e => normalizeAirDate(e.airDate) === lastAir)
         }
 
         if (lastIdx > 0) {
@@ -283,7 +352,7 @@ export default function App() {
     loadRemoteData()
       .then(remote => {
         const local = { cards, gameHistory, tombstones: getTombstones() }
-        const merged = mergeData(local, remote, remote.updatedAt)
+        const merged = mergeData(local, remote)
         // Run after the merge, not before: remote wins on conflict for games that
         // already exist there, so repairing local first would just be overwritten.
         // Repairing the merged result means the fix propagates back up on the next save.
@@ -391,6 +460,7 @@ export default function App() {
       actualScore: actualScore,
       confidenceRatings,
       dailyDoubles,
+      buzzTimes,
       tournamentState,
       savedAt: new Date().toISOString(),
     }
@@ -458,6 +528,7 @@ export default function App() {
         actualScore: actualScore,
         confidenceRatings,
         dailyDoubles,
+        buzzTimes,
         tournamentState,
         savedAt: new Date().toISOString(),
       }
@@ -518,10 +589,15 @@ export default function App() {
       setActiveClue(null)
       setConfidenceRatings(null)
       setDailyDoubles([])
+      setBuzzTimes([])
       // Start screen shown when user taps START button on board, not automatically
     } catch (err) {
       setBoardError(err.message)
-      if (!board) setBoard(SAMPLE_BOARD)
+      // Seed clue states alongside the fallback board. Without them every lookup returns
+      // undefined, which is !== 'unanswered', so the whole board drew as already played —
+      // thirty grey tiles that opened with the answer showing. The fallback matters most
+      // when the episode fetch is failing, which is exactly when it was broken.
+      if (!board) { setBoard(SAMPLE_BOARD); setSingleClueStates(initClueStates(SAMPLE_BOARD)) }
       throw err // re-throw so callers can catch and fallback
     } finally {
       setBoardLoading(false)
@@ -559,7 +635,6 @@ export default function App() {
     const t = setTimeout(() => autoSaveCurrentGame(), 600)
     return () => clearTimeout(t)
   }, [singleClueStates, doubleClueStates, fjAnswered, gameStarted])
-  useEffect(() => { openClueRef.current = openClue }, [openClue])
 
   // Opponent clue selection logic
   function selectOpponentClue(board, clueStates) {
@@ -685,8 +760,12 @@ export default function App() {
     setShowAnswer(false)
   }
 
-  function markClue(result, skipDeck = false) {
+  function markClue(result, skipDeck = false, meta = null) {
     const { ci, ri, clue, category, isReanswer, previousResult } = activeClue
+
+    // Only present when the clue was played in Timed Mode and actually buzzed in on.
+    // A missed buzz says nothing about reaction speed, so it records nothing.
+    if (typeof meta?.buzzMs === 'number') setBuzzTimes(prev => [...prev, meta.buzzMs])
     setClueStates(prev => ({ ...prev, [`${ci}-${ri}`]: result }))
 
     if (!skipDeck && (result === CLUE_STATES.INCORRECT || result === CLUE_STATES.PASS)) {
@@ -788,11 +867,12 @@ export default function App() {
   const totalClues = board?.categories?.length * 5 || 0
 
   // Check if current episode has been played before
+  // Uses the same index the episode browser does. This was a third way of asking "have I
+  // played this?", and the loosest one: it compared ids without coercing to string and
+  // knew nothing about air dates, so it missed the games recorded before gameId existed.
+  const playedIndex = useMemo(() => buildPlayedIndex(gameHistory), [gameHistory])
   const previousGame = episodeMeta
-    ? gameHistory.find(g =>
-        (episodeMeta.episodeId && g.gameId && g.gameId === episodeMeta.episodeId) ||
-        (g.episodeId === episodeMeta.episodeNumber)
-      )
+    ? findPlayed(playedIndex, { gameId: episodeMeta.episodeId, airDate: episodeMeta.airDate })
     : null
 
   // All-time totals: one pass over the history when it changes, rather than six on
@@ -824,12 +904,26 @@ export default function App() {
       return s + (state === 'unanswered' && !clue.isDailyDouble ? clue.value : 0)
     }, 0)
   }, 0) || 0
+  // Highest clue value on the board — the Daily Double wager ceiling when it beats your
+  // score. Read from the board rather than assumed, so Double Jeopardy and vintage
+  // episodes with different value ladders both come out right.
+  const maxClueValue = board?.categories?.reduce(
+    (max, cat) => cat.clues.reduce((m, c) => Math.max(m, c.value || 0), max), 0) || 1000
+  // Drawn once when the Final Jeopardy wager prompt opens. generateOpponent was being
+  // called inline in the render, so the scores you were wagering against changed on every
+  // re-render — and App re-renders constantly.
+  const fjOpponents = useMemo(
+    () => wagerState?.type !== 'final_jeopardy'
+      ? undefined
+      : (tournamentState?.opponents || [generateOpponent('second'), generateOpponent('third')]),
+    [wagerState, tournamentState],
+  )
   const answeredCount = Object.values(clueStates).filter(s => s !== CLUE_STATES.UNANSWERED).length
   const correctCount = Object.values(clueStates).filter(s => s === CLUE_STATES.CORRECT).length
   const incorrectCount = Object.values(clueStates).filter(s => s === CLUE_STATES.INCORRECT).length
   const passCount = Object.values(clueStates).filter(s => s === CLUE_STATES.PASS).length
   const todayStart = new Date().setHours(0, 0, 0, 0) // midnight today
-  const dueCount = cards.filter(c => c.dueAt <= todayStart + 86400000).length // due by end of today
+  const dueCount = cards.filter(c => !isSuspended(c) && c.dueAt <= todayStart + 86400000).length // due by end of today
 
   // ── Save game ─────────────────────────────────────────────────────────────
   function saveGame(fjResult, finalActualScore = null) {
@@ -837,19 +931,6 @@ export default function App() {
     const totalCorrect = Object.values(singleClueStates).filter(s => s === 'correct').length + Object.values(doubleClueStates).filter(s => s === 'correct').length
     const totalIncorrect = Object.values(singleClueStates).filter(s => s === 'incorrect').length + Object.values(doubleClueStates).filter(s => s === 'incorrect').length
     const totalPass = Object.values(singleClueStates).filter(s => s === 'pass').length + Object.values(doubleClueStates).filter(s => s === 'pass').length
-
-    // Build per-category breakdown for history view
-    function buildBreakdown(board, states) {
-      if (!board) return []
-      return board.categories.map((cat, ci) => {
-        let score = 0
-        cat.clues.forEach((clue, ri) => {
-          const state = (states || {})[`${ci}-${ri}`] || 'unanswered'
-          if (!clue.isDailyDouble) score += CORYAT_VAL[state](clue.value)
-        })
-        return { name: cat.name, score }
-      })
-    }
 
     // Build value breakdown for analytics
     function buildValueBreakdownForGame(board, states) {
@@ -900,8 +981,8 @@ export default function App() {
       totalIncorrect,
       totalPass,
       finalJeopardy: fjResult || null,
-      singleBreakdown: buildBreakdown(singleBoard, singleClueStates),
-      doubleBreakdown: buildBreakdown(doubleBoard, doubleClueStates),
+      singleBreakdown: categoryBreakdown(singleBoard, singleClueStates),
+      doubleBreakdown: categoryBreakdown(doubleBoard, doubleClueStates),
       valueBreakdown,
       dailyDoubles,
       // Net effect of DD wagering on the show score. Coryat excludes Daily Doubles
@@ -909,6 +990,9 @@ export default function App() {
       ddNet: dailyDoubles.reduce((sum, d) =>
         sum + (d.result === 'correct' ? d.wager : d.result === 'incorrect' ? -d.wager : 0), 0),
       confidenceRatings: confidenceRatings || null,
+      // Feeds the Speed tab. Null rather than an empty list when the game wasn't played
+      // in Timed Mode — "not measured" and "measured nothing" are different claims.
+      timedStats: buzzTimes.length ? { buzzTimes } : null,
       contestants: episodeMeta.contestants || null,
       tournamentResult: tournamentState ? {
         position: tournamentState.position,
@@ -931,6 +1015,8 @@ export default function App() {
     })
     gameCompleteRef.current = true // mark complete before async updates
     clearGameState() // game complete, clear saved state
+    // …and the remote copy, or every other device goes on offering this finished game.
+    if (user) clearGameStateRemote().catch(console.error)
   }
 
   function handleFJAnswer(result) {
@@ -1020,7 +1106,7 @@ export default function App() {
   }
 
   return (
-    <div style={{ ...S.app, fontSize: largeFont && fontSettings.size ? 17 : undefined, fontWeight: largeFont && fontSettings.weight ? 500 : undefined, lineHeight: largeFont && fontSettings.lineHeight ? 1.5 : undefined }}>
+    <div style={{ ...S.app, ...fontOverride(largeFont, fontSettings, { size: 17, weight: 500, lineHeight: 1.5 }) }}>
       <Header
         largeFont={largeFont}
         onToggleFontPanel={() => setShowFontPanel(p => !p)}
@@ -1091,6 +1177,7 @@ export default function App() {
             autoMode={autoMode}
             onToggleAutoMode={() => setAutoMode(m => !m)}
             largeFont={largeFont}
+            fontSettings={fontSettings}
             tournamentMode={tournamentMode}
             tournamentState={tournamentState}
             boardControl={boardControl}
@@ -1107,14 +1194,14 @@ export default function App() {
                 setTournamentState(null)
                 setBoardControl('player')
                 boardControlRef.current = 'player'
-                if (opponentPickTimeout) clearTimeout(opponentPickTimeout)
+                if (triggerOpponentPickRef.current) clearTimeout(triggerOpponentPickRef.current)
               } else {
                 setShowTournamentSetup(true)
               }
             }}
           />
         )}
-        {view === 'study' && <StudyTabView cards={cards} setCards={setCards} user={user} dueCount={dueCount} dailyCards={dailyCards} setDailyCards={setDailyCards} gameHistory={gameHistory} />}
+        {view === 'study' && <StudyTabView cards={cards} setCards={setCards} user={user} dueCount={dueCount} dailyCards={dailyCards} setDailyCards={setDailyCards} gameHistory={gameHistory} onSessionChange={setStudying} />}
 
         {view === 'summary' && (
           <SummaryView
@@ -1162,6 +1249,8 @@ export default function App() {
           onClose={() => setActiveClue(null)}
           isReanswer={activeClue.isReanswer}
           previousResult={activeClue.previousResult}
+          largeFont={largeFont}
+          fontSettings={fontSettings}
         />
       )}
       {activeClue && timedMode && !activeClue.isReanswer && (
@@ -1170,6 +1259,8 @@ export default function App() {
           category={activeClue.category}
           onMark={markClue}
           onClose={() => setActiveClue(null)}
+          largeFont={largeFont}
+          fontSettings={fontSettings}
         />
       )}
       {activeClue && timedMode && activeClue.isReanswer && (
@@ -1182,6 +1273,8 @@ export default function App() {
           onClose={() => setActiveClue(null)}
           isReanswer={true}
           previousResult={activeClue.previousResult}
+          largeFont={largeFont}
+          fontSettings={fontSettings}
         />
       )}
 
@@ -1189,14 +1282,17 @@ export default function App() {
         <FinalJeopardyModal
           fj={episodeData.finalJeopardy}
           onAnswer={handleFJAnswer}
-          onClose={() => setShowFJ(false)}
+          // Closing without answering abandons the wager too. It used to survive, so
+          // reopening Final Jeopardy and skipping the wager silently applied the amount
+          // from the previous attempt to a round you meant to play flat.
+          onClose={() => { setShowFJ(false); setWagerAmount(null) }}
         />
       )}
 
       {showBrowser && (
         <EpisodeBrowser
           currentEpisodeId={episodeMeta?.episodeId}
-          playedIndex={buildPlayedIndex(gameHistory)}
+          playedIndex={playedIndex}
           lastPlayedGameId={gameHistory.length > 0 ? String(gameHistory[0].gameId) : null}
           onSelect={(gameId, episodes, index) => {
             setShowBrowser(false)
@@ -1245,6 +1341,18 @@ export default function App() {
             setFjAnswered(r.fjAnswered)
             setActualScore(r.actualScore || 0)
             setDailyDoubles(r.dailyDoubles || [])
+            setBuzzTimes(r.buzzTimes || [])
+            // These two were saved by autoSaveCurrentGame and then dropped on the way
+            // back in, so a resumed game recorded confidenceRatings: null and lost its
+            // tournament standings — "Confidence vs actual" simply never appeared.
+            setConfidenceRatings(r.confidenceRatings || null)
+            setTournamentState(r.tournamentState || null)
+            if (r.tournamentState) {
+              setTournamentMode(true)
+              tournamentModeRef.current = true
+              setBoardControl('player')
+              boardControlRef.current = 'player'
+            }
             setGameStarted(true)
             setResumePrompt(null)
             clearGameState()
@@ -1257,6 +1365,7 @@ export default function App() {
           }}
           onDiscard={() => {
             clearGameState()
+            if (user) clearGameStateRemote().catch(console.error)
             setResumePrompt(null)
           }}
         />
@@ -1288,9 +1397,10 @@ export default function App() {
           type={wagerState.type}
           coryatScore={actualScore || coryatScore}
           boardValue={remainingBoardValue}
+          maxClueValue={maxClueValue}
           lastClueResult={lastClueResult}
           answeredCount={answeredCount}
-          opponentScores={tournamentState?.opponents || (wagerState.type === 'final_jeopardy' ? [generateOpponent('second'), generateOpponent('third')] : undefined)}
+          opponentScores={fjOpponents}
           onWager={amount => {
             if (wagerState.type === 'final_jeopardy') {
               setWagerAmount(amount)
@@ -1304,6 +1414,7 @@ export default function App() {
           }}
           onSkip={() => {
             if (wagerState.type === 'final_jeopardy') {
+              setWagerAmount(null) // skipping means no wager, not "keep the last one"
               setWagerState(null)
               setShowFJ(true)
             } else {
@@ -1402,6 +1513,88 @@ function Header({ coryatScore, actualScore, correctCount, incorrectCount, passCo
 
 // ─── Nav ──────────────────────────────────────────────────────────────────────
 // ─── Study Tab View ──────────────────────────────────────────────────────────
+// Quarantined cards are invisible in study by design, so they need somewhere to be
+// seen — otherwise they are just silently gone.
+function QuarantineNotice({ cards, setCards }) {
+  const [open, setOpen] = useState(false)
+  const [editing, setEditing] = useState(null)
+  const [front, setFront] = useState('')
+  const [back, setBack] = useState('')
+
+  const { suspended } = useMemo(() => partitionByHealth(cards), [cards])
+  if (!suspended.length) return null
+
+  const release = card => setCards(prev => prev.map(c => (c.id === card.id ? releaseCard(c) : c)))
+  const remove = card => {
+    addToTrash(card)
+    addTombstones(card.id)
+    setCards(prev => prev.filter(c => c.id !== card.id))
+  }
+  const startRewrite = card => { setEditing(card); setFront(card.front); setBack(card.back) }
+  const saveRewrite = () => {
+    setCards(prev => prev.map(c => (c.id === editing.id ? releaseRewritten({ ...c, front, back }) : c)))
+    setEditing(null)
+  }
+
+  return (
+    <div style={{ background: '#0a0f2e', border: '1px solid #5c2a2a', borderRadius: 12, padding: '14px 16px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 17, color: '#e07070', letterSpacing: 2 }}>
+            🚫 {suspended.length} CARD{suspended.length !== 1 ? 'S' : ''} QUARANTINED
+          </div>
+          <div style={{ fontSize: 10, color: '#8890c0', marginTop: 2, lineHeight: 1.5 }}>
+            Failed {QUARANTINE_LAPSES}+ times, so they're out of your sessions. Usually the
+            card needs rewriting, not more repetition.
+          </div>
+        </div>
+        <button onClick={() => setOpen(o => !o)} style={{ fontSize: 11, color: '#f5c518', background: 'none', border: '1px solid #3a3010', borderRadius: 6, padding: '5px 10px', cursor: 'pointer', flexShrink: 0 }}>
+          {open ? 'Close' : 'Review'}
+        </button>
+      </div>
+
+      {open && (
+        <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {suspended.map(card => (
+            <div key={card.id} style={{ background: '#060b1a', border: '1px solid #1a2040', borderRadius: 8, padding: '10px 12px' }}>
+              {editing?.id === card.id ? (
+                <>
+                  <div style={S.formLabel}>CLUE</div>
+                  <textarea style={{ ...S.textarea, marginBottom: 6 }} rows={2} value={front} onChange={e => setFront(e.target.value)} />
+                  <div style={S.formLabel}>ANSWER</div>
+                  <textarea style={{ ...S.textarea, marginBottom: 8 }} rows={2} value={back} onChange={e => setBack(e.target.value)} />
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button style={{ ...S.markBtn, background: '#1e2456', color: '#8890d0', border: '1px solid #2e3476', flex: 1 }} onClick={() => setEditing(null)}>Cancel</button>
+                    <button style={{ ...S.revealBtn, flex: 2 }} onClick={saveRewrite} disabled={!front.trim() || !back.trim()}>
+                      Save &amp; return to study
+                    </button>
+                  </div>
+                  <div style={{ fontSize: 9, color: '#4060a0', marginTop: 6, letterSpacing: 1 }}>
+                    Saving clears the lapse count — a rewritten card starts fresh.
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div style={{ fontSize: 12, color: '#c0c8e8', lineHeight: 1.45 }}>{card.front.replace(/<[^>]+>/g, '').slice(0, 140)}</div>
+                  <div style={{ fontSize: 11, color: '#7cd992', marginTop: 3 }}>{card.back.replace(/<[^>]+>/g, '').slice(0, 100)}</div>
+                  <div style={{ fontSize: 9, color: '#e07070', marginTop: 5, letterSpacing: 1 }}>
+                    {card.lapses} lapses{card.category ? ` · ${card.category}` : ''}
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+                    <button style={{ ...S.chip, color: '#f5c518', borderColor: '#3a3010', cursor: 'pointer' }} onClick={() => startRewrite(card)}>✏️ Rewrite</button>
+                    <button style={{ ...S.chip, color: '#8890d0', cursor: 'pointer' }} onClick={() => release(card)}>↩ Release as-is</button>
+                    <button style={{ ...S.chip, color: '#e07070', borderColor: '#5c2a2a', cursor: 'pointer' }} onClick={() => remove(card)}>🗑 Delete</button>
+                  </div>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 const DAILY_GOAL_KEY = 'jeo-daily-goal'
 const GOAL_CHOICES = [20, 50, 100, 200]
 
@@ -1470,7 +1663,7 @@ function DailyGoalCard({ dailyCards }) {
   )
 }
 
-function StudyTabView({ cards, setCards, user, dueCount, dailyCards, setDailyCards, gameHistory = [] }) {
+function StudyTabView({ cards, setCards, user, dueCount, dailyCards, setDailyCards, gameHistory = [], onSessionChange }) {
   const [subTab, setSubTab] = useState('flashcards')
   const [flashcardView, setFlashcardView] = useState('menu') // menu | study | deck
 
@@ -1509,6 +1702,7 @@ function StudyTabView({ cards, setCards, user, dueCount, dailyCards, setDailyCar
                   <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 32, color: '#f5c518', letterSpacing: 4 }}>FLASHCARDS</div>
                   <div style={{ fontSize: 11, color: '#4060a0', letterSpacing: 2, marginTop: 2 }}>SPACED REPETITION STUDY</div>
                 </div>
+                <QuarantineNotice cards={cards} setCards={setCards} />
                 <DailyGoalCard dailyCards={dailyCards} />
                 <button
                   style={{ background: '#0a0f2e', border: '1px solid #1a2460', borderRadius: 12, padding: '18px 20px', textAlign: 'left', cursor: 'pointer', width: '100%' }}
@@ -1526,7 +1720,7 @@ function StudyTabView({ cards, setCards, user, dueCount, dailyCards, setDailyCar
                 </button>
               </div>
             )}
-            {flashcardView === 'study' && <StudyView cards={cards} setCards={setCards} onBack={() => setFlashcardView('menu')} dailyCards={dailyCards} setDailyCards={setDailyCards} gameHistory={gameHistory} />}
+            {flashcardView === 'study' && <StudyView cards={cards} setCards={setCards} onBack={() => setFlashcardView('menu')} dailyCards={dailyCards} setDailyCards={setDailyCards} gameHistory={gameHistory} onSessionChange={onSessionChange} />}
             {flashcardView === 'deck' && <DeckView cards={cards} setCards={setCards} user={user} onBack={() => setFlashcardView('menu')} />}
           </>
         )}
@@ -1820,7 +2014,7 @@ function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round,
 
       <div style={S.board}>
         {board.categories.map((cat, ci) => (
-          <div key={ci} style={{ ...S.catHeader, fontSize: largeFont && fontSettings?.size ? 13 : undefined, fontWeight: largeFont && fontSettings?.weight ? 700 : undefined }}>{cat.name}</div>
+          <div key={ci} style={{ ...S.catHeader, ...fontOverride(largeFont, fontSettings, { size: 13, weight: 700 }) }}>{cat.name}</div>
         ))}
         {board.categories.length < 6 && Array.from({ length: 6 - board.categories.length }).map((_, i) => (
           <div key={`missing-${i}`} style={{ ...S.catHeader, color: '#2a3460', fontStyle: 'italic' }}>UNAVAILABLE</div>
@@ -1842,7 +2036,7 @@ function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round,
               <div key={key} onClick={() => onOpen(ci, ri)} style={{ ...S.tile, background: tileBg[state], cursor: 'pointer', opacity: state !== 'unanswered' ? 0.65 : 1 }}>
                 {state !== 'unanswered'
                   ? <span style={S.tileIcon}>{state === 'correct' ? '✓' : state === 'incorrect' ? '✗' : '—'}</span>
-                  : <span style={{ ...S.tileVal, fontSize: largeFont && fontSettings?.size ? 18 : undefined, fontWeight: largeFont && fontSettings?.weight ? 600 : undefined }}>{clue.isDailyDouble && !tournamentMode && <span style={S.ddTag}>DD</span>}${clue.value.toLocaleString()}</span>}
+                  : <span style={{ ...S.tileVal, ...fontOverride(largeFont, fontSettings, { size: 20, weight: 600 }) }}>{clue.isDailyDouble && !tournamentMode && <span style={S.ddTag}>DD</span>}${clue.value.toLocaleString()}</span>}
               </div>
             )
           })
@@ -2118,22 +2312,40 @@ function EpisodeCacheManager({ onLoadEpisode, onClose }) {
   const [caching, setCaching] = useState(false)
   const [cacheProgress, setCacheProgress] = useState('')
 
+  // Asking for a range is an explicit request to keep those episodes, so they are pinned.
+  // Unpinned entries are capped at ten and evicted oldest-first, so the old unpinned save
+  // meant a range of fifty fetched fifty episodes, discarded forty, and kept whichever ten
+  // happened to finish last — while telling the user it had cached the range.
+  const MAX_RANGE = 60
+  const cancelCache = useRef(false)
+
   async function cacheRange() {
     const start = parseInt(rangeStart)
     const end = parseInt(rangeEnd)
     if (!start || !end || start > end) return
+    if (end - start + 1 > MAX_RANGE) {
+      alert(`That's ${end - start + 1} episodes. Cache at most ${MAX_RANGE} at a time — each one is a separate request to j-archive.`)
+      return
+    }
+    cancelCache.current = false
     setCaching(true)
+    let saved = 0, failed = 0
     for (let id = start; id <= end; id++) {
-      setCacheProgress(`Caching episode ${id}...`)
+      if (cancelCache.current) break
+      setCacheProgress(`Caching ${id}… (${saved} saved${failed ? `, ${failed} unavailable` : ''})`)
       try {
         const episode = await fetchEpisode(String(id))
-        saveEpisodeToCache(String(id), episode)
-      } catch {}
-      await new Promise(r => setTimeout(r, 300)) // rate limit
+        saveEpisodeToCache(String(id), episode, true) // pinned — this was asked for
+        saved++
+      } catch { failed++ }
+      await new Promise(r => setTimeout(r, 300)) // be polite to j-archive
     }
     setCaching(false)
     setCacheProgress('')
     setStats(getCacheStats())
+    alert(cancelCache.current
+      ? `Stopped. ${saved} episode${saved !== 1 ? 's' : ''} cached.`
+      : `Cached ${saved} episode${saved !== 1 ? 's' : ''}${failed ? `, ${failed} unavailable` : ''}.`)
   }
 
   return (
@@ -2148,13 +2360,15 @@ function EpisodeCacheManager({ onLoadEpisode, onClose }) {
         </div>
 
         {/* Cache range */}
-        <div style={{ fontSize: 9, color: '#6070a0', letterSpacing: 3, marginBottom: 6 }}>CACHE EPISODE RANGE</div>
+        <div style={{ fontSize: 9, color: '#6070a0', letterSpacing: 3, marginBottom: 6 }}>
+          CACHE EPISODE RANGE <span style={{ letterSpacing: 1, textTransform: 'none' }}>· up to {MAX_RANGE}, kept until you remove them</span>
+        </div>
         <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-          <input style={{ ...S.input, flex: 1 }} value={rangeStart} onChange={e => setRangeStart(e.target.value)} placeholder="From (e.g. 9150)" type="number" />
-          <input style={{ ...S.input, flex: 1 }} value={rangeEnd} onChange={e => setRangeEnd(e.target.value)} placeholder="To (e.g. 9160)" type="number" />
-          <button style={{ ...S.loaderBtn, opacity: caching ? 0.5 : 1 }} onClick={cacheRange} disabled={caching}>
-            {caching ? '⏳' : 'Cache'}
-          </button>
+          <input style={{ ...S.input, flex: 1 }} value={rangeStart} onChange={e => setRangeStart(e.target.value)} placeholder="From (e.g. 9150)" type="number" disabled={caching} />
+          <input style={{ ...S.input, flex: 1 }} value={rangeEnd} onChange={e => setRangeEnd(e.target.value)} placeholder="To (e.g. 9160)" type="number" disabled={caching} />
+          {caching
+            ? <button style={{ ...S.loaderBtn, color: '#e57373', borderColor: 'rgba(229,115,115,0.3)', background: 'rgba(229,115,115,0.08)' }} onClick={() => { cancelCache.current = true }}>Stop</button>
+            : <button style={S.loaderBtn} onClick={cacheRange}>Cache</button>}
         </div>
         {cacheProgress && <div style={{ fontSize: 12, color: '#f5c518', marginBottom: 8 }}>{cacheProgress}</div>}
 
@@ -2257,7 +2471,14 @@ function EpisodeBrowser({ onSelect, onClose, currentEpisodeId, playedIndex, last
   const searchTimeout = useRef(null)
 
   useEffect(() => { fetchEps() }, [])
-  useEffect(() => { if (selectedSeason) fetchEps(selectedSeason, search) }, [selectedSeason])
+  // No truthiness guard: "Latest season" is the empty string, and fetchEps already reads
+  // that as "latest". Guarding on it meant picking Latest after choosing a season was a
+  // no-op, leaving the old season's episodes on screen under the new label.
+  const firstLoad = useRef(true)
+  useEffect(() => {
+    if (firstLoad.current) { firstLoad.current = false; return } // the mount effect covers this
+    fetchEps(selectedSeason, search)
+  }, [selectedSeason])
 
   async function fetchEps(season = '', q = '') {
     setLoading(true); setError(null)
@@ -2417,7 +2638,11 @@ function ImageWithFallback({ url }) {
 
 // ─── Timed Clue Modal ────────────────────────────────────────────────────────
 // Phases: reading → buzzing → answering → reveal
-function TimedClueModal({ clue, category, onMark, onClose }) {
+// largeFont/fontSettings are read in the clue text style below. They were used there
+// without being declared, which threw a ReferenceError on every render — and since the
+// only error boundary is at the root, opening a clue in Timed Mode took the whole app
+// down rather than just the modal.
+function TimedClueModal({ clue, category, onMark, onClose, largeFont, fontSettings }) {
   // Calculate reading time: ~200ms per word, min 3s max 8s
   const wordCount = clue.answer.split(/\s+/).length
   const readingMs = Math.min(Math.max(wordCount * 200, 3000), 8000)
@@ -2432,6 +2657,9 @@ function TimedClueModal({ clue, category, onMark, onClose }) {
   const intervalRef = useRef(null)
   const phaseRef = useRef('reading')
   const phaseStartRef = useRef(Date.now())
+  // Time from the buzz window opening to the buzz. Stays null when the window was
+  // missed or skipped — that is not a reaction time, and averaging it in would be a lie.
+  const buzzMsRef = useRef(null)
 
   const phaseDuration = phase === 'reading' ? readingMs : phase === 'buzzing' ? buzzMs : phase === 'answering' ? answerMs : 1
 
@@ -2481,6 +2709,7 @@ function TimedClueModal({ clue, category, onMark, onClose }) {
 
   function buzzIn() {
     if (phase !== 'buzzing') return
+    buzzMsRef.current = Date.now() - phaseStartRef.current
     // Haptic feedback via Vibration API (works on iOS Safari PWA)
     if (navigator.vibrate) navigator.vibrate(60)
     clearInterval(intervalRef.current)
@@ -2512,7 +2741,7 @@ function TimedClueModal({ clue, category, onMark, onClose }) {
   }
 
   function handleDone() {
-    onMark(result)
+    onMark(result, false, buzzMsRef.current == null ? null : { buzzMs: buzzMsRef.current })
   }
 
   const progress = Math.min(elapsed / phaseDuration, 1)
@@ -2553,7 +2782,7 @@ function TimedClueModal({ clue, category, onMark, onClose }) {
         {clue.isDailyDouble && <div style={S.ddBadge}>⭐ DAILY DOUBLE</div>}
 
         {/* Clue text */}
-        <ClueText text={clue.answer} style={{ ...S.modalText, fontSize: largeFont && fontSettings?.size ? 22 : undefined, fontWeight: largeFont && fontSettings?.weight ? 600 : undefined, lineHeight: largeFont && fontSettings?.lineHeight ? 1.5 : undefined }} />
+        <ClueText text={clue.answer} style={{ ...S.modalText, ...fontOverride(largeFont, fontSettings, { size: 22, weight: 600, lineHeight: 1.5 }) }} />
 
         {/* Phase-specific controls */}
         {phase === 'reading' && (
@@ -2698,11 +2927,11 @@ function ClueModal({ clue, category, showAnswer, onReveal, onMark, onClose, isRe
             Previously: {prevLabels[previousResult]} — change answer?
           </div>
         )}
-        <ClueText text={clue.answer} style={{ ...S.modalText, fontSize: largeFont && fontSettings?.size ? 22 : undefined, fontWeight: largeFont && fontSettings?.weight ? 600 : undefined, lineHeight: largeFont && fontSettings?.lineHeight ? 1.5 : undefined }} />
+        <ClueText text={clue.answer} style={{ ...S.modalText, ...fontOverride(largeFont, fontSettings, { size: 22, weight: 600, lineHeight: 1.5 }) }} />
         {!showAnswer
           ? <button style={S.revealBtn} onClick={onReveal}>Reveal Answer</button>
           : <>
-              <div style={{ ...S.modalQ, fontSize: largeFont && fontSettings?.size ? 20 : undefined, fontWeight: largeFont && fontSettings?.weight ? 600 : undefined }}>{clue.question}</div>
+              <div style={{ ...S.modalQ, ...fontOverride(largeFont, fontSettings, { size: 20, weight: 600 }) }}>{clue.question}</div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'center', marginBottom: 8 }}>
                 <button
                   onClick={() => setSkipDeck(s => !s)}
@@ -2736,7 +2965,7 @@ function ClueModal({ clue, category, showAnswer, onReveal, onMark, onClose, isRe
 }
 
 // ─── Study View ───────────────────────────────────────────────────────────────
-function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards, gameHistory = [] }) {
+function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards, gameHistory = [], onSessionChange }) {
   const CHUNK_PRESETS = { quick: 10, standard: 20, long: 40, marathon: 100 }
   const DEFAULT_CHUNK = 'marathon'
 
@@ -2760,6 +2989,10 @@ function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards, gameHis
   const [typed, setTyped] = useState('')
   const [typedResult, setTypedResult] = useState(null) // 'correct' | 'incorrect'
   const answerInputRef = useRef(null)
+  // Retrieval timing, measured silently. Starts when the card appears; the reading
+  // grace is subtracted in recallMs so this is recall speed, not reading speed.
+  const [shownAt, setShownAt] = useState(() => Date.now())
+  const [elapsedMs, setElapsedMs] = useState(null)
   const [editFront, setEditFront] = useState('')
   const [editBack, setEditBack] = useState('')
 
@@ -2771,13 +3004,25 @@ function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards, gameHis
 
   const now = Date.now()
 
+  // A session in progress is entirely in-memory state, so an automatic reload loses it.
+  useEffect(() => {
+    onSessionChange?.(phase === 'session')
+    return () => onSessionChange?.(false)
+  }, [phase, onSessionChange])
+
+  // Every count on this screen must describe the same set the session will actually draw
+  // from. getFilteredCards drops quarantined cards; the forecast and the filter labels
+  // did not, so with cards in quarantine the screen promised more than it delivered.
+  const studiable = useMemo(() => cards.filter(c => !isSuspended(c)), [cards])
+
   const allMetaCategories = [...new Set(cards
     .filter(c => c.category)
     .map(c => getMetaCategory(c.category.split(' · ')[0] || c.category))
   )].sort()
 
   function getFilteredCards() {
-    let filtered = [...cards]
+    // Quarantined cards are excluded from every session until released or rewritten.
+    let filtered = studiable
     const todayStartF = new Date().setHours(0, 0, 0, 0)
     const todayEndF = new Date().setHours(23, 59, 59, 999)
     if (dueFilter === 'due') filtered = filtered.filter(c => c.dueAt <= todayEndF)
@@ -2785,7 +3030,7 @@ function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards, gameHis
     else if (dueFilter === 'overdue') filtered = filtered.filter(c => c.dueAt < todayStartF)
     const DRILL_CATS = ['US Presidents','US States','Geography','Astronomy','Shakespeare','Famous Authors','Famous Painters','Classical Composers','Famous Ballets','Greek & Latin Roots','US Vice Presidents']
     if (sourceFilter === 'drills') filtered = filtered.filter(c => c.id?.startsWith('drill-') || DRILL_CATS.some(cat => c.category?.includes(cat)))
-    else if (sourceFilter === 'leeches') filtered = filtered.filter(c => (c.lapses || 0) >= 4)
+    else if (sourceFilter === 'leeches') filtered = filtered.filter(c => (c.lapses || 0) >= LEECH_LAPSES)
     else if (sourceFilter === 'board') filtered = filtered.filter(c => !c.id?.startsWith('drill-') && c.source !== 'manual' && c.source !== 'anki')
     else if (sourceFilter !== 'all') filtered = filtered.filter(c => c.source === sourceFilter)
     // lapses is a lifetime count, so >= 2 keeps this meaning "actively problematic"
@@ -2808,7 +3053,7 @@ function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards, gameHis
 
   const matchingCards = getFilteredCards()
   const todayEndSv = new Date().setHours(23, 59, 59, 999)
-  const dueCount = cards.filter(c => c.dueAt <= todayEndSv).length
+  const dueCount = studiable.filter(c => c.dueAt <= todayEndSv).length
 
   function getChunkSize() {
     if (showCustom && customChunk) return Math.max(1, parseInt(customChunk) || 20)
@@ -2825,11 +3070,11 @@ function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards, gameHis
   }
 
   function startSession() {
-    const shuffled = [...matchingCards].sort(() => Math.random() - 0.5)
+    const sessionOrder = shuffled(matchingCards)
     const size = getChunkSize()
-    const chunks = buildChunks(shuffled, size)
+    const chunks = buildChunks(sessionOrder, size)
     setAllChunks(chunks)
-    setSessionCards(shuffled)
+    setSessionCards(sessionOrder)
     setChunkIdx(0)
     setCardIdx(0)
     setFlipped(false)
@@ -2838,6 +3083,8 @@ function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards, gameHis
     setLastRating(null)
     setTyped('')
     setTypedResult(null)
+    setElapsedMs(null)
+    setShownAt(Date.now())
     setPhase('session')
   }
 
@@ -2850,8 +3097,14 @@ function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards, gameHis
     setLastRating({ card, label, cardIdx, chunkIdx, phaseBefore: phase })
     // Judge "was this already learned" from the card as it stands, before sm2
     // rewrites repetitions — afterwards the answer is always yes.
-    logReview(quality, (card.repetitions || 0) > 0)
-    setCards(prev => prev.map(c => c.id === card.id ? rateCard(card, quality) : c))
+    logReview(quality, (card.repetitions || 0) > 0, elapsedMs)
+    setCards(prev => prev.map(c => {
+      if (c.id !== card.id) return c
+      const rated = rateCard(card, quality)
+      // Eight failures is a bad card, not a hard one. Suspend it here rather than
+      // letting it keep resurfacing every day and crowding out learnable material.
+      return shouldQuarantine(rated) ? suspendCard(rated) : rated
+    }))
     setSessionStats(prev => ({ ...prev, [label]: prev[label] + 1 }))
     setChunkStats(prev => ({ ...prev, [label]: prev[label] + 1 }))
     const nextCard = cardIdx + 1
@@ -2863,14 +3116,23 @@ function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards, gameHis
       setFlipped(false)
       setTyped('')
       setTypedResult(null)
+      setElapsedMs(null)
+      setShownAt(Date.now())
     }
   }
 
   function submitTyped() {
     const card = (allChunks[chunkIdx] || [])[cardIdx]
     if (!card || !typed.trim()) return
+    if (elapsedMs == null) setElapsedMs(recallMs(shownAt))
     setTypedResult(matchesAnswer(typed, card.back) ? 'correct' : 'incorrect')
     setFlipped(true) // reveal so the grade is made against the real answer
+  }
+
+  // Tapping the card reveals it; that tap is the end of the retrieval attempt.
+  function toggleFlip() {
+    if (!flipped && elapsedMs == null) setElapsedMs(recallMs(shownAt))
+    setFlipped(f => !f)
   }
 
   // Restore the card exactly as it was, rewind the counters, and return to it.
@@ -2888,6 +3150,7 @@ function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards, gameHis
     setFlipped(true) // they were looking at the answer when they graded it
     setTyped('')
     setTypedResult(null)
+    setElapsedMs(null)
     setLastRating(null)
   }
 
@@ -2907,16 +3170,16 @@ function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards, gameHis
       {cards.length > 0 && (() => {
         const todayStart = new Date().setHours(0, 0, 0, 0)
         const todayEnd = new Date().setHours(23, 59, 59, 999)
-        const overdueCount = cards.filter(c => c.dueAt < todayStart).length
-        const dueTodayCount = cards.filter(c => c.dueAt >= todayStart && c.dueAt <= todayEnd).length
+        const overdueCount = studiable.filter(c => c.dueAt < todayStart).length
+        const dueTodayCount = studiable.filter(c => c.dueAt >= todayStart && c.dueAt <= todayEnd).length
         const days = [0, 1, 2].map(offset => {
           const d = new Date()
           d.setDate(d.getDate() + offset)
           const end = new Date(d).setHours(23, 59, 59, 999)
           // Today includes all overdue cards; future days only count cards due that specific day
           const count = offset === 0
-            ? cards.filter(c => c.dueAt <= todayEnd).length
-            : cards.filter(c => {
+            ? studiable.filter(c => c.dueAt <= todayEnd).length
+            : studiable.filter(c => {
                 const dayStart = new Date(d).setHours(0, 0, 0, 0)
                 return c.dueAt >= dayStart && c.dueAt <= end
               }).length
@@ -3018,10 +3281,10 @@ function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards, gameHis
             <span style={S.configLabel}>CARDS TO INCLUDE</span>
             <div style={S.toggleGroup}>
               {[
-                ['all', `All (${cards.length})`],
+                ['all', `All (${studiable.length})`],
                 ['due', `All Due (${dueCount})`],
-                ['today', `Today (${cards.filter(c => { const s=new Date().setHours(0,0,0,0); const e=new Date().setHours(23,59,59,999); return c.dueAt>=s&&c.dueAt<=e }).length})`],
-                ['overdue', `Overdue (${cards.filter(c => c.dueAt < new Date().setHours(0,0,0,0)).length})`],
+                ['today', `Today (${studiable.filter(c => { const s=new Date().setHours(0,0,0,0); const e=new Date().setHours(23,59,59,999); return c.dueAt>=s&&c.dueAt<=e }).length})`],
+                ['overdue', `Overdue (${studiable.filter(c => c.dueAt < new Date().setHours(0,0,0,0)).length})`],
               ].map(([v,l]) => (
                 <button key={v} style={{ ...S.toggleBtn, ...(dueFilter === v ? S.toggleActive : {}) }} onClick={() => setDueFilter(v)}>{l}</button>
               ))}
@@ -3032,8 +3295,8 @@ function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards, gameHis
             <span style={S.configLabel}>DIFFICULTY</span>
             <div style={S.toggleGroup}>
               <button style={{ ...S.toggleBtn, ...(!strugglingOnly ? S.toggleActive : {}) }} onClick={() => setStrugglingOnly(false)}>All</button>
-              <button style={{ ...S.toggleBtn, ...(strugglingOnly === 'hard' ? S.toggleActive : {}) }} onClick={() => setStrugglingOnly('hard')}>🟡 Hard ({cards.filter(c => c.easeFactor < 2.0 && c.repetitions > 0).length})</button>
-              <button style={{ ...S.toggleBtn, ...(strugglingOnly === true ? S.toggleActive : {}) }} onClick={() => setStrugglingOnly(true)}>🔴 Struggling ({cards.filter(c => c.repetitions === 0 || (c.lapses || 0) >= 2).length})</button>
+              <button style={{ ...S.toggleBtn, ...(strugglingOnly === 'hard' ? S.toggleActive : {}) }} onClick={() => setStrugglingOnly('hard')}>🟡 Hard ({studiable.filter(c => c.easeFactor < 2.0 && c.repetitions > 0).length})</button>
+              <button style={{ ...S.toggleBtn, ...(strugglingOnly === true ? S.toggleActive : {}) }} onClick={() => setStrugglingOnly(true)}>🔴 Struggling ({studiable.filter(c => c.repetitions === 0 || (c.lapses || 0) >= 2).length})</button>
             </div>
           </div>
 
@@ -3043,11 +3306,11 @@ function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards, gameHis
             <div style={S.chipRow}>
               {[
                 ['all', 'All'],
-                ['drills', `Drills (${cards.filter(c=>c.id?.startsWith('drill-')).length})`],
-                ['leeches', `🐛 Leeches (${cards.filter(c=>(c.lapses||0)>=4).length})`],
-                ['missed', `Missed (${cards.filter(c=>c.source==='missed').length})`],
-                ['anki', `Anki (${cards.filter(c=>c.source==='anki').length})`],
-                ['manual', `Manual (${cards.filter(c=>c.source==='manual').length})`],
+                ['drills', `Drills (${studiable.filter(c=>c.id?.startsWith('drill-')).length})`],
+                ['leeches', `🐛 Leeches (${studiable.filter(c=>(c.lapses||0)>=LEECH_LAPSES).length})`],
+                ['missed', `Missed (${studiable.filter(c=>c.source==='missed').length})`],
+                ['anki', `Anki (${studiable.filter(c=>c.source==='anki').length})`],
+                ['manual', `Manual (${studiable.filter(c=>c.source==='manual').length})`],
               ].map(([val, label]) => (
                 <button key={val} style={{ ...S.chip, ...(sourceFilter === val ? S.chipActive : {}), ...(val === 'leeches' ? { color: '#e57373' } : {}) }} onClick={() => setSourceFilter(val)}>
                   {label}
@@ -3225,7 +3488,7 @@ function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards, gameHis
         >↩ Undo</button>
       </div>
       <div style={S.progressOuter}><div style={{ ...S.progressInner, width: `${(cardIdx / currentChunk.length) * 100}%` }} /></div>
-      <div style={S.flashCard} onClick={() => setFlipped(!flipped)}>
+      <div style={S.flashCard} onClick={toggleFlip}>
         {/* Category header — always visible on both faces */}
         {(card.category || card.value > 0) && (
           <div style={{
@@ -3254,8 +3517,8 @@ function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards, gameHis
                   ${card.value.toLocaleString()}
                 </span>
               )}
-              <span style={{ fontSize: 9, letterSpacing: 2, color: card.source === 'missed' ? '#e57373' : card.source === 'anki' ? '#4dd0e1' : '#81c784' }}>
-                {card.source === 'missed' ? 'MISSED' : card.source === 'anki' ? 'ANKI' : 'MANUAL'}
+              <span style={{ fontSize: 9, letterSpacing: 2, color: card.source === 'missed' ? '#e57373' : card.source === 'anki' ? '#4dd0e1' : card.source === 'drill' ? '#b39ddb' : '#81c784' }}>
+                {card.source === 'missed' ? 'MISSED' : card.source === 'anki' ? 'ANKI' : card.source === 'drill' ? 'DRILL' : 'MANUAL'}
               </span>
               {card.dueAt > new Date().setHours(23, 59, 59, 999) && <span style={{ fontSize: 9, color: '#4060a0', letterSpacing: 1 }}>EARLY</span>}
             </div>
@@ -3307,19 +3570,27 @@ function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards, gameHis
       </div>
       {flipped && (
         <>
+          {/* Right / Wrong only. How well you knew it is the time you took, not a
+              judgement you make after seeing the answer — which is the judgement
+              people are worst at. Wrong is always Again; Right is graded by speed. */}
           <div style={S.rateRow}>
-            {[{q:0,label:'Again',color:'#e57373',bg:'#3a1010'},{q:1,label:'Hard',color:'#ffb74d',bg:'#3a2510'},{q:2,label:'Good',color:'#81c784',bg:'#103a18'},{q:3,label:'Easy',color:'#4dd0e1',bg:'#0e2e36'}].map(({ q, label, color, bg }) => (
-              <button key={q} style={{
-                ...S.rateBtn, background: bg, borderColor: color,
-                // Suggest the grade the typed answer implies — still the user's call,
-                // since only they know whether it was a guess or genuine recall.
-                ...(typedResult && ((typedResult === 'incorrect' && q === 0) || (typedResult === 'correct' && q === 2))
-                  ? { outline: `2px solid ${color}`, outlineOffset: 1 } : {}),
-              }} onClick={() => rate(q, label.toLowerCase())}>
-                <span style={{ color, fontWeight: 700, fontSize: 14 }}>{label}</span>
-                <span style={{ color: 'rgba(255,255,255,0.3)', fontSize: 10, marginTop: 2 }}>{nextDueLabel(q, card)}</span>
-              </button>
-            ))}
+            {(() => {
+              const rightQ = suggestGrade({ correct: true, ms: elapsedMs }) ?? 2
+              const rightLabel = ['again', 'hard', 'good', 'easy'][rightQ]
+              return [
+                { q: 0, text: '✗ Wrong', color: '#e07070', bg: '#5c1a1a', border: '#8c2e2e', label: 'again' },
+                { q: rightQ, text: '✓ Right', color: '#7cd992', bg: '#1a5c2e', border: '#2e8c50', label: rightLabel },
+              ].map(({ q, text, color, bg, border, label }) => (
+                <button
+                  key={text}
+                  style={{ ...S.rateBtn, background: bg, borderColor: border, flex: 1, padding: '12px 4px' }}
+                  onClick={() => rate(q, label)}
+                >
+                  <span style={{ color, fontWeight: 700, fontSize: 15 }}>{text}</span>
+                  <span style={{ color: 'rgba(255,255,255,0.35)', fontSize: 10, marginTop: 3 }}>{nextDueLabel(q, card)}</span>
+                </button>
+              ))
+            })()}
           </div>
           <div style={{ display: 'flex', gap: 16, marginTop: 4, alignSelf: 'center' }}>
             <button
@@ -3488,7 +3759,7 @@ function DeckView({ cards, setCards, user, onBack }) {
       setTrash(getTrash().cards)
     }
   }
-  function resetCard(id) { setCards(prev => prev.map(c => c.id === id ? { ...c, interval: 0, easeFactor: 2.5, repetitions: 0, dueAt: Date.now(), lastReviewed: null } : c)) }
+  function resetCard(id) { setCards(prev => prev.map(c => c.id === id ? resetSchedule(c) : c)) }
 
   function startEdit(card) {
     setEditCard(card)
@@ -3521,13 +3792,18 @@ function DeckView({ cards, setCards, user, onBack }) {
   }
 
   function bulkDelete() {
+    // Every other delete in the app goes to the bin first — single, in-session and
+    // quarantine all call addToTrash. This one didn't, which made selecting fifty cards
+    // and hitting Delete the one irreversible action in the deck view.
+    cards.filter(c => selectedIds.has(c.id)).forEach(addToTrash)
+    setTrash(getTrash().cards)
     addTombstones([...selectedIds])
     setCards(prev => prev.filter(c => !selectedIds.has(c.id)))
     clearSelection()
   }
 
   function bulkReset() {
-    setCards(prev => prev.map(c => selectedIds.has(c.id) ? { ...c, interval: 0, easeFactor: 2.5, repetitions: 0, dueAt: Date.now(), lastReviewed: null } : c))
+    setCards(prev => prev.map(c => selectedIds.has(c.id) ? resetSchedule(c) : c))
     clearSelection()
   }
 
@@ -3554,7 +3830,14 @@ function DeckView({ cards, setCards, user, onBack }) {
         const existingIds = new Set(freshCards.map(c => c.id))
         const newCards = imported.filter(c => !existingIds.has(c.id))
         const updated = [...freshCards, ...newCards]
-        saveCards(updated); setCards(updated)
+        if (!saveCards(updated)) {
+          alert('Could not save — this device is out of local storage. Free space in My Deck and try again.')
+          return
+        }
+        // Clear the tombstones for anything being restored, or the next sync deletes it
+        // straight back out and the backup silently un-restores itself.
+        newCards.forEach(c => removeTombstone(c.id))
+        setCards(updated)
         alert(`Restored ${newCards.length} cards (${imported.length - newCards.length} already existed)`)
       } catch { alert('Failed to parse backup file') }
     }
@@ -3573,10 +3856,7 @@ function DeckView({ cards, setCards, user, onBack }) {
     }
   }
 
-  // Leech detection: 4+ consecutive wrong (lapses)
-  function isLeech(card) {
-    return (card.lapses || 0) >= 4
-  }
+  function isLeech(card) { return (card.lapses || 0) >= LEECH_LAPSES }
 
   const [importProgress, setImportProgress] = useState('')
 
@@ -3596,13 +3876,16 @@ function DeckView({ cards, setCards, user, onBack }) {
       }, user)
 
       const imported = result.cards
-      let added = 0
+      // Counted outside the updater: React can call a state updater more than once, and
+      // the old code incremented from inside it. It then reported imported.length anyway,
+      // so "Imported 2,400 cards" could mean two were added and 2,398 already existed.
+      const existing = new Set(cards.map(c => c.front))
+      const toAdd = imported.filter(c => !existing.has(c.front))
       setCards(prev => {
-        const existing = new Set(prev.map(c => c.front))
-        const toAdd = imported.filter(c => { if (existing.has(c.front)) return false; added++; return true })
-        return [...prev, ...toAdd]
+        const have = new Set(prev.map(c => c.front))
+        return [...prev, ...imported.filter(c => !have.has(c.front))]
       })
-      setImportResult({ added: imported.length, mediaCount: result.mediaCount })
+      setImportResult({ added: toAdd.length, skipped: imported.length - toAdd.length, mediaCount: result.mediaCount })
     } catch (err) {
       setImportError(err.message || String(err))
     } finally {
@@ -3612,12 +3895,26 @@ function DeckView({ cards, setCards, user, onBack }) {
     }
   }
 
-  const leeches = cards.filter(c => (c.lapses || 0) >= 4)
-  const counts = { all: cards.length, due: cards.filter(c => c.dueAt <= now).length, leeches: leeches.length, drills: cards.filter(c => c.id?.startsWith('drill-')).length, missed: cards.filter(c => c.source === 'missed').length, manual: cards.filter(c => c.source === 'manual').length, anki: cards.filter(c => c.source === 'anki').length }
+  const leeches = cards.filter(c => (c.lapses || 0) >= LEECH_LAPSES && !isSuspended(c))
+  const quarantined = cards.filter(isSuspended)
+  // "Due" means due to be studied, and a quarantined card will not be — it was excluded
+  // everywhere else and counted here, which is how a card could sit in the due count and
+  // never appear in a session.
+  const counts = {
+    all: cards.length,
+    due: cards.filter(c => !isSuspended(c) && c.dueAt <= now).length,
+    leeches: leeches.length,
+    quarantined: quarantined.length,
+    drills: cards.filter(c => c.id?.startsWith('drill-')).length,
+    missed: cards.filter(c => c.source === 'missed').length,
+    manual: cards.filter(c => c.source === 'manual').length,
+    anki: cards.filter(c => c.source === 'anki').length,
+  }
   const filtered = cards.filter(c => {
-    if (filter === 'due') { if (!(c.dueAt <= new Date().setHours(23, 59, 59, 999))) return false }
+    if (filter === 'due') { if (isSuspended(c) || !(c.dueAt <= new Date().setHours(23, 59, 59, 999))) return false }
     if (filter === 'drills') { if (!c.id?.startsWith('drill-')) return false }
-    else if (filter === 'leeches') { if (!((c.lapses || 0) >= 4)) return false }
+    else if (filter === 'leeches') { if (!((c.lapses || 0) >= LEECH_LAPSES) || isSuspended(c)) return false }
+    else if (filter === 'quarantined') { if (!isSuspended(c)) return false }
     else if (filter === 'missed' || filter === 'manual' || filter === 'anki') { if (c.source !== filter) return false }
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase()
@@ -3679,7 +3976,8 @@ function DeckView({ cards, setCards, user, onBack }) {
           ) : <button style={S.startBtn} onClick={() => fileRef.current.click()}>Choose .apkg File</button>}
           {importResult && (
             <div style={S.importSuccess}>
-              ✅ Imported {importResult.added} cards!
+              ✅ Added {importResult.added} card{importResult.added !== 1 ? 's' : ''}
+              {importResult.skipped > 0 && ` · ${importResult.skipped} already in your deck`}
               {importResult.mediaCount > 0 && ` · ${importResult.mediaCount} media files stored`}
             </div>
           )}
@@ -3702,11 +4000,13 @@ function DeckView({ cards, setCards, user, onBack }) {
       {/* Filter tabs */}
       <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
         <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', flex: 1 }}>
-          {['all','due','leeches','drills','missed','manual','anki'].map(f => (
-            <button key={f} style={{ ...S.filterTab, ...(filter === f ? S.filterTabActive : {}), ...(f === 'leeches' && counts.leeches > 0 ? { color: '#e57373' } : {}) }} onClick={() => setFilter(f)}>
-              {f === 'leeches' ? '🐛' : ''}{f.toUpperCase()} ({counts[f]})
-            </button>
-          ))}
+          {['all','due','leeches','quarantined','drills','missed','manual','anki']
+            .filter(f => f !== 'quarantined' || counts.quarantined > 0)
+            .map(f => (
+              <button key={f} style={{ ...S.filterTab, ...(filter === f ? S.filterTabActive : {}), ...(f === 'leeches' && counts.leeches > 0 ? { color: '#e57373' } : {}), ...(f === 'quarantined' ? { color: '#e07070', borderColor: '#5c2a2a' } : {}) }} onClick={() => setFilter(f)}>
+                {f === 'leeches' ? '🐛' : f === 'quarantined' ? '🚫' : ''}{f.toUpperCase()} ({counts[f]})
+              </button>
+            ))}
         </div>
         <div style={{ display: 'flex', gap: 4 }}>
           <button style={{ ...S.filterTab, color: bulkMode ? '#f5c518' : '#5060a0', ...(bulkMode ? { borderColor: '#f5c518' } : {}) }} onClick={() => setBulkMode(!bulkMode)}>
@@ -3735,9 +4035,13 @@ function DeckView({ cards, setCards, user, onBack }) {
                   <div style={S.cardRowMeta}>
                     {card.category && <span style={S.metaTag}>{card.category}</span>}
                     <span style={{ ...S.metaTag, color: sc }}>{(card.source || 'drill').toUpperCase()}</span>
-                    <span style={{ ...S.metaTag, color: isDue ? '#f5c518' : '#4060a0' }}>{isDue ? 'DUE NOW' : `Due ${formatRelative(card.dueAt)}`}</span>
+                    <span style={{ ...S.metaTag, color: isSuspended(card) ? '#4060a0' : isDue ? '#f5c518' : '#4060a0' }}>
+                      {isSuspended(card) ? 'Not scheduled' : isDue ? 'DUE NOW' : `Due ${formatRelative(card.dueAt)}`}
+                    </span>
                     {card.repetitions > 0 && <span style={S.metaTag}>Rep {card.repetitions} · EF {card.easeFactor.toFixed(2)}</span>}
-                    {isLeech(card) && <span style={{ ...S.metaTag, color: '#e57373' }}>LEECH ({card.lapses} lapses)</span>}
+                    {isSuspended(card)
+                      ? <span style={{ ...S.metaTag, color: '#e07070', borderColor: '#5c2a2a' }}>🚫 QUARANTINED ({card.lapses} lapses)</span>
+                      : isLeech(card) && <span style={{ ...S.metaTag, color: '#e57373' }}>LEECH ({card.lapses} lapses)</span>}
                   </div>
                 </div>
                 {!bulkMode && (
@@ -3773,10 +4077,21 @@ function DeckView({ cards, setCards, user, onBack }) {
                 </div>
                 <button style={{ fontSize: 11, color: '#f5c518', border: '1px solid #3a3010', borderRadius: 6, padding: '3px 10px', background: '#1a1500', cursor: 'pointer' }}
                   onClick={async () => {
-                    if (!confirm(`Restore ${s.count} cards from ${s.date}? This will overwrite your current deck.`)) return
                     const restored = await restoreSnapshot(i)
-                    if (restored) { setCards(restored); alert(`Restored ${restored.length} cards`) }
-                    else alert('Could not read that snapshot.')
+                    if (!restored) { alert('Could not read that snapshot.'); return }
+                    // Restoring replaces the deck, so say what that costs before doing it.
+                    const restoredIds = new Set(restored.map(c => c.id))
+                    const dropped = cards.filter(c => !restoredIds.has(c.id))
+                    const warning = dropped.length
+                      ? `\n\n${dropped.length} card${dropped.length !== 1 ? 's' : ''} added since then will be deleted.`
+                      : ''
+                    if (!confirm(`Restore ${restored.length} cards from ${s.date}? This replaces your current deck.${warning}`)) return
+                    // Tombstone what's being dropped and clear tombstones for what's coming
+                    // back — otherwise the next sync undoes the restore in both directions.
+                    if (dropped.length) addTombstones(dropped.map(c => c.id))
+                    restored.forEach(c => removeTombstone(c.id))
+                    setCards(restored)
+                    alert(`Restored ${restored.length} cards`)
                   }}>Restore</button>
               </div>
             ))}
@@ -3936,20 +4251,8 @@ function SummaryView({ cards = [], predictionBaseDate, onResetPredictionBase, co
   const bestActual = gamesWithActual.length > 0 ? Math.max(...gamesWithActual.map(g => g.actualScore)) : null
   const wageringImpact = (allTimeAvg !== null && allTimeActualAvg !== null) ? allTimeActualAvg - allTimeAvg : null
 
-  function calcCategoryBreakdown(board, states) {
-    if (!board) return []
-    return board.categories.map((cat, ci) => {
-      let score = 0
-      cat.clues.forEach((clue, ri) => {
-        const state = (states || {})[`${ci}-${ri}`] || 'unanswered'
-        if (!clue.isDailyDouble) score += CORYAT_VAL[state](clue.value)
-      })
-      return { name: cat.name, score }
-    })
-  }
-
-  const singleBreakdown = calcCategoryBreakdown(singleBoard, singleClueStates)
-  const doubleBreakdown = calcCategoryBreakdown(doubleBoard, doubleClueStates)
+  const singleBreakdown = categoryBreakdown(singleBoard, singleClueStates)
+  const doubleBreakdown = categoryBreakdown(doubleBoard, doubleClueStates)
   // Show current game section if we have a board loaded (even if no clues answered yet)
   const hasCurrentGame = !!singleBoard
 
@@ -4186,8 +4489,8 @@ function SummaryView({ cards = [], predictionBaseDate, onResetPredictionBase, co
       {confidenceRatings && hasCurrentGame && singleBoard && (
         <ConfidenceComparison
           ratings={confidenceRatings}
-          singleBreakdown={calcCategoryBreakdown(singleBoard, singleClueStates)}
-          doubleBreakdown={calcCategoryBreakdown(doubleBoard, doubleClueStates)}
+          singleBreakdown={categoryBreakdown(singleBoard, singleClueStates)}
+          doubleBreakdown={categoryBreakdown(doubleBoard, doubleClueStates)}
         />
       )}
       </div>)} {/* end current tab */}
@@ -4228,7 +4531,7 @@ function CategoryHeatMapView({ gameHistory }) {
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
                 <span style={{ fontSize: 12, color: '#c0c8e8', fontWeight: 700 }}>{cat.meta}</span>
                 <span style={{ fontSize: 12, fontFamily: "'Bebas Neue', sans-serif", color: isNeg ? '#e57373' : '#4caf7d' }}>
-                  {cat.avg >= 0 ? '+' : ''}{cat.avg.toLocaleString()} avg · {cat.games}g
+                  {cat.avg >= 0 ? '+' : ''}{cat.avg.toLocaleString()} avg · {cat.appearances} in {cat.games}g
                 </span>
               </div>
               <div style={{ height: 3, background: 'rgba(255,255,255,0.1)', borderRadius: 99, overflow: 'hidden' }}>
@@ -4371,6 +4674,7 @@ function RetentionPanel({ cards = [] }) {
   const log = useMemo(() => getReviewLog(), [cards.length])
   const health = useMemo(() => buildDeckHealth(cards), [cards])
   const series = useMemo(() => buildRetentionSeries(log, { bucketDays: 7, buckets: 8 }), [log])
+  const recall = useMemo(() => summariseRecall(log), [log])
 
   if (!cards.length) return null
 
@@ -4442,6 +4746,35 @@ function RetentionPanel({ cards = [] }) {
       <div style={{ fontSize: 9, color: '#4060a0', marginTop: 6, letterSpacing: 1 }}>
         Mature = interval of 21 days or more{health.avgEase ? ` · avg ease ${health.avgEase}` : ''}
       </div>
+
+      {/* Recall speed. Every review since the timing went in has recorded how long the
+          answer took to come, and nothing displayed it — which is the difference between
+          knowing a card and knowing it fast enough to buzz. */}
+      {recall.n > 0 && (
+        <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid #131a35' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 }}>
+            <span style={{ fontSize: 9, letterSpacing: 3, color: '#6070a0' }}>RECALL SPEED</span>
+            <span style={{ fontSize: 11, color: '#8890c0', letterSpacing: 1 }}>
+              median <b style={{ color: '#4dd0e1', fontFamily: "'Bebas Neue', sans-serif", fontSize: 15 }}>{formatRecall(recall.median)}</b>
+              <span style={{ color: '#4060a0' }}> · {recall.n.toLocaleString()} timed</span>
+            </span>
+          </div>
+          <div style={{ display: 'flex', height: 6, borderRadius: 99, overflow: 'hidden', background: '#131a35' }}>
+            {[
+              ['fast', recall.fast, '#4caf7d'],
+              ['ok', recall.ok, '#f5c518'],
+              ['slow', recall.slow, '#e57373'],
+            ].map(([k, n, c]) => n > 0 && (
+              <div key={k} style={{ width: `${(n / recall.n) * 100}%`, background: c }} title={`${n} ${k}`} />
+            ))}
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9, color: '#4060a0', marginTop: 5, letterSpacing: 1 }}>
+            <span style={{ color: '#4caf7d' }}>{recall.fast} instant (&lt;2s)</span>
+            <span style={{ color: '#f5c518' }}>{recall.ok} comfortable</span>
+            <span style={{ color: '#e57373' }}>{recall.slow} slow (&gt;4s)</span>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -4507,7 +4840,7 @@ const S = {
   legendItem: { display: 'flex', alignItems: 'center', gap: 3 },
 
   loaderBar: { display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center' },
-  loaderInput: { flex: 1, background: '#0a0f2e', border: '1px solid #1a2460', borderRadius: 8, color: '#e8e8f0', fontSize: 13, padding: '8px 12px', fontFamily: "'Barlow Condensed', sans-serif", letterSpacing: 1 },
+  loaderInput: { flex: 1, background: '#0a0f2e', border: '1px solid #1a2460', borderRadius: 8, color: '#e8e8f0', fontSize: 16, padding: '8px 12px', fontFamily: "'Barlow Condensed', sans-serif", letterSpacing: 1 },
   loaderBtn: { background: 'rgba(245,197,24,0.1)', border: '1px solid rgba(245,197,24,0.3)', borderRadius: 8, color: '#f5c518', fontSize: 12, fontWeight: 700, padding: '8px 14px', fontFamily: "'Barlow Condensed', sans-serif", letterSpacing: 1, whiteSpace: 'nowrap' },
   loadError: { fontSize: 12, color: '#e07070', background: 'rgba(224,112,112,0.08)', borderRadius: 8, padding: '8px 12px', marginBottom: 8 },
   episodeLink: { textAlign: 'right', marginBottom: 6 },
@@ -4584,8 +4917,10 @@ const S = {
   actionBtnActive: { background: 'rgba(245,197,24,0.15)', borderColor: 'rgba(245,197,24,0.5)' },
   addForm: { background: '#0a0f2e', borderRadius: 12, padding: 16, border: '1px solid #1a2460', display: 'flex', flexDirection: 'column', gap: 6 },
   formLabel: { fontSize: 10, letterSpacing: 3, color: '#6070a0' },
-  textarea: { background: '#060b1a', border: '1px solid #1a2460', borderRadius: 8, color: '#e8e8f0', fontSize: 14, padding: '10px 12px', fontFamily: "'Barlow', sans-serif", resize: 'vertical' },
-  input: { background: '#060b1a', border: '1px solid #1a2460', borderRadius: 8, color: '#e8e8f0', fontSize: 14, padding: '9px 12px', fontFamily: "'Barlow Condensed', sans-serif" },
+  // 16px keeps iOS from zooming the page when a field takes focus, which is what the
+  // viewport's user-scalable=no used to suppress.
+  textarea: { background: '#060b1a', border: '1px solid #1a2460', borderRadius: 8, color: '#e8e8f0', fontSize: 16, padding: '10px 12px', fontFamily: "'Barlow', sans-serif", resize: 'vertical' },
+  input: { background: '#060b1a', border: '1px solid #1a2460', borderRadius: 8, color: '#e8e8f0', fontSize: 16, padding: '9px 12px', fontFamily: "'Barlow Condensed', sans-serif" },
   importTitle: { fontFamily: "'Bebas Neue', sans-serif", fontSize: 22, color: '#f5c518', letterSpacing: 2, marginBottom: 4 },
   importDesc: { fontSize: 13, color: '#8890c0', lineHeight: 1.6 },
   importHowTo: { fontSize: 12, color: '#6070a0', lineHeight: 1.6, background: '#060b1a', borderRadius: 8, padding: '10px 12px', border: '1px solid #1a2040' },
@@ -4629,7 +4964,7 @@ const S = {
 }
 
 const globalCSS = `
-  @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow+Condensed:wght@400;600;700&family=Barlow:wght@400;500&display=swap');
+  /* Fonts are requested once from index.html — see the comment there. */
   /* Anki card content styles */
   .card-content img { max-width: 100%; height: auto; border-radius: 6px; margin: 4px 0; display: block; }
   .card-content audio { width: 100%; margin-top: 8px; }

@@ -83,6 +83,7 @@ function merge(card, f, now) {
     easeFactor: difficultyToEase(f.difficulty),
     dueAt: f.due.getTime(),
     lastReviewed: now.getTime(),
+    modifiedAt: now.getTime(),
   }
 }
 
@@ -112,6 +113,9 @@ export function resetSchedule(card, now = Date.now()) {
     easeFactor: 2.5,
     dueAt: now,
     lastReviewed: null,
+    // A reset clears lastReviewed, so without this the merge would date the card by its
+    // createdAt and let a stale remote copy undo the reset.
+    modifiedAt: now,
   }
 }
 

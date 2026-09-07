@@ -31,13 +31,15 @@ export function shouldQuarantine(card) {
 }
 
 export function suspendCard(card) {
-  return { ...card, suspended: true, suspendedAt: Date.now(), suspendedReason: 'leech' }
+  const now = Date.now()
+  return { ...card, suspended: true, suspendedAt: now, suspendedReason: 'leech', modifiedAt: now }
 }
 
 /** Put a card back into rotation, keeping its history. */
 export function releaseCard(card) {
   const { suspended, suspendedAt, suspendedReason, ...rest } = card
-  return rest
+  // Stamped so the merge knows this is newer than the suspended copy on the server.
+  return { ...rest, modifiedAt: Date.now() }
 }
 
 /**

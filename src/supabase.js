@@ -157,6 +157,19 @@ export async function saveRemoteData(cards, gameHistory, dailyStats = null, tomb
   }
 }
 
+/**
+ * When a card was last altered, as far as we can tell.
+ *
+ * lastReviewed covers ratings, which is most changes. modifiedAt is stamped by the
+ * paths that change a card without reviewing it — an edit, a suspend, a release, a
+ * schedule reset — because those leave lastReviewed untouched or clear it outright.
+ * createdAt is the floor, so a brand-new card that has never been touched still has a
+ * usable stamp.
+ */
+export function changedAt(card) {
+  return Math.max(card?.modifiedAt || 0, card?.lastReviewed || 0, card?.createdAt || 0)
+}
+
 const TOMBSTONE_LIMIT = 1000
 
 export function mergeData(local, remote) {
@@ -171,10 +184,22 @@ export function mergeData(local, remote) {
     if (!prev || (t.deletedAt || 0) > (prev.deletedAt || 0)) tombMap.set(t.id, t)
   }
 
-  // Union by id; remote wins where both sides hold the same card.
+  // Union by id, keeping whichever copy changed most recently.
+  //
+  // Remote used to win unconditionally, which quietly threw away work. The deck is
+  // pushed on a 20-second debounce, so at any moment the newest reviews exist only on
+  // this device — and the merge does not just run at login, it runs whenever the auth
+  // state changes, including the token refresh that happens roughly hourly. Study
+  // through one of those and every rating since the last successful push was reverted:
+  // the cards went back to being due, and turned up again in the next session.
   const byId = new Map()
   for (const c of local.cards) byId.set(c.id, c)
-  for (const c of remote.cards) byId.set(c.id, c)
+  for (const c of remote.cards) {
+    const mine = byId.get(c.id)
+    // Ties go to remote: it is the shared copy, and preferring it keeps the old
+    // behaviour for cards neither side has touched since they last agreed.
+    if (!mine || changedAt(c) >= changedAt(mine)) byId.set(c.id, c)
+  }
 
   const cards = [...byId.values()].filter(c => {
     const tomb = tombMap.get(c.id)

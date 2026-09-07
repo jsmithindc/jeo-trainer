@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mergeData } from './supabase.js'
+import { mergeData, changedAt } from './supabase.js'
 
 // "before" and "after" bracket a notional earlier sync. Nothing in the merge keys off a
 // timestamp any more — deletions need a tombstone and local-only games are always kept —
@@ -121,5 +121,92 @@ describe('mergeData — game history', () => {
       { cards: [], gameHistory: [game('old', '2026-01-01'), game('new', '2026-08-01')] },
     )
     expect(r.gameHistory.map(g => g.id)).toEqual(['new', 'old'])
+  })
+})
+
+
+describe('mergeData — whose copy wins', () => {
+  const HOUR = 3600000
+  const now = Date.now()
+  // A card as it exists after being reviewed at time `t`.
+  const reviewed = (id, t, extra = {}) =>
+    ({ id, front: id, back: id, createdAt: now - 30 * 24 * HOUR, lastReviewed: t, dueAt: t + 6 * 24 * HOUR, ...extra })
+
+  it('keeps the review you just did instead of the stale copy on the server', () => {
+    // The exact shape of the bug: rate a card, and before the 20-second debounce pushes
+    // it, an auth event triggers a merge. Remote still holds the pre-review card.
+    const justRated = reviewed('c1', now, { repetitions: 4 })
+    const onServer  = reviewed('c1', now - 2 * HOUR, { repetitions: 3 })
+
+    const r = mergeData(
+      { cards: [justRated], gameHistory: [], tombstones: [] },
+      { cards: [onServer], gameHistory: [], tombstones: [] },
+    )
+    expect(r.cards).toHaveLength(1)
+    expect(r.cards[0].lastReviewed).toBe(now)
+    expect(r.cards[0].repetitions).toBe(4)
+  })
+
+  it('still takes the server copy when the server is the newer one', () => {
+    // Reviewed on another device since this one last synced.
+    const stale = reviewed('c1', now - 2 * HOUR, { repetitions: 3 })
+    const fresh = reviewed('c1', now, { repetitions: 4 })
+
+    const r = mergeData(
+      { cards: [stale], gameHistory: [], tombstones: [] },
+      { cards: [fresh], gameHistory: [], tombstones: [] },
+    )
+    expect(r.cards[0].repetitions).toBe(4)
+  })
+
+  it('breaks a tie towards the server, as it always did', () => {
+    const t = now - HOUR
+    const r = mergeData(
+      { cards: [reviewed('c1', t, { tag: 'local' })], gameHistory: [], tombstones: [] },
+      { cards: [reviewed('c1', t, { tag: 'remote' })], gameHistory: [], tombstones: [] },
+    )
+    expect(r.cards[0].tag).toBe('remote')
+  })
+
+  it('protects an edit, a suspend and a reset, which do not touch lastReviewed', () => {
+    // These paths stamp modifiedAt precisely because lastReviewed is unchanged or null.
+    const edited    = { id: 'c1', front: 'new text', createdAt: 1, lastReviewed: now - 5 * HOUR, modifiedAt: now }
+    const onServer  = { id: 'c1', front: 'old text', createdAt: 1, lastReviewed: now - 5 * HOUR }
+    const suspended = { id: 'c2', createdAt: 1, suspended: true, modifiedAt: now }
+    const active    = { id: 'c2', createdAt: 1 }
+    const reset     = { id: 'c3', createdAt: 1, lastReviewed: null, interval: 0, modifiedAt: now }
+    const scheduled = { id: 'c3', createdAt: 1, lastReviewed: now - 5 * HOUR, interval: 200 }
+
+    const r = mergeData(
+      { cards: [edited, suspended, reset], gameHistory: [], tombstones: [] },
+      { cards: [onServer, active, scheduled], gameHistory: [], tombstones: [] },
+    )
+    const by = Object.fromEntries(r.cards.map(c => [c.id, c]))
+    expect(by.c1.front).toBe('new text')
+    expect(by.c2.suspended).toBe(true)
+    expect(by.c3.interval).toBe(0)
+  })
+
+  it('keeps cards only one side has', () => {
+    const r = mergeData(
+      { cards: [reviewed('local-only', now)], gameHistory: [], tombstones: [] },
+      { cards: [reviewed('remote-only', now)], gameHistory: [], tombstones: [] },
+    )
+    expect(r.cards.map(c => c.id).sort()).toEqual(['local-only', 'remote-only'])
+  })
+})
+
+describe('changedAt', () => {
+  it('takes the most recent signal available', () => {
+    expect(changedAt({ createdAt: 100 })).toBe(100)
+    expect(changedAt({ createdAt: 100, lastReviewed: 200 })).toBe(200)
+    expect(changedAt({ createdAt: 100, lastReviewed: 200, modifiedAt: 300 })).toBe(300)
+    // A reset nulls lastReviewed, so modifiedAt has to carry it.
+    expect(changedAt({ createdAt: 100, lastReviewed: null, modifiedAt: 300 })).toBe(300)
+  })
+
+  it('survives a card with none of them', () => {
+    expect(changedAt({})).toBe(0)
+    expect(changedAt(undefined)).toBe(0)
   })
 })

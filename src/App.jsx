@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense } from 'react'
 import { shuffled } from './shuffle.js'
 import { newCard, formatRelative } from './srs.js'
+import { DISPLAY_VERSION } from './version.js'
 import { rateCard, nextDueLabel, resetSchedule } from './fsrs.js'
 import { loadCards, saveCards, loadGameHistory, saveGameHistory } from './storage.js'
 import { parseApkg, migrateLocalMediaToSupabase } from './ankiImport.js'
@@ -22,7 +23,6 @@ import { WeaknessTracker, SpeedTracker, WagerTrainer, TournamentSetup as Tournam
 // than half the bundle, and none of it is needed unless the Drills tab is opened.
 const DrillsView = lazy(() => import('./drills.jsx').then(m => ({ default: m.DrillsView })))
 
-const APP_VERSION = '2.9.0'
 
 const CLUE_STATES = { UNANSWERED: 'unanswered', CORRECT: 'correct', INCORRECT: 'incorrect', PASS: 'pass' }
 const CORYAT_VAL = { correct: v => v, incorrect: v => -v, pass: () => 0, unanswered: () => 0 }
@@ -344,9 +344,16 @@ export default function App() {
       .catch(loadLatestFallback)
   }, [authChecked, historyReady])
 
-  // ── Sync from Supabase when user logs in ──────────────────────────────────
+  // ── Sync from Supabase when the account changes ───────────────────────────
+  // Keyed on the user id, not the user object. onAuthStateChange hands back a fresh
+  // object on every auth event — including the token refresh that fires roughly hourly —
+  // and React compares dependencies by identity, so this ran a full merge mid-session,
+  // over and over, against a deck that had only been pushed as recently as the 20-second
+  // debounce allowed. Combined with the merge preferring remote, that is what reverted
+  // ratings and made cards reappear in the next session.
+  const userId = user?.id ?? null
   useEffect(() => {
-    if (!user || !storageReady) return
+    if (!userId || !storageReady) return
     setSyncing(true)
     setSyncError(null)
     loadRemoteData()
@@ -386,7 +393,7 @@ export default function App() {
     migrateLocalMediaToSupabase(user)
       .then(count => { if (count > 0) console.log(`Migrated ${count} media files to Supabase`) })
       .catch(console.warn)
-  }, [user, storageReady])
+  }, [userId, storageReady])
 
   // ── Save locally + debounced remote sync ─────────────────────────────────
   useEffect(() => {
@@ -1480,7 +1487,7 @@ function Header({ coryatScore, actualScore, correctCount, incorrectCount, passCo
           ? <div style={S.logoSub}>#{episodeMeta.episodeNumber} · {episodeMeta.airDate}</div>
           : <div style={S.logoSub}>CORYAT & FLASHCARDS</div>}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
-          <div style={{ fontSize: 11, color: '#5060a0', letterSpacing: 1 }}>v{APP_VERSION}</div>
+          <div style={{ fontSize: 11, color: '#5060a0', letterSpacing: 1 }}>v{DISPLAY_VERSION}</div>
           <button
             onClick={onToggleFontPanel}
             style={{ fontSize: 9, color: largeFont ? '#f5c518' : '#4060a0', background: 'none', border: `1px solid ${largeFont ? '#f5c518' : '#2a3460'}`, borderRadius: 4, padding: '2px 6px', cursor: 'pointer', letterSpacing: 1 }}
@@ -3657,7 +3664,7 @@ function StudyView({ cards, setCards, onBack, dailyCards, setDailyCards, gameHis
                 <button
                   style={{ ...S.revealBtn, flex: 2 }}
                   onClick={() => {
-                    const updatedCard = { ...card, front: editFront.trim(), back: editBack.trim() }
+                    const updatedCard = { ...card, front: editFront.trim(), back: editBack.trim(), modifiedAt: Date.now() }
                     setCards(prev => prev.map(c => c.id === card.id ? updatedCard : c))
                     setAllChunks(prev => prev.map((chunk, ci) =>
                       ci === chunkIdx
@@ -3770,7 +3777,7 @@ function DeckView({ cards, setCards, user, onBack }) {
 
   function saveEdit() {
     if (!editFront.trim() || !editBack.trim()) return
-    setCards(prev => prev.map(c => c.id === editCard.id ? { ...c, front: editFront.trim(), back: editBack.trim(), category: editCat.trim() } : c))
+    setCards(prev => prev.map(c => c.id === editCard.id ? { ...c, front: editFront.trim(), back: editBack.trim(), category: editCat.trim(), modifiedAt: Date.now() } : c))
     setEditCard(null)
   }
 

@@ -9,7 +9,7 @@
 //
 // deploy.sh owns this line: it rewrites both this file and package.json from the
 // current date on every deploy. Editing it by hand only risks the two disagreeing.
-export const APP_VERSION = '2026.907.1'
+export const APP_VERSION = '2026.907.2'
 
 /**
  * Render a CalVer string as a plain date: 2026.902.1 → "2026.09.02".

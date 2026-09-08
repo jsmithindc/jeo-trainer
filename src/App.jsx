@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense } from 'react'
 import { shuffled } from './shuffle.js'
 import { newCard, formatRelative } from './srs.js'
-import { DISPLAY_VERSION } from './version.js'
+import { APP_VERSION, DISPLAY_VERSION } from './version.js'
 import { rateCard, nextDueLabel, resetSchedule } from './fsrs.js'
 import { loadCards, saveCards, loadGameHistory, saveGameHistory } from './storage.js'
 import { parseApkg, migrateLocalMediaToSupabase } from './ankiImport.js'
@@ -1487,7 +1487,7 @@ function Header({ coryatScore, actualScore, correctCount, incorrectCount, passCo
           ? <div style={S.logoSub}>#{episodeMeta.episodeNumber} · {episodeMeta.airDate}</div>
           : <div style={S.logoSub}>CORYAT & FLASHCARDS</div>}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
-          <div style={{ fontSize: 11, color: '#5060a0', letterSpacing: 1 }}>v{DISPLAY_VERSION}</div>
+          <div style={{ fontSize: 11, color: '#5060a0', letterSpacing: 1, cursor: 'default' }} title={`Build ${APP_VERSION}`}>v{DISPLAY_VERSION}</div>
           <button
             onClick={onToggleFontPanel}
             style={{ fontSize: 9, color: largeFont ? '#f5c518' : '#4060a0', background: 'none', border: `1px solid ${largeFont ? '#f5c518' : '#2a3460'}`, borderRadius: 4, padding: '2px 6px', cursor: 'pointer', letterSpacing: 1 }}

@@ -170,6 +170,34 @@ export function changedAt(card) {
   return Math.max(card?.modifiedAt || 0, card?.lastReviewed || 0, card?.createdAt || 0)
 }
 
+/**
+ * Fold another copy of the deck (localStorage, written by a drill or another tab) into
+ * the one in memory, never letting an older copy of a card replace a newer one.
+ *
+ * Ties keep the in-memory copy, and when nothing changes the original array comes back,
+ * so an ordinary window focus doesn't re-render the app or queue a full-deck push.
+ */
+export function reconcileCards(mine, theirs, tombstones = []) {
+  const tombs = new Map(tombstones.filter(t => t?.id).map(t => [t.id, t.deletedAt || 0]))
+  const buried = c => tombs.has(c.id) && (c.createdAt || 0) <= tombs.get(c.id)
+
+  let changed = false
+  const byId = new Map()
+  for (const c of mine) {
+    if (buried(c)) { changed = true; continue }
+    byId.set(c.id, c)
+  }
+  for (const c of theirs) {
+    if (buried(c)) continue
+    const current = byId.get(c.id)
+    if (!current || changedAt(c) > changedAt(current)) {
+      byId.set(c.id, c)
+      changed = true
+    }
+  }
+  return changed ? [...byId.values()] : mine
+}
+
 const TOMBSTONE_LIMIT = 1000
 
 export function mergeData(local, remote) {

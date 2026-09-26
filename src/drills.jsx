@@ -74,7 +74,12 @@ export function addDrillCards(candidates, setCards) {
   const commit = cards => {
     const updated = [...freshCards, ...cards]
     if (!saveCards(updated)) return false
-    setCards(updated)
+    // Append to the deck in memory rather than replacing it with the stored copy, which
+    // can be older: ratings the stored copy is missing would otherwise be thrown away.
+    setCards(prev => {
+      const have = new Set(prev.map(c => c.front))
+      return [...prev, ...cards.filter(c => !have.has(c.front))]
+    })
     return true
   }
 

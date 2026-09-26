@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mergeData, changedAt } from './supabase.js'
+import { mergeData, changedAt, reconcileCards } from './supabase.js'
 
 // "before" and "after" bracket a notional earlier sync. Nothing in the merge keys off a
 // timestamp any more — deletions need a tombstone and local-only games are always kept —
@@ -208,5 +208,43 @@ describe('changedAt', () => {
   it('survives a card with none of them', () => {
     expect(changedAt({})).toBe(0)
     expect(changedAt(undefined)).toBe(0)
+  })
+})
+
+describe('reconcileCards — folding the stored deck into memory', () => {
+  const c = (id, extra = {}) => ({ id, front: id, back: id, createdAt: 1, ...extra })
+
+  it('keeps a rating that only exists in memory when storage is behind', () => {
+    // Storage stuck at the pre-session deck (the write failed); memory has the rating.
+    const mine = [c('a', { lastReviewed: 500, dueAt: 9_000 })]
+    const theirs = [c('a', { dueAt: 100 })]
+    expect(reconcileCards(mine, theirs)[0].dueAt).toBe(9_000)
+  })
+
+  it('takes a copy another tab changed more recently', () => {
+    const mine = [c('a', { lastReviewed: 100 })]
+    const theirs = [c('a', { lastReviewed: 200 })]
+    expect(reconcileCards(mine, theirs)[0].lastReviewed).toBe(200)
+  })
+
+  it('picks up cards added elsewhere', () => {
+    const out = reconcileCards([c('a')], [c('a'), c('b')])
+    expect(out.map(x => x.id)).toEqual(['a', 'b'])
+  })
+
+  it('returns the same array when nothing changed, so focus does not re-render or re-push', () => {
+    const mine = [c('a', { lastReviewed: 100 })]
+    const theirs = [c('a', { lastReviewed: 100 })]
+    expect(reconcileCards(mine, theirs)).toBe(mine)
+  })
+
+  it('keeps a card storage lacks — absence is not deletion', () => {
+    const mine = [c('a'), c('b')]
+    expect(reconcileCards(mine, [c('a')])).toBe(mine)
+  })
+
+  it('drops a card another tab deleted, via its tombstone', () => {
+    const out = reconcileCards([c('a'), c('b')], [c('a')], [{ id: 'b', deletedAt: 10 }])
+    expect(out.map(x => x.id)).toEqual(['a'])
   })
 })

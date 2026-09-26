@@ -47,7 +47,20 @@ describe('adding cards', () => {
     expect(result).toMatchObject({ added: 2, skipped: 0, imagesDropped: false, failed: false })
     expect(stored().map(c => c.front)).toEqual(['Peru', 'Chile'])
     expect(setCards).toHaveBeenCalledOnce()
-    expect(setCards.mock.calls[0][0].map(c => c.front)).toEqual(['Peru', 'Chile'])
+    expect(setCards.mock.calls[0][0]([]).map(c => c.front)).toEqual(['Peru', 'Chile'])
+  })
+
+  it('adds to the deck in memory, never swapping in an older stored copy', () => {
+    // Storage is behind memory when the deck write has been failing: the rating below
+    // exists only in memory, and replacing the deck with the stored copy discarded it.
+    seed([card('Existing', { dueAt: 1 })])
+    const setCards = vi.fn()
+    addDrillCards([card('Peru')], setCards)
+
+    const inMemory = [card('Existing', { dueAt: 999, lastReviewed: 5 })]
+    const next = setCards.mock.calls[0][0](inMemory)
+    expect(next.map(c => c.front)).toEqual(['Existing', 'Peru'])
+    expect(next[0]).toBe(inMemory[0])
   })
 
   it('appends rather than replacing what is already there', () => {

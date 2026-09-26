@@ -3,7 +3,7 @@ import { shuffled } from './shuffle.js'
 import { newCard, formatRelative } from './srs.js'
 import { APP_VERSION, DISPLAY_VERSION } from './version.js'
 import { rateCard, nextDueLabel, resetSchedule } from './fsrs.js'
-import { loadCards, saveCards, loadGameHistory, saveGameHistory } from './storage.js'
+import { CARDS_KEY, loadCards, saveCards, loadGameHistory, saveGameHistory } from './storage.js'
 import { parseApkg, migrateLocalMediaToSupabase } from './ankiImport.js'
 import { SAMPLE_BOARD } from './boardData.js'
 import { migrateFJWagers, backfillDdNet, migrateToFsrs } from './migrations.js'
@@ -13,7 +13,7 @@ import { recallMs, suggestGrade, formatRecall, summariseRecall } from './recall.
 import { isSuspended, shouldQuarantine, suspendCard, releaseCard, releaseRewritten, partitionByHealth, LEECH_LAPSES, QUARANTINE_LAPSES } from './leech.js'
 import { saveDeckSnapshot, getDeckSnapshots, restoreSnapshot, ensureSnapshotsMigrated } from './snapshotStore.js'
 import { fetchEpisode, episodeToBoard, searchEpisodesByCategory } from './jarchive.js'
-import { supabase, signIn, signUp, resetPassword, signOut, loadRemoteData, saveRemoteData, mergeData, saveGameStateRemote, loadGameStateRemote, clearGameStateRemote, uploadMedia } from './supabase.js'
+import { supabase, signIn, signUp, resetPassword, signOut, loadRemoteData, saveRemoteData, mergeData, reconcileCards, saveGameStateRemote, loadGameStateRemote, clearGameStateRemote, uploadMedia } from './supabase.js'
 import { buildCategoryHeatMap, buildValueBreakdown, predictCoryat, exportToApkg, getMetaCategory, META_CATEGORY_NAMES, buildDailyDoubleStats, buildRetentionSeries, buildDeckHealth, buildStudyStreak } from './analytics.js'
 import { CardContent, cardIsHtml } from './CardContent.jsx'
 import { getMediaStats, clearAllMedia, getMedia } from './mediaStore.js'
@@ -85,6 +85,10 @@ function calcCoryat(states, board) {
 
 export default function App() {
   const [user, setUser] = useState(null)
+  // Effects that should run once per account key on this, never on the user object:
+  // onAuthStateChange hands back a fresh object on every auth event, including the
+  // token refresh that fires roughly hourly in every open tab.
+  const userId = user?.id ?? null
   const [authChecked, setAuthChecked] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [syncError, setSyncError] = useState(null)
@@ -125,11 +129,24 @@ export default function App() {
   const [buzzTimes, setBuzzTimes] = useState([])
 
   const [cards, setCards] = useState([])
-  // Re-sync cards from storage when window regains focus (catches drill updates)
+  // Keep every open tab's deck current with what the others write. A background tab used
+  // to go on holding whatever it loaded, and anything that made it save — the hourly
+  // token refresh did — wrote that old copy over storage and the server, wiping the
+  // sessions done elsewhere since. Folding by recency also means an older stored copy
+  // can never replace a newer one held here.
   useEffect(() => {
-    const sync = () => setCards(loadCards())
+    const sync = () => {
+      const stored = loadCards()
+      const tombstones = getTombstones()
+      setCards(prev => reconcileCards(prev, stored, tombstones))
+    }
+    const onStorage = e => { if (e.key === CARDS_KEY || e.key === null) sync() }
     window.addEventListener('focus', sync)
-    return () => window.removeEventListener('focus', sync)
+    window.addEventListener('storage', onStorage)
+    return () => {
+      window.removeEventListener('focus', sync)
+      window.removeEventListener('storage', onStorage)
+    }
   }, [])
   const [gameHistory, setGameHistory] = useState([])
   const [storageReady, setStorageReady] = useState(false)
@@ -248,7 +265,7 @@ export default function App() {
   // cross-device resume it exists for never actually worked. Offer it when it is genuinely
   // ahead of whatever is on this device; savedAt is what decides, since both sides stamp it.
   useEffect(() => {
-    if (!user || !authChecked) return
+    if (!userId || !authChecked) return
     let cancelled = false
     loadGameStateRemote()
       .then(remote => {
@@ -259,7 +276,7 @@ export default function App() {
       })
       .catch(() => {}) // a missing remote game is not worth surfacing
     return () => { cancelled = true }
-  }, [user, authChecked])
+  }, [userId, authChecked])
 
   const [dailyCards, setDailyCards] = useState(() => getDailyStats().cardsReviewed)
   const _todayCheck = new Date().toDateString()
@@ -351,7 +368,6 @@ export default function App() {
   // over and over, against a deck that had only been pushed as recently as the 20-second
   // debounce allowed. Combined with the merge preferring remote, that is what reverted
   // ratings and made cards reappear in the next session.
-  const userId = user?.id ?? null
   useEffect(() => {
     if (!userId || !storageReady) return
     setSyncing(true)
@@ -401,14 +417,14 @@ export default function App() {
     saveCards(cards)
     if (cards.length > 10) saveDeckSnapshot(cards).catch(() => {})
     saveGameHistory(gameHistory)
-    if (user) {
+    if (userId) {
       // Every push sends the whole deck (1-2 MB). At a 2s debounce a 100-card study
       // session re-uploaded it dozens of times. 20s coalesces a session into a
       // handful of pushes; the flush below covers leaving before the timer fires.
       clearTimeout(syncTimeout.current)
       syncTimeout.current = setTimeout(() => { pushRemote() }, 20000)
     }
-  }, [cards, gameHistory, storageReady, user])
+  }, [cards, gameHistory, storageReady, userId])
 
   // Keep the latest values for the flush, which runs outside the render cycle.
   const pushPayloadRef = useRef({ cards, gameHistory })

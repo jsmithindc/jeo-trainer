@@ -1,4 +1,4 @@
-const CARDS_KEY = 'coryat-flashcards-v1'
+export const CARDS_KEY = 'coryat-flashcards-v1'
 const GAMES_KEY = 'coryat-games-v1'
 const GAME_STATE_KEY = 'coryat-game-state-v1'
 const EPISODE_CACHE_KEY = 'coryat-episode-cache-v1'

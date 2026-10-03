@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo, lazy, Suspense } fro
 import { shuffled } from './shuffle.js'
 import { newCard, formatRelative } from './srs.js'
 import { APP_VERSION, DISPLAY_VERSION } from './version.js'
+import { describeSyncError } from './syncStatus.js'
 import { rateCard, nextDueLabel, resetSchedule } from './fsrs.js'
 import { CARDS_KEY, loadCards, saveCards, loadGameHistory, saveGameHistory } from './storage.js'
 import { parseApkg, migrateLocalMediaToSupabase } from './ankiImport.js'
@@ -91,7 +92,16 @@ export default function App() {
   const userId = user?.id ?? null
   const [authChecked, setAuthChecked] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  // { raw, auth, offline } from describeSyncError, or null. Cleared by the next sync that
+  // works — it used to be cleared only at sign-in, so one dropped connection left the
+  // warning up for good and the only way to dismiss it was to sign out and back in.
   const [syncError, setSyncError] = useState(null)
+  // A failed local write. Worse than a sync error: nothing is being kept anywhere.
+  const [storageError, setStorageError] = useState(null)
+  // When the oldest change not yet on the server was made, for the banner.
+  const [unsyncedSince, setUnsyncedSince] = useState(null)
+  // Bumped to retry the sign-in merge after it fails.
+  const [syncAttempt, setSyncAttempt] = useState(0)
 
   const [view, setView] = useState('board')
   const [board, setBoard] = useState(null) // null = loading, SAMPLE_BOARD = fallback
@@ -189,6 +199,11 @@ export default function App() {
   const [showCategorySearch, setShowCategorySearch] = useState(false)
 
   const syncTimeout = useRef(null)
+  const retryTimer = useRef(null)
+  const signingOut = useRef(false) // set by the Sign Out button, so that sign-out isn't reported as a failure
+  const userIdRef = useRef(null)
+  const mergedFor = useRef(null) // the account whose server copy has been merged in on this load
+  const mergeInFlight = useRef(false)
   const lastRemoteGameSave = useRef(0)
 
   const clueStates = round === 'single' ? singleClueStates : doubleClueStates
@@ -200,7 +215,13 @@ export default function App() {
       setUser(session?.user ?? null)
       setAuthChecked(true)
     })
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      // A session that dies on its own (a refresh token rejected, say) used to sign the app
+      // out silently: the cloud icon turned into a padlock and nothing synced from then on.
+      if (event === 'SIGNED_OUT' && !signingOut.current) {
+        setSyncError(describeSyncError({ message: 'Signed out — sign in again to keep syncing', auth: true }))
+      }
+      signingOut.current = false
       setUser(session?.user ?? null)
     })
     return () => subscription.unsubscribe()
@@ -226,7 +247,7 @@ export default function App() {
   // Surface failed local writes through the same banner as sync errors, rather
   // than letting the app show cards that were never actually saved.
   useEffect(() => {
-    setStorageErrorHandler(msg => setSyncError(msg))
+    setStorageErrorHandler(msg => setStorageError(msg))
     return () => setStorageErrorHandler(null)
   }, [])
 
@@ -369,11 +390,16 @@ export default function App() {
   // debounce allowed. Combined with the merge preferring remote, that is what reverted
   // ratings and made cards reappear in the next session.
   useEffect(() => {
+    // Nothing may be pushed until this load's merge has worked: a deck that skipped it
+    // would overwrite whatever other devices uploaded in the meantime.
+    mergedFor.current = null
     if (!userId || !storageReady) return
+    let cancelled = false
+    mergeInFlight.current = true
     setSyncing(true)
-    setSyncError(null)
     loadRemoteData()
       .then(remote => {
+        if (cancelled) return
         const local = { cards, gameHistory, tombstones: getTombstones() }
         const merged = mergeData(local, remote)
         // Run after the merge, not before: remote wins on conflict for games that
@@ -401,23 +427,31 @@ export default function App() {
             setDailyCards(remoteToday)
           }
         }
+        mergedFor.current = userId
+        syncSucceeded(null)
       })
-      .catch(err => setSyncError(err.message))
-      .finally(() => setSyncing(false))
+      .catch(err => { if (!cancelled) syncFailed(err) })
+      .finally(() => {
+        if (cancelled) return
+        mergeInFlight.current = false
+        setSyncing(false)
+      })
 
     // Migrate any local IndexedDB media to Supabase Storage
     migrateLocalMediaToSupabase(user)
       .then(count => { if (count > 0) console.log(`Migrated ${count} media files to Supabase`) })
       .catch(console.warn)
-  }, [userId, storageReady])
+    return () => { cancelled = true; mergeInFlight.current = false }
+  }, [userId, storageReady, syncAttempt])
 
   // ── Save locally + debounced remote sync ─────────────────────────────────
   useEffect(() => {
     if (!storageReady) return
-    saveCards(cards)
+    if (saveCards(cards)) setStorageError(null)
     if (cards.length > 10) saveDeckSnapshot(cards).catch(() => {})
     saveGameHistory(gameHistory)
     if (userId) {
+      setUnsyncedSince(since => since ?? Date.now())
       // Every push sends the whole deck (1-2 MB). At a 2s debounce a 100-card study
       // session re-uploaded it dozens of times. 20s coalesces a session into a
       // handful of pushes; the flush below covers leaving before the timer fires.
@@ -430,13 +464,62 @@ export default function App() {
   const pushPayloadRef = useRef({ cards, gameHistory })
   useEffect(() => { pushPayloadRef.current = { cards, gameHistory } }, [cards, gameHistory])
 
+  userIdRef.current = userId
+
+  // Only setters and refs in here, so the stable pushRemote below can call them.
+  function syncSucceeded(pushStartedAt) {
+    clearTimeout(retryTimer.current)
+    setSyncError(null)
+    // A change made while the push was in flight is still unsynced.
+    if (pushStartedAt != null) setUnsyncedSince(since => (since && since > pushStartedAt ? since : null))
+  }
+
+  function syncFailed(err) {
+    const described = describeSyncError(err)
+    console.warn('[sync]', described.raw)
+    setSyncError(described)
+    clearTimeout(retryTimer.current)
+    // Retrying can't fix a dead session; signing in again restarts the sync itself.
+    if (!described.auth) retryTimer.current = setTimeout(() => retrySync.current(), 30000)
+  }
+
   const pushRemote = useCallback(() => {
+    if (!userIdRef.current) return Promise.resolve()
+    if (mergedFor.current !== userIdRef.current) {
+      // The sign-in merge hasn't worked yet — retry that rather than pushing over the server.
+      if (!mergeInFlight.current) setSyncAttempt(n => n + 1)
+      return Promise.resolve()
+    }
     const { cards: c, gameHistory: g } = pushPayloadRef.current
+    const startedAt = Date.now()
     setSyncing(true)
     return saveRemoteData(c, g, { [new Date().toLocaleDateString()]: getDailyStats().cardsReviewed }, getTombstones())
-      .catch(err => setSyncError(err.message))
+      .then(() => syncSucceeded(startedAt))
+      .catch(syncFailed)
       .finally(() => setSyncing(false))
   }, [])
+
+  const retrySync = useRef(() => {})
+  retrySync.current = () => {
+    clearTimeout(retryTimer.current)
+    clearTimeout(syncTimeout.current)
+    syncTimeout.current = null
+    pushRemote()
+  }
+
+  // A dropped connection usually comes back on its own; don't wait out the timer.
+  useEffect(() => {
+    if (!syncError || syncError.auth) return
+    const retry = () => { if (navigator.onLine && document.visibilityState === 'visible') retrySync.current() }
+    window.addEventListener('online', retry)
+    document.addEventListener('visibilitychange', retry)
+    return () => {
+      window.removeEventListener('online', retry)
+      document.removeEventListener('visibilitychange', retry)
+    }
+  }, [syncError])
+
+  useEffect(() => () => clearTimeout(retryTimer.current), [])
 
   // Flush pending work when the tab is backgrounded or closed — on mobile this is
   // usually how a study session ends, and it is where a long debounce would lose data.
@@ -1130,6 +1213,14 @@ export default function App() {
 
   return (
     <div style={{ ...S.app, ...fontOverride(largeFont, fontSettings, { size: 17, weight: 500, lineHeight: 1.5 }) }}>
+      <SyncBanner
+        syncError={syncError}
+        storageError={storageError}
+        unsyncedSince={unsyncedSince}
+        syncing={syncing}
+        onRetry={() => retrySync.current()}
+        onSignIn={() => setShowAuth(true)}
+      />
       <Header
         largeFont={largeFont}
         onToggleFontPanel={() => setShowFontPanel(p => !p)}
@@ -1454,7 +1545,14 @@ export default function App() {
           user={user}
           syncError={syncError}
           onClose={() => setShowAuth(false)}
-          onSignOut={() => { signOut(); setShowAuth(false) }}
+          onSignOut={() => {
+            signingOut.current = true
+            clearTimeout(retryTimer.current)
+            setSyncError(null)
+            setUnsyncedSince(null)
+            signOut()
+            setShowAuth(false)
+          }}
         />
       )}
 
@@ -1492,6 +1590,55 @@ export default function App() {
 }
 
 // ─── Header ───────────────────────────────────────────────────────────────────
+// Pinned to the top so it stays in view during a study session or a board. The header's
+// icon was the only signal before, and a tooltip on it is invisible on a phone.
+function SyncBanner({ syncError, storageError, unsyncedSince, syncing, onRetry, onSignIn }) {
+  if (!storageError && !syncError) return null
+  const since = unsyncedSince
+    ? new Date(unsyncedSince).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+    : null
+
+  const urgent = !!storageError
+  let title, body, action = null
+  if (storageError) {
+    title = 'PROGRESS IS NOT BEING SAVED'
+    body = `This device couldn't save your last change. Stop studying now — anything you do from here is lost when this tab closes. ${storageError}`
+  } else if (syncError.auth) {
+    title = 'SYNC STOPPED — SIGNED OUT'
+    body = `${since ? `Changes since ${since} are` : 'Your progress is'} saved on this device only. Sign in again to upload them. Don't study on another device until you do.`
+    action = { label: 'Sign in', onClick: onSignIn }
+  } else {
+    title = syncError.offline ? 'OFFLINE — NOT SYNCING' : 'SYNC FAILED'
+    body = `${since ? `Changes since ${since} are` : 'Your progress is'} saved on this device and will upload automatically when sync recovers — you can keep studying here. Don't study on another device until this clears.`
+    action = { label: syncing ? 'Retrying…' : 'Retry now', onClick: onRetry, disabled: syncing }
+  }
+
+  const color = urgent ? '#ff8a80' : '#f5c518'
+  return (
+    <div role="alert" style={{
+      position: 'sticky', top: 0, zIndex: 60,
+      background: urgent ? '#3a0d0d' : '#2a2206',
+      borderBottom: `2px solid ${color}`,
+      padding: '8px 14px', paddingTop: 'calc(8px + env(safe-area-inset-top))',
+      display: 'flex', gap: 12, alignItems: 'center',
+    }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 16, letterSpacing: 2, color }}>⚠️ {title}</div>
+        <div style={{ fontSize: 12, color: '#e8e0c8', lineHeight: 1.4 }}>{body}</div>
+        {syncError && !storageError && (
+          <div style={{ fontSize: 10, color: '#8a8060', marginTop: 2, wordBreak: 'break-word' }}>{syncError.raw}</div>
+        )}
+      </div>
+      {action && (
+        <button onClick={action.onClick} disabled={action.disabled} style={{
+          flexShrink: 0, fontSize: 12, fontWeight: 700, letterSpacing: 1, padding: '8px 12px', borderRadius: 6,
+          border: `1px solid ${color}`, background: 'transparent', color, cursor: action.disabled ? 'default' : 'pointer',
+        }}>{action.label}</button>
+      )}
+    </div>
+  )
+}
+
 function Header({ coryatScore, actualScore, correctCount, incorrectCount, passCount, answeredCount, totalClues, episodeMeta, user, syncing, syncError, onAuthClick, largeFont, onToggleFontPanel }) {
   const color = coryatScore >= 0 ? '#f5c518' : '#e74c3c'
   const showActual = actualScore !== 0 || coryatScore !== actualScore
@@ -1526,7 +1673,7 @@ function Header({ coryatScore, actualScore, correctCount, incorrectCount, passCo
       <div style={{ ...S.headerStats, justifyContent: 'flex-end' }}>
         <div style={S.pill}>{correctCount}✓ {incorrectCount}✗ {passCount}—</div>
         <div style={S.pill}>{answeredCount}/{totalClues}</div>
-        <button style={{ ...S.authBtn, color: syncError ? '#e57373' : user ? '#7cd992' : '#8890c0' }} onClick={onAuthClick} title={syncError ? `Sync error: ${syncError}` : user ? 'Synced' : 'Sign in to sync'}>
+        <button style={{ ...S.authBtn, color: syncError ? '#e57373' : user ? '#7cd992' : '#8890c0' }} onClick={onAuthClick} title={syncError ? `Sync error: ${syncError.raw}` : user ? 'Synced' : 'Sign in to sync'}>
           {syncing ? '⏳' : syncError ? '⚠️' : user ? '☁️' : '🔓'}
         </button>
       </div>
@@ -1833,7 +1980,7 @@ function AuthModal({ user, syncError, onClose, onSignOut }) {
             </div>
             {syncError && (
               <div style={{ fontSize: 12, color: '#e07070', marginBottom: 12, padding: 8, background: 'rgba(224,112,112,0.08)', borderRadius: 6 }}>
-                ⚠️ Sync error: {syncError}
+                ⚠️ Sync error: {syncError.raw}
               </div>
             )}
             <button style={{ ...S.startBtn, background: '#1e2456', color: '#8890d0', border: '1px solid #2e3476' }} onClick={onSignOut}>

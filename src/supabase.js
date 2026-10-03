@@ -96,17 +96,28 @@ export async function signOut() {
 
 // ── Data sync ─────────────────────────────────────────────────────────────────
 
+// The signed-in account, from the local session. This used getUser(), which is a network
+// call — and when it failed, the result looked exactly like "nobody signed in", so the
+// callers quietly did nothing: a push returned as though it had succeeded, and the login
+// load handed the merge an empty remote copy. Fail loudly instead, so it reaches the banner.
+async function requireUserId() {
+  const { data, error } = await supabase.auth.getSession()
+  if (error) throw error
+  const id = data?.session?.user?.id
+  if (!id) throw Object.assign(new Error('Signed out — sign in again to keep syncing'), { auth: true })
+  return id
+}
+
 export async function loadRemoteData() {
   // Scope the read explicitly rather than relying on row-level security alone. If RLS
   // is ever disabled or altered during a migration, or a second row appears for the
   // account, .single() would otherwise error or return the wrong row.
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { cards: [], gameHistory: [], updatedAt: null, tombstones: [] }
+  const userId = await requireUserId()
 
   const { data, error } = await supabase
     .from('user_data')
     .select('*')
-    .eq('user_id', user.id)
+    .eq('user_id', userId)
     .single()
 
   if (error) {
@@ -126,20 +137,22 @@ export async function loadRemoteData() {
 }
 
 export async function saveRemoteData(cards, gameHistory, dailyStats = null, tombstones = null) {
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return
+  const userId = await requireUserId()
 
-  const { data: existing } = await supabase
+  const { data: existing, error: lookupError } = await supabase
     .from('user_data')
     .select('id')
-    .eq('user_id', user.id)
+    .eq('user_id', userId)
     .single()
+  // PGRST116 is "no row yet". Anything else is a failed lookup, not an absent row — falling
+  // through to the insert on a dropped connection would try to create a second row.
+  if (lookupError && lookupError.code !== 'PGRST116') throw lookupError
 
   if (existing) {
     const { error } = await supabase
       .from('user_data')
       .update({ cards, game_history: gameHistory, ...(dailyStats ? { daily_stats: dailyStats } : {}), ...(tombstones ? { tombstones } : {}), updated_at: new Date().toISOString() })
-      .eq('user_id', user.id)
+      .eq('user_id', userId)
     if (error) {
       // The tombstones column may not exist yet; keep syncing everything else
       // rather than failing the whole save.
@@ -152,7 +165,7 @@ export async function saveRemoteData(cards, gameHistory, dailyStats = null, tomb
   } else {
     const { error } = await supabase
       .from('user_data')
-      .insert({ user_id: user.id, cards, game_history: gameHistory, ...(dailyStats ? { daily_stats: dailyStats } : {}), ...(tombstones ? { tombstones } : {}), updated_at: new Date().toISOString() })
+      .insert({ user_id: userId, cards, game_history: gameHistory, ...(dailyStats ? { daily_stats: dailyStats } : {}), ...(tombstones ? { tombstones } : {}), updated_at: new Date().toISOString() })
     if (error) throw error
   }
 }
@@ -264,11 +277,14 @@ export async function saveGameStateRemote(gameState) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return
 
-  const { data: existing } = await supabase
+  const { data: existing, error: lookupError } = await supabase
     .from('user_data')
     .select('id')
     .eq('user_id', user.id)
     .single()
+  // As in saveRemoteData: a failed lookup must not fall through to inserting a row with an
+  // empty deck for an account that already has one.
+  if (lookupError && lookupError.code !== 'PGRST116') return
 
   // Deliberately does not touch updated_at. That column means "when the deck and game
   // history last changed", and the merge and any future write-conflict check read it

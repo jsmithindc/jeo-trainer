@@ -5315,9 +5315,11 @@ const S = {
 
   main: { padding: '14px', paddingBottom: 'calc(32px + env(safe-area-inset-bottom))' },
 
-  board: { display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 3 },
-  catHeader: { background: '#0f1e6e', color: '#f5c518', fontFamily: "'Bebas Neue', sans-serif", fontSize: 12, textAlign: 'center', padding: '10px 4px', borderRadius: 4, border: '1px solid #1a2e9e', lineHeight: 1.2 },
-  tile: { aspectRatio: '1/0.8', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 4, border: '1px solid #1a2e9e', flexDirection: 'column' },
+  // minmax(0, 1fr), not 1fr: a 1fr column won't shrink below its longest unbreakable word, so a
+  // category like ALPHANUMERICS pushed the sixth column off the edge of a phone screen.
+  board: { display: 'grid', gridTemplateColumns: 'repeat(6, minmax(0, 1fr))', gap: 3 },
+  catHeader: { background: '#0f1e6e', color: '#f5c518', fontFamily: "'Bebas Neue', sans-serif", fontSize: 12, textAlign: 'center', padding: '10px 4px', borderRadius: 4, border: '1px solid #1a2e9e', lineHeight: 1.2, minWidth: 0, overflowWrap: 'break-word', hyphens: 'auto', WebkitHyphens: 'auto' },
+  tile: { aspectRatio: '1/0.8', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 4, border: '1px solid #1a2e9e', flexDirection: 'column', minWidth: 0 },
   tileVal: { fontFamily: "'Bebas Neue', sans-serif", fontSize: 18, color: '#f5c518', textAlign: 'center' },
   tileIcon: { fontSize: 16, color: 'rgba(255,255,255,0.5)' },
   ddTag: { display: 'block', fontSize: 8, color: '#fff', background: '#b8960a', borderRadius: 2, padding: '1px 3px', marginBottom: 1 },

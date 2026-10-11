@@ -1,3 +1,4 @@
+import { normalizeGameDoc } from './savedGames.js'
 export const CARDS_KEY = 'coryat-flashcards-v1'
 const GAMES_KEY = 'coryat-games-v1'
 const GAME_STATE_KEY = 'coryat-game-state-v1'
@@ -33,12 +34,20 @@ export function loadGameHistory() { return get(GAMES_KEY) || [] }
 export function saveGameHistory(games) { return set(GAMES_KEY, games) }
 
 // ── In-progress game state ────────────────────────────────────────────────────
-export function loadGameState() { return get(GAME_STATE_KEY) }
-export function saveGameState(state) {
-  if (!state) { localStorage.removeItem(GAME_STATE_KEY); return }
-  set(GAME_STATE_KEY, { ...state, savedAt: Date.now() })
+// One unfinished game per episode (see savedGames.js). GAME_STATE_KEY was the single slot
+// before that — read once for migration, removed after the first successful save.
+const SAVED_GAMES_KEY = 'coryat-saved-games-v2'
+export function loadSavedGameDoc() {
+  const doc = get(SAVED_GAMES_KEY)
+  if (doc) return normalizeGameDoc(doc)
+  return normalizeGameDoc(get(GAME_STATE_KEY))
 }
-export function clearGameState() { localStorage.removeItem(GAME_STATE_KEY) }
+export function saveSavedGameDoc(doc) {
+  const { rev, ...clean } = doc
+  const ok = set(SAVED_GAMES_KEY, clean)
+  if (ok) localStorage.removeItem(GAME_STATE_KEY)
+  return ok
+}
 
 // ── Episode cache ─────────────────────────────────────────────────────────────
 export function loadEpisodeCache() { return get(EPISODE_CACHE_KEY) || {} }
@@ -209,3 +218,21 @@ export function removeLastReview() {
   log.pop()
   set(REVIEW_LOG_KEY, log)
 }
+
+// ── Device identity and per-device preferences ───────────────────────────────
+// Tags this device's in-progress game when it goes to the server, so another device can
+// tell the game came from elsewhere — and this one doesn't offer its own game back to itself.
+const DEVICE_KEY = 'jeo-device-id'
+export function getDeviceId() {
+  let id = localStorage.getItem(DEVICE_KEY)
+  if (!id) {
+    id = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`
+    try { localStorage.setItem(DEVICE_KEY, id) } catch { /* an id that lasts this session still works */ }
+  }
+  return id
+}
+
+// Which board loads when the app opens: the show after the last game you finished, or the newest.
+const STARTUP_KEY = 'jeo-startup-episode'
+export function getStartupEpisodePref() { return localStorage.getItem(STARTUP_KEY) === 'latest' ? 'latest' : 'next' }
+export function setStartupEpisodePref(value) { try { localStorage.setItem(STARTUP_KEY, value) } catch { /* keeps working for this session */ } }

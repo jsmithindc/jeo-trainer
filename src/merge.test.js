@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mergeData, changedAt, reconcileCards } from './supabase.js'
+import { mergeData, changedAt, reconcileCards, reconcileGames, mergeTombstones } from './supabase.js'
 
 // "before" and "after" bracket a notional earlier sync. Nothing in the merge keys off a
 // timestamp any more — deletions need a tombstone and local-only games are always kept —
@@ -246,5 +246,49 @@ describe('reconcileCards — folding the stored deck into memory', () => {
   it('drops a card another tab deleted, via its tombstone', () => {
     const out = reconcileCards([c('a'), c('b')], [c('a')], [{ id: 'b', deletedAt: 10 }])
     expect(out.map(x => x.id)).toEqual(['a'])
+  })
+})
+
+describe('reconcileGames — picking up games another device saved', () => {
+  const g = (id, playedAt) => ({ id, playedAt })
+
+  it('adds games this device lacks, newest first', () => {
+    const out = reconcileGames([g('a', '2026-10-01')], [g('a', '2026-10-01'), g('b', '2026-10-05')])
+    expect(out.map(x => x.id)).toEqual(['b', 'a'])
+  })
+
+  it('returns the same array when there is nothing new, so no re-render or re-push follows', () => {
+    const mine = [g('a', '2026-10-01')]
+    expect(reconcileGames(mine, [g('a', '2026-10-01')])).toBe(mine)
+  })
+
+  it('keeps games the other copy lacks — a missing game is an upload that never landed', () => {
+    const mine = [g('a', '2026-10-01'), g('b', '2026-10-02')]
+    expect(reconcileGames(mine, [g('a', '2026-10-01')])).toBe(mine)
+  })
+})
+
+describe('mergeTombstones', () => {
+  it('keeps the newest deletion per card from either list', () => {
+    const out = mergeTombstones([{ id: 'a', deletedAt: 5 }], [{ id: 'a', deletedAt: 9 }, { id: 'b', deletedAt: 1 }])
+    expect(out).toEqual([{ id: 'a', deletedAt: 9 }, { id: 'b', deletedAt: 1 }])
+  })
+
+  it('tolerates missing lists', () => {
+    expect(mergeTombstones(undefined, null)).toEqual([])
+  })
+})
+
+describe('the laptop-left-open case', () => {
+  const c = (id, extra = {}) => ({ id, front: id, back: id, createdAt: 1, ...extra })
+
+  it('folding the server copy in keeps the phone\'s ratings and the laptop\'s own', () => {
+    // Laptop loaded the deck before the phone session, then rated card b itself.
+    const laptop = [c('a', { dueAt: 100 }), c('b', { lastReviewed: 300, dueAt: 9_000 })]
+    // Meanwhile the phone rated card a and uploaded.
+    const server = [c('a', { lastReviewed: 200, dueAt: 8_000 }), c('b', { dueAt: 100 })]
+    const out = reconcileCards(laptop, server)
+    expect(out.find(x => x.id === 'a').dueAt).toBe(8_000)
+    expect(out.find(x => x.id === 'b').dueAt).toBe(9_000)
   })
 })

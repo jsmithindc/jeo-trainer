@@ -1,4 +1,5 @@
 import { createClient, navigatorLock, NavigatorLockAcquireTimeoutError } from '@supabase/supabase-js'
+import { normalizeGameDoc } from './savedGames.js'
 
 const SUPABASE_URL = 'https://uramupgwxuugdcmmklds.supabase.co'
 const SUPABASE_ANON_KEY = 'sb_publishable_qJMYyHDRF18PWU6S4nqewA_bi1SDSEM'
@@ -136,7 +137,28 @@ export async function loadRemoteData() {
   }
 }
 
-export async function saveRemoteData(cards, gameHistory, dailyStats = null, tombstones = null) {
+/** The server copy's updated_at, without downloading the deck. */
+export async function loadRemoteStamp() {
+  const userId = await requireUserId()
+  const { data, error } = await supabase
+    .from('user_data')
+    .select('updated_at')
+    .eq('user_id', userId)
+    .maybeSingle()
+  if (error) throw error
+  return data?.updated_at ?? null
+}
+
+/**
+ * Write the deck and history, returning the row's new updated_at.
+ *
+ * With expectedUpdatedAt the write only lands if the server copy is still the one this
+ * device last saw. Otherwise another device has saved since, and blindly overwriting would
+ * erase its work — which is how a laptop left open during a phone session wiped the phone's
+ * ratings when it next saved. That case throws { conflict: true }, so the caller can merge
+ * the newer copy in and try again.
+ */
+export async function saveRemoteData(cards, gameHistory, dailyStats = null, tombstones = null, { expectedUpdatedAt = null } = {}) {
   const userId = await requireUserId()
 
   const { data: existing, error: lookupError } = await supabase
@@ -148,26 +170,29 @@ export async function saveRemoteData(cards, gameHistory, dailyStats = null, tomb
   // through to the insert on a dropped connection would try to create a second row.
   if (lookupError && lookupError.code !== 'PGRST116') throw lookupError
 
+  const row = { cards, game_history: gameHistory, ...(dailyStats ? { daily_stats: dailyStats } : {}), ...(tombstones ? { tombstones } : {}), updated_at: new Date().toISOString() }
+
   if (existing) {
-    const { error } = await supabase
-      .from('user_data')
-      .update({ cards, game_history: gameHistory, ...(dailyStats ? { daily_stats: dailyStats } : {}), ...(tombstones ? { tombstones } : {}), updated_at: new Date().toISOString() })
-      .eq('user_id', userId)
+    let query = supabase.from('user_data').update(row).eq('user_id', userId)
+    if (expectedUpdatedAt) query = query.eq('updated_at', expectedUpdatedAt)
+    // Ask for updated_at back only: a bare select() would download the whole deck.
+    const { data, error } = await query.select('updated_at')
     if (error) {
       // The tombstones column may not exist yet; keep syncing everything else
       // rather than failing the whole save.
       if (tombstones && /tombstones/i.test(error.message || '')) {
         console.warn('[sync] tombstones column missing — run the migration SQL; syncing without it')
-        return saveRemoteData(cards, gameHistory, dailyStats, null)
+        return saveRemoteData(cards, gameHistory, dailyStats, null, { expectedUpdatedAt })
       }
       throw error
     }
-  } else {
-    const { error } = await supabase
-      .from('user_data')
-      .insert({ user_id: userId, cards, game_history: gameHistory, ...(dailyStats ? { daily_stats: dailyStats } : {}), ...(tombstones ? { tombstones } : {}), updated_at: new Date().toISOString() })
-    if (error) throw error
+    if (!data?.length) throw Object.assign(new Error('Another device saved first'), { conflict: true })
+    return data[0].updated_at
   }
+
+  const { data, error } = await supabase.from('user_data').insert({ user_id: userId, ...row }).select('updated_at')
+  if (error) throw error
+  return data?.[0]?.updated_at ?? row.updated_at
 }
 
 /**
@@ -211,19 +236,38 @@ export function reconcileCards(mine, theirs, tombstones = []) {
   return changed ? [...byId.values()] : mine
 }
 
+/** Add the games another copy has that this one lacks. Returns `mine` when there are none. */
+export function reconcileGames(mine, theirs) {
+  const have = new Set(mine.map(g => g.id))
+  const added = theirs.filter(g => !have.has(g.id))
+  if (!added.length) return mine
+  return [...mine, ...added].sort((a, b) => new Date(b.playedAt) - new Date(a.playedAt))
+}
+
 const TOMBSTONE_LIMIT = 1000
+
+/** Union of two tombstone lists, newest deletion per id, bounded. */
+export function mergeTombstones(a = [], b = []) {
+  const tombMap = new Map()
+  for (const t of [...(b || []), ...(a || [])]) {
+    if (!t?.id) continue
+    const prev = tombMap.get(t.id)
+    if (!prev || (t.deletedAt || 0) > (prev.deletedAt || 0)) tombMap.set(t.id, t)
+  }
+  // Keep the list bounded; the newest deletions are the ones that still need to
+  // propagate to other devices.
+  return [...tombMap.values()]
+    .sort((x, y) => (y.deletedAt || 0) - (x.deletedAt || 0))
+    .slice(0, TOMBSTONE_LIMIT)
+}
 
 export function mergeData(local, remote) {
   // Deletions are recorded explicitly. Previously a card missing from remote and
   // created before the last sync was assumed deleted — but that is also exactly what
   // a failed upload looks like, so any card that never made it up was destroyed on
   // the next login. Absence is no longer evidence of deletion; only a tombstone is.
-  const tombMap = new Map()
-  for (const t of [...(remote.tombstones || []), ...(local.tombstones || [])]) {
-    if (!t?.id) continue
-    const prev = tombMap.get(t.id)
-    if (!prev || (t.deletedAt || 0) > (prev.deletedAt || 0)) tombMap.set(t.id, t)
-  }
+  const tombstones = mergeTombstones(local.tombstones, remote.tombstones)
+  const tombMap = new Map(tombstones.map(t => [t.id, t]))
 
   // Union by id, keeping whichever copy changed most recently.
   //
@@ -249,12 +293,6 @@ export function mergeData(local, remote) {
     return (c.createdAt || 0) > (tomb.deletedAt || 0)
   })
 
-  // Keep the tombstone list bounded; the newest deletions are the ones that still
-  // need to propagate to other devices.
-  const tombstones = [...tombMap.values()]
-    .sort((a, b) => (b.deletedAt || 0) - (a.deletedAt || 0))
-    .slice(0, TOMBSTONE_LIMIT)
-
   // Game history merges by id, remote winning on conflict. Local-only games are always
   // kept: a game missing from remote is an upload that never landed, never a deletion,
   // because nothing in the app can delete a game.
@@ -272,60 +310,41 @@ export function mergeData(local, remote) {
   return { cards, gameHistory, tombstones }
 }
 
-// ── Game state sync (in-progress games) ──────────────────────────────────────
-export async function saveGameStateRemote(gameState) {
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return
+// ── Unfinished games (game_state column) ─────────────────────────────────────
+// game_state holds every unfinished game (see savedGames.js) plus a `rev` counter. Writes are
+// conditional on rev, the same idea as updated_at for the deck: two devices each writing
+// their own copy of the list would otherwise erase each other's games.
+//
+// Deliberately leaves updated_at alone. That column means "when the deck and game history
+// last changed"; an in-progress board is scratch state saved every few seconds.
 
-  const { data: existing, error: lookupError } = await supabase
-    .from('user_data')
-    .select('id')
-    .eq('user_id', user.id)
-    .single()
-  // As in saveRemoteData: a failed lookup must not fall through to inserting a row with an
-  // empty deck for an account that already has one.
-  if (lookupError && lookupError.code !== 'PGRST116') return
-
-  // Deliberately does not touch updated_at. That column means "when the deck and game
-  // history last changed", and the merge and any future write-conflict check read it
-  // that way. An in-progress board is scratch state, saved every 30 seconds; letting it
-  // move the timestamp made the column mean "last touched", which is a different claim.
-  const payload = { game_state: gameState }
-
-  if (existing) {
-    await supabase.from('user_data').update(payload).eq('user_id', user.id)
-  } else {
-    await supabase.from('user_data').insert({ user_id: user.id, cards: [], game_history: [], ...payload })
-  }
-}
-
-// Scoped to the signed-in user like every other read here. It was the one query that
-// leaned on row-level security alone — and it was also never called, so the game state
-// being written every 30 seconds of play had nothing reading it back.
-export async function loadGameStateRemote() {
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return null
-
+export async function loadGameDoc() {
+  const userId = await requireUserId()
   const { data, error } = await supabase
     .from('user_data')
     .select('game_state')
-    .eq('user_id', user.id)
-    .single()
-  if (error || !data) return null
-  return data.game_state || null
+    .eq('user_id', userId)
+    .maybeSingle()
+  if (error) throw error
+  return normalizeGameDoc(data?.game_state)
 }
 
-/**
- * Drop the remote in-progress game.
- *
- * Without this the column would keep the last unfinished board for ever: clearGameState()
- * only touches localStorage, so a game finished on one device would go on being offered
- * as resumable on every other one.
- */
-export async function clearGameStateRemote() {
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return
-  await supabase.from('user_data').update({ game_state: null }).eq('user_id', user.id)
+/** Write the list, returning the new rev. Throws { conflict: true } if someone else wrote since expectedRev. */
+export async function saveGameDoc(doc, expectedRev = 0) {
+  const userId = await requireUserId()
+  const next = { games: doc.games, removed: doc.removed, rev: (expectedRev || 0) + 1 }
+  let query = supabase.from('user_data').update({ game_state: next }).eq('user_id', userId)
+  // rev 0 covers an empty column and the single-game shape older versions wrote; neither has
+  // a rev to compare, so that first write converts it unconditionally.
+  if (expectedRev) query = query.eq('game_state->>rev', String(expectedRev))
+  const { data, error } = await query.select('user_id')
+  if (error) throw error
+  if (data?.length) return next.rev
+  if (expectedRev) throw Object.assign(new Error('Another device saved its games first'), { conflict: true })
+  // No row yet for this account.
+  const { error: insertError } = await supabase.from('user_data').insert({ user_id: userId, cards: [], game_history: [], game_state: next })
+  if (insertError) throw insertError
+  return next.rev
 }
 
 // ── Media storage (Supabase Storage bucket) ───────────────────────────────────

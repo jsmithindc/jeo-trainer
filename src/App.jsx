@@ -14,11 +14,13 @@ import { recallMs, suggestGrade, formatRecall, summariseRecall } from './recall.
 import { isSuspended, shouldQuarantine, suspendCard, releaseCard, releaseRewritten, partitionByHealth, LEECH_LAPSES, QUARANTINE_LAPSES } from './leech.js'
 import { saveDeckSnapshot, getDeckSnapshots, restoreSnapshot, ensureSnapshotsMigrated } from './snapshotStore.js'
 import { fetchEpisode, episodeToBoard, searchEpisodesByCategory } from './jarchive.js'
-import { supabase, signIn, signUp, resetPassword, signOut, loadRemoteData, saveRemoteData, mergeData, reconcileCards, saveGameStateRemote, loadGameStateRemote, clearGameStateRemote, uploadMedia } from './supabase.js'
+import { supabase, signIn, signUp, resetPassword, signOut, loadRemoteData, loadRemoteStamp, saveRemoteData, mergeData, reconcileCards, reconcileGames, mergeTombstones, loadGameDoc, saveGameDoc, uploadMedia } from './supabase.js'
+import { mergeGameDocs, upsertGame, removeGame, trimForServer, listUnfinished, gameKey } from './savedGames.js'
 import { buildCategoryHeatMap, buildValueBreakdown, predictCoryat, exportToApkg, getMetaCategory, META_CATEGORY_NAMES, buildDailyDoubleStats, buildRetentionSeries, buildDeckHealth, buildStudyStreak } from './analytics.js'
 import { CardContent, cardIsHtml } from './CardContent.jsx'
 import { getMediaStats, clearAllMedia, getMedia } from './mediaStore.js'
-import { loadGameState, saveGameState, clearGameState, loadEpisodeCache, saveEpisodeToCache, getEpisodeFromCache, pinEpisode, unpinEpisode, removeEpisodeFromCache, getCacheStats, getDailyStats, incrementDailyCards, addToTrash, getTrash, restoreFromTrash, setStorageErrorHandler, logReview, removeLastReview, getReviewLog, getTombstones, addTombstones, saveTombstones, removeTombstone } from './storage.js'
+import { loadSavedGameDoc, saveSavedGameDoc, loadEpisodeCache, saveEpisodeToCache, getEpisodeFromCache, pinEpisode, unpinEpisode, removeEpisodeFromCache, getCacheStats, getDailyStats, incrementDailyCards, addToTrash, getTrash, restoreFromTrash, setStorageErrorHandler, logReview, removeLastReview, getReviewLog, getTombstones, addTombstones, saveTombstones, removeTombstone, getDeviceId, getStartupEpisodePref, setStartupEpisodePref } from './storage.js'
+import { findNextEpisode } from './nextEpisode.js'
 import { WeaknessTracker, SpeedTracker, WagerTrainer, TournamentSetup as TournamentSetupModal, OpponentScoreBar, OpponentCoryatResult, calcStreak, generateOpponent } from './training.jsx'
 // drills.jsx pulls in the Natural Earth water-body polygons; together they are more
 // than half the bundle, and none of it is needed unless the Drills tab is opened.
@@ -182,6 +184,23 @@ export default function App() {
   const triggerOpponentPickRef = useRef(null)
   const [showDJPrompt, setShowDJPrompt] = useState(false)
   const [resumePrompt, setResumePrompt] = useState(null) // saved game state to restore
+  const [startupPref, setStartupPref] = useState(getStartupEpisodePref) // 'next' | 'latest'
+  // True once the account's game history has been merged in (or there's no account, or it
+  // took too long) — the startup board waits for it so "next after last finished" knows
+  // about games finished on other devices.
+  const [historySynced, setHistorySynced] = useState(false)
+  const [lastSyncedAt, setLastSyncedAt] = useState(null)
+  const deviceId = useRef(getDeviceId()).current
+  const loadSeq = useRef(0) // bumped by every board load and resume; a superseded load is dropped
+  const remoteGameTimer = useRef(null)
+  const remoteGameDoc = useRef(null) // the server's list of unfinished games as last read, with its rev
+  const gameSyncInFlight = useRef(false)
+  const gameSyncAgain = useRef(false)
+  // Every unfinished game, one per episode, from this device and others (see savedGames.js).
+  const [savedGames, setSavedGames] = useState(() => loadSavedGameDoc())
+  const [showUnfinished, setShowUnfinished] = useState(false)
+  const dismissedRemoteGame = useRef(null) // savedAt of another device's game waved off with "Not now"
+  const lastGameCheck = useRef(0)
   const [pendingOpponentPick, setPendingOpponentPick] = useState(null)
   const [predictionBaseDate, setPredictionBaseDate] = useState(() => localStorage.getItem('jeo-prediction-base') || null)
   const [fontSettings, setFontSettings] = useState(() => {
@@ -204,7 +223,11 @@ export default function App() {
   const userIdRef = useRef(null)
   const mergedFor = useRef(null) // the account whose server copy has been merged in on this load
   const mergeInFlight = useRef(false)
-  const lastRemoteGameSave = useRef(0)
+  // The server copy's updated_at as this device last saw it. Every push is conditional on
+  // it still matching, so a device can't save over work another device uploaded since.
+  const remoteStamp = useRef(null)
+  const lastPullAt = useRef(0)
+  const unsyncedRef = useRef(null)
 
   const clueStates = round === 'single' ? singleClueStates : doubleClueStates
   const setClueStates = round === 'single' ? setSingleClueStates : setDoubleClueStates
@@ -273,31 +296,69 @@ export default function App() {
   }, [])
 
   // ── Check for saved game state to resume ────────────────────────────────
+  // Offers the most recent unfinished game; the rest are in the board's ⏯ list.
   useEffect(() => {
     if (!authChecked) return
-    const saved = loadGameState()
-    // Defensive: stale finished states may already be on disk from before the guard
-    // above existed, so judge the record itself rather than trusting it was cleared.
-    if (isResumable(saved)) setResumePrompt(saved)
+    const newest = listUnfinished(loadSavedGameDoc())[0]
+    if (isResumable(newest)) setResumePrompt(newest)
   }, [authChecked])
 
   // The remote half of that. An in-progress board has been pushed to Supabase every 30
   // seconds of play since the feature was written, and nothing ever read it back — so the
   // cross-device resume it exists for never actually worked. Offer it when it is genuinely
   // ahead of whatever is on this device; savedAt is what decides, since both sides stamp it.
+  // Also runs whenever the app comes back to the screen and on Sync now, so a game started
+  // on the laptop is offered as soon as you open the app on the phone — not only on a fresh load.
+  function commitSavedGames(doc) {
+    saveSavedGameDoc(doc)
+    setSavedGames(doc)
+  }
+
+  // Fold the server's list into this device's. Returns both versions so callers can tell
+  // which games are new here.
+  async function refreshGamesFromServer() {
+    if (!userIdRef.current) return null
+    const remote = await loadGameDoc().catch(() => null) // a missing list is not worth surfacing
+    if (!remote) return null
+    remoteGameDoc.current = remote
+    const before = loadSavedGameDoc()
+    const merged = mergeGameDocs(before, remote)
+    commitSavedGames(merged)
+    return { before, merged }
+  }
+
+  // Offer the newest game another device saved since this one last saw it. Runs on load,
+  // whenever the app comes back to the screen, and on Sync now — which also re-offers a game
+  // you waved off with "Not now".
+  async function checkRemoteGame({ offerSeen = false } = {}) {
+    if (!userIdRef.current) return
+    lastGameCheck.current = Date.now()
+    const result = await refreshGamesFromServer()
+    if (!result) return
+    const { before, merged } = result
+    const savedMs = g => new Date(g?.savedAt || 0).getTime()
+    const others = listUnfinished(merged).filter(g => g.deviceId && g.deviceId !== deviceId)
+    const fresh = others.filter(g => { const seen = before.games[gameKey(g)]; return !seen || savedMs(g) > savedMs(seen) })
+    const candidate = fresh[0] || (offerSeen ? others[0] : null)
+    if (!candidate) return
+    if (!offerSeen && dismissedRemoteGame.current === candidate.savedAt) return
+    // Already on screen and playing here — nothing to pick up.
+    if (gameStartedRef.current && String(episodeMetaRef.current?.episodeId) === gameKey(candidate) && !fresh.includes(candidate)) return
+    setResumePrompt(candidate)
+  }
+
   useEffect(() => {
     if (!userId || !authChecked) return
-    let cancelled = false
-    loadGameStateRemote()
-      .then(remote => {
-        if (cancelled || !isResumable(remote)) return
-        const local = loadGameState()
-        const newer = new Date(remote.savedAt || 0) > new Date(local?.savedAt || 0)
-        if (!isResumable(local) || newer) setResumePrompt(remote)
-      })
-      .catch(() => {}) // a missing remote game is not worth surfacing
-    return () => { cancelled = true }
+    checkRemoteGame().then(() => syncGames()) // and send up any games saved here while signed out
   }, [userId, authChecked])
+
+  // Don't hold the startup board hostage to a slow connection.
+  useEffect(() => {
+    if (!authChecked) return
+    if (!userId) { setHistorySynced(true); return }
+    const t = setTimeout(() => setHistorySynced(true), 4000)
+    return () => clearTimeout(t)
+  }, [authChecked, userId])
 
   const [dailyCards, setDailyCards] = useState(() => getDailyStats().cardsReviewed)
   const _todayCheck = new Date().toDateString()
@@ -314,13 +375,12 @@ export default function App() {
     // loadEpisode calls: the first with an empty history (landing on the latest episode)
     // and the second with the real history (landing on the next unplayed one). Whichever
     // resolved last won, so which board you got was a race.
-    if (!authChecked || !historyReady || startupLoaded.current) return
+    if (!authChecked || !historyReady || !historySynced || startupLoaded.current) return
     startupLoaded.current = true
 
-    // gameHistory[0] is the most recent game. gameId is the numeric j-archive id;
-    // older records only have episodeId (the show number) and an air date.
-    const lastEntry = gameHistory.length > 0 ? gameHistory[0] : null
-    const lastGameId = lastEntry?.gameId || null
+    // The most recently finished game. gameId is the numeric j-archive id; older records
+    // only have episodeId (the show number) and an air date, which findNextEpisode handles.
+    const lastEntry = gameHistory.reduce((a, g) => (!a || new Date(g.playedAt) > new Date(a.playedAt) ? g : a), null)
 
     const loadLatestFallback = () => {
       loadEpisode('latest', true).catch(() => {
@@ -335,52 +395,28 @@ export default function App() {
 
     // One request serves both consumers: populating prev/next, and finding the next
     // unplayed episode.
+    const fetchSeason = id => fetch(`/.netlify/functions/episodes?season=${id}`).then(r => r.json()).then(d => d.episodes || [])
     fetch('/.netlify/functions/episodes')
       .then(r => r.json())
       .then(data => {
         if (data.seasons?.length) setSeasons(data.seasons)
         if (!data.episodes?.length) { loadLatestFallback(); return }
-        setEpisodeList(data.episodes)
-        setCurrentEpIndex(0) // provisional; corrected below once the episode loads
-
-        // Find the last played episode in the list
-        // Match by gameId first, then airDate (most reliable since showNumber may be stale)
-        let lastIdx = -1
-        if (lastGameId) {
-          lastIdx = data.episodes.findIndex(e => e.gameId === lastGameId)
+        const loadAt = (episodes, index) => {
+          // You resumed a game (from this device or another) while the list was loading.
+          if (gameStartedRef.current) return Promise.resolve()
+          setEpisodeList(episodes)
+          setCurrentEpIndex(index)
+          return loadEpisode(episodes[index].gameId, true)
         }
-        if (lastIdx === -1 && lastEntry?.airDate) {
-          // Air date is the one field both sides have always carried. Uses the same
-          // normaliser as the played-episode index rather than a second copy of it.
-          const lastAir = normalizeAirDate(lastEntry.airDate)
-          lastIdx = data.episodes.findIndex(e => normalizeAirDate(e.airDate) === lastAir)
-        }
-
-        if (lastIdx > 0) {
-          // Episodes are newest-first, so "next" is at index lastIdx - 1
-          const nextEp = data.episodes[lastIdx - 1]
-          loadEpisode(nextEp.gameId, true)
-            .then(() => setCurrentEpIndex(lastIdx - 1))
-            .catch(() => {
-              // Next episode not parsed yet, stay on latest
-              loadEpisode(data.episodes[0].gameId, true)
-                .then(() => setCurrentEpIndex(0))
-                .catch(loadLatestFallback)
-            })
-        } else if (lastIdx === 0) {
-          // Already on the most recent episode
-          loadEpisode(data.episodes[0].gameId, true)
-            .then(() => setCurrentEpIndex(0))
-            .catch(loadLatestFallback)
-        } else {
-          // Not found in list — load latest
-          loadEpisode(data.episodes[0].gameId, true)
-            .then(() => setCurrentEpIndex(0))
-            .catch(loadLatestFallback)
-        }
+        const loadLatest = () => loadAt(data.episodes, 0).catch(loadLatestFallback)
+        if (startupPref === 'latest' || !lastEntry) return loadLatest()
+        return findNextEpisode(lastEntry, data.episodes, fetchSeason)
+          // The next show may not be parsed on j-archive yet; the newest is the fallback.
+          .then(next => (next ? loadAt(next.episodes, next.index).catch(loadLatest) : loadLatest()))
+          .catch(loadLatest)
       })
       .catch(loadLatestFallback)
-  }, [authChecked, historyReady])
+  }, [authChecked, historyReady, historySynced])
 
   // ── Sync from Supabase when the account changes ───────────────────────────
   // Keyed on the user id, not the user object. onAuthStateChange hands back a fresh
@@ -417,20 +453,15 @@ export default function App() {
         setGameHistory(repairedHistory)
         saveCards(fsrsPass.cards)
         saveGameHistory(repairedHistory)
-        // Merge daily stats: take the max across devices for today
-        if (remote.dailyStats) {
-          const today = new Date().toLocaleDateString()
-          const remoteToday = remote.dailyStats[today] || 0
-          const localToday = getDailyStats().cardsReviewed
-          if (remoteToday > localToday) {
-            incrementDailyCards(remoteToday - localToday)
-            setDailyCards(remoteToday)
-          }
-        }
+        adoptDailyStats(remote.dailyStats)
+        remoteStamp.current = remote.updatedAt
+        lastPullAt.current = Date.now()
         mergedFor.current = userId
+        setHistorySynced(true)
+        setLastSyncedAt(Date.now())
         syncSucceeded(null)
       })
-      .catch(err => { if (!cancelled) syncFailed(err) })
+      .catch(err => { if (cancelled) return; setHistorySynced(true); syncFailed(err) })
       .finally(() => {
         if (cancelled) return
         mergeInFlight.current = false
@@ -471,7 +502,10 @@ export default function App() {
     clearTimeout(retryTimer.current)
     setSyncError(null)
     // A change made while the push was in flight is still unsynced.
-    if (pushStartedAt != null) setUnsyncedSince(since => (since && since > pushStartedAt ? since : null))
+    if (pushStartedAt != null) {
+      setUnsyncedSince(since => (since && since > pushStartedAt ? since : null))
+      setLastSyncedAt(Date.now())
+    }
   }
 
   function syncFailed(err) {
@@ -483,21 +517,119 @@ export default function App() {
     if (!described.auth) retryTimer.current = setTimeout(() => retrySync.current(), 30000)
   }
 
-  const pushRemote = useCallback(() => {
-    if (!userIdRef.current) return Promise.resolve()
+  // Today's count is the max across devices (each pushes its own), never a sum.
+  function adoptDailyStats(remoteDaily) {
+    if (!remoteDaily) return
+    const remoteToday = remoteDaily[new Date().toLocaleDateString()] || 0
+    const localToday = getDailyStats().cardsReviewed
+    if (remoteToday > localToday) {
+      incrementDailyCards(remoteToday - localToday)
+      setDailyCards(remoteToday)
+    }
+  }
+
+  // Fold the server's copy into this device's: newer copy of each card wins, games and
+  // deletions union. Returns what to upload; state only changes if something was new.
+  function adoptRemote(remote, basis) {
+    const tombstones = mergeTombstones(basis.tombstones, remote.tombstones)
+    const cards = reconcileCards(basis.cards, remote.cards, tombstones)
+    const gameHistory = reconcileGames(basis.gameHistory, remote.gameHistory)
+    saveTombstones(tombstones)
+    if (cards !== basis.cards) setCards(prev => reconcileCards(prev, remote.cards, tombstones))
+    if (gameHistory !== basis.gameHistory) setGameHistory(prev => reconcileGames(prev, remote.gameHistory))
+    adoptDailyStats(remote.dailyStats)
+    return { cards, gameHistory, tombstones }
+  }
+
+  const pushRemote = useCallback(async () => {
+    if (!userIdRef.current) return
     if (mergedFor.current !== userIdRef.current) {
       // The sign-in merge hasn't worked yet — retry that rather than pushing over the server.
       if (!mergeInFlight.current) setSyncAttempt(n => n + 1)
-      return Promise.resolve()
+      return
     }
-    const { cards: c, gameHistory: g } = pushPayloadRef.current
     const startedAt = Date.now()
     setSyncing(true)
-    return saveRemoteData(c, g, { [new Date().toLocaleDateString()]: getDailyStats().cardsReviewed }, getTombstones())
-      .then(() => syncSucceeded(startedAt))
-      .catch(syncFailed)
-      .finally(() => setSyncing(false))
+    try {
+      let payload = { ...pushPayloadRef.current, tombstones: getTombstones() }
+      for (let attempt = 1; ; attempt++) {
+        try {
+          remoteStamp.current = await saveRemoteData(
+            payload.cards, payload.gameHistory,
+            { [new Date().toLocaleDateString()]: getDailyStats().cardsReviewed },
+            payload.tombstones,
+            { expectedUpdatedAt: remoteStamp.current },
+          )
+          break
+        } catch (err) {
+          // Another device saved since we last synced: take its changes, then try again.
+          if (!err?.conflict || attempt >= 3) throw err
+          const remote = await loadRemoteData()
+          payload = adoptRemote(remote, payload)
+          remoteStamp.current = remote.updatedAt
+        }
+      }
+      lastPullAt.current = Date.now()
+      syncSucceeded(startedAt)
+    } catch (err) {
+      syncFailed(err)
+    } finally {
+      setSyncing(false)
+    }
   }, [])
+
+  // Pick up what other devices uploaded while this tab sat open — a tab used to keep
+  // showing the deck it loaded, so cards studied on the phone stayed due on the laptop.
+  // The stamp check is a few bytes; the deck only downloads when something changed.
+  const pullRemote = useCallback(async (force = false) => {
+    if (!userIdRef.current || mergedFor.current !== userIdRef.current) return
+    if (!force && Date.now() - lastPullAt.current < 15000) return
+    lastPullAt.current = Date.now()
+    try {
+      const stamp = await loadRemoteStamp()
+      if (stamp === remoteStamp.current) { setLastSyncedAt(Date.now()); return }
+      const remote = await loadRemoteData()
+      adoptRemote(remote, { ...pushPayloadRef.current, tombstones: getTombstones() })
+      remoteStamp.current = remote.updatedAt
+      setLastSyncedAt(Date.now())
+      // Deliberately leaves any sync warning up: it's about this device's uploads, and
+      // only a push that lands should clear it.
+    } catch (err) {
+      syncFailed(err)
+    }
+  }, [])
+
+  unsyncedRef.current = unsyncedSince
+
+  useEffect(() => {
+    if (!userId) return
+    const onReturn = () => {
+      if (document.visibilityState !== 'visible') return
+      // Changes still unconfirmed with nothing queued to send them: the upload started as
+      // the app went to the background never finished — iOS freezes a home-screen app
+      // within seconds of locking. Send them now; the push merges anything newer first.
+      if (unsyncedRef.current && !syncTimeout.current) pushRemote()
+      else pullRemote()
+      if (Date.now() - lastGameCheck.current > 10000) checkRemoteGame()
+    }
+    window.addEventListener('focus', onReturn)
+    document.addEventListener('visibilitychange', onReturn)
+    return () => {
+      window.removeEventListener('focus', onReturn)
+      document.removeEventListener('visibilitychange', onReturn)
+    }
+  }, [userId, pullRemote])
+
+  async function syncNow() {
+    if (!userId) { setShowAuth(true); return }
+    if (mergedFor.current !== userId) { setSyncAttempt(n => n + 1); return }
+    clearTimeout(syncTimeout.current)
+    syncTimeout.current = null
+    await pullRemote(true)
+    await pushRemote()
+    await syncGames()
+    await checkRemoteGame({ offerSeen: true })
+  }
 
   const retrySync = useRef(() => {})
   retrySync.current = () => {
@@ -526,7 +658,9 @@ export default function App() {
   useEffect(() => {
     if (!user) return
     const flush = () => {
-      if (document.visibilityState === 'hidden' && syncTimeout.current) {
+      if (document.visibilityState !== 'hidden') return
+      if (remoteGameTimer.current) syncGames()
+      if (syncTimeout.current) {
         clearTimeout(syncTimeout.current)
         syncTimeout.current = null
         pushRemote()
@@ -570,14 +704,129 @@ export default function App() {
       tournamentState,
       savedAt: new Date().toISOString(),
     }
-    saveGameState(state)
-    // The local copy is cheap and guards against a crash mid-game. The remote copy
-    // only has to be good enough to resume on another device, so throttle it — this
-    // used to fire a network write carrying the whole episode on every clue answered.
-    if (user && Date.now() - lastRemoteGameSave.current > 30000) {
-      lastRemoteGameSave.current = Date.now()
-      saveGameStateRemote(state).catch(console.error)
+    storeGame(state)
+  }
+
+  // Every save lands locally at once; the server copy follows 2 seconds after the latest
+  // clue (immediately when the tab is hidden), which is what another device resumes from.
+  function storeGame(state) {
+    commitSavedGames(upsertGame(loadSavedGameDoc(), { ...state, deviceId }))
+    scheduleGameSync()
+  }
+
+  // Finished, discarded or restarted. The removal travels with the list, so another device's
+  // older copy can't bring the game back.
+  function forgetGame(key) {
+    if (!key) return
+    commitSavedGames(removeGame(loadSavedGameDoc(), key))
+    scheduleGameSync(0)
+  }
+
+  function scheduleGameSync(delay = 2000) {
+    if (!userIdRef.current) return
+    clearTimeout(remoteGameTimer.current)
+    remoteGameTimer.current = setTimeout(syncGames, delay)
+  }
+
+  // Read-merge-write, conditional on the list's rev: two devices each sending their own copy
+  // would otherwise erase each other's games.
+  async function syncGames() {
+    clearTimeout(remoteGameTimer.current)
+    remoteGameTimer.current = null
+    if (!userIdRef.current) return
+    if (gameSyncInFlight.current) { gameSyncAgain.current = true; return }
+    gameSyncInFlight.current = true
+    try {
+      for (let attempt = 1; ; attempt++) {
+        if (!remoteGameDoc.current) remoteGameDoc.current = await loadGameDoc()
+        const merged = mergeGameDocs(loadSavedGameDoc(), remoteGameDoc.current)
+        commitSavedGames(merged)
+        const outgoing = trimForServer(merged)
+        try {
+          const rev = await saveGameDoc(outgoing, remoteGameDoc.current.rev)
+          remoteGameDoc.current = { ...outgoing, rev }
+          break
+        } catch (err) {
+          if (!err?.conflict || attempt >= 3) throw err
+          remoteGameDoc.current = null // someone else wrote; re-read and merge
+        }
+      }
+    } catch (err) {
+      console.warn('[games]', err?.message || err)
+    } finally {
+      gameSyncInFlight.current = false
+      if (gameSyncAgain.current) { gameSyncAgain.current = false; syncGames() }
     }
+  }
+
+  // The game on the board right now, as a saveable state — or null if there isn't one.
+  function snapshotCurrentGame() {
+    if (!gameStarted || !episodeMeta || fjAnswered || gameCompleteRef.current) return null
+    return {
+      episodeData,
+      episodeMeta,
+      round,
+      board,
+      singleClueStates,
+      doubleClueStates,
+      fjAnswered,
+      coryatScore: singleCoryat + doubleCoryat,
+      actualScore,
+      confidenceRatings,
+      dailyDoubles,
+      buzzTimes,
+      tournamentState,
+      savedAt: new Date().toISOString(),
+    }
+  }
+
+  function resumeGame(r) {
+    // Switching from one unfinished game to another keeps the first.
+    const current = snapshotCurrentGame()
+    if (current && gameKey(current) !== gameKey(r)) { storeGame(current); syncGames() }
+
+    loadSeq.current++ // any board still loading must not replace this one
+    gameCompleteRef.current = false
+    if (autoModeRef.current) { setAutoMode(false); autoModeRef.current = false }
+    setActiveClue(null)
+    setWagerState(null)
+    setWagerAmount(null)
+    setShowFJ(false)
+    setEpisodeData(r.episodeData)
+    setEpisodeMeta(r.episodeMeta)
+    // The server copy leaves the board out to stay small; it's rebuilt from the episode.
+    let resumedBoard = r.board
+    if (!resumedBoard) {
+      try { resumedBoard = episodeToBoard(r.episodeData, r.round === 'double' ? 'double' : 'single').board } catch { resumedBoard = null }
+    }
+    setBoard(resumedBoard)
+    setRound(r.round)
+    setSingleClueStates(r.singleClueStates)
+    setDoubleClueStates(r.doubleClueStates || {})
+    setFjAnswered(r.fjAnswered)
+    setActualScore(r.actualScore || 0)
+    setDailyDoubles(r.dailyDoubles || [])
+    setBuzzTimes(r.buzzTimes || [])
+    // These two were saved by autoSaveCurrentGame and then dropped on the way
+    // back in, so a resumed game recorded confidenceRatings: null and lost its
+    // tournament standings — "Confidence vs actual" simply never appeared.
+    setConfidenceRatings(r.confidenceRatings || null)
+    setTournamentState(r.tournamentState || null)
+    if (r.tournamentState) {
+      setTournamentMode(true)
+      tournamentModeRef.current = true
+      setBoardControl('player')
+      boardControlRef.current = 'player'
+    } else if (tournamentModeRef.current) {
+      setTournamentMode(false)
+      tournamentModeRef.current = false
+    }
+    setGameStarted(true)
+    setResumePrompt(null)
+    setShowUnfinished(false)
+    setBoardLoading(false)
+    setBoardError(null)
+    setView('board')
   }
 
   async function loadRandomUnplayed() {
@@ -621,26 +870,8 @@ export default function App() {
     // The completion check matters: saveGame clears the saved state when a game ends,
     // but navigating away afterwards used to write it straight back, so returning to
     // a finished game offered to resume it.
-    if (gameStarted && episodeMeta && !fjAnswered && !gameCompleteRef.current) {
-      const state = {
-        episodeData,
-        episodeMeta,
-        round,
-        board,
-        singleClueStates,
-        doubleClueStates,
-        fjAnswered,
-        coryatScore: singleCoryat + doubleCoryat,
-        actualScore: actualScore,
-        confidenceRatings,
-        dailyDoubles,
-        buzzTimes,
-        tournamentState,
-        savedAt: new Date().toISOString(),
-      }
-      saveGameState(state)
-      if (user) saveGameStateRemote(state).catch(console.error)
-    }
+    const current = snapshotCurrentGame()
+    if (current) { storeGame(current); syncGames() }
 
     // Reset game complete flag
     gameCompleteRef.current = false
@@ -661,6 +892,10 @@ export default function App() {
       if (triggerOpponentPickRef.current) clearTimeout(triggerOpponentPickRef.current)
     }
 
+    // A slower load finishing after a newer one — or after you resumed a game — used to
+    // replace that board with its own. The startup board loading on the phone while you
+    // tapped Resume on the laptop's game was exactly that race.
+    const seq = ++loadSeq.current
     setBoardLoading(true)
     setBoardError(null)
     setGameStarted(false)
@@ -669,6 +904,7 @@ export default function App() {
       // Check cache first
       const cached = getEpisodeFromCache(gameId === 'latest' ? gameId : gameId)
       const episode = cached || await fetchEpisode(gameId)
+      if (seq !== loadSeq.current) return
       // Cache the fetched episode
       if (!cached) saveEpisodeToCache(episode.episodeId || gameId, episode)
       const { board: newBoard, meta } = episodeToBoard(episode, 'single')
@@ -679,12 +915,10 @@ export default function App() {
       setSingleClueStates(initClueStates(newBoard))
 
       // Check if there's a saved partial game for this episode
-      const savedState = loadGameState()
-      if (isResumable(savedState) &&
-          (savedState.episodeMeta.episodeId === episode.episodeId ||
-           savedState.episodeMeta.episodeNumber === episode.episodeNumber)) {
-        setResumePrompt(savedState)
-      }
+      const savedState = listUnfinished(loadSavedGameDoc()).find(g =>
+        String(g.episodeMeta.episodeId) === String(episode.episodeId) ||
+        (episode.episodeNumber && g.episodeMeta.episodeNumber === episode.episodeNumber))
+      if (isResumable(savedState)) setResumePrompt(savedState)
       if (episode.doubleJeopardy) {
         const { board: djBoard } = episodeToBoard(episode, 'double')
         setDoubleClueStates(initClueStates(djBoard))
@@ -698,6 +932,7 @@ export default function App() {
       setBuzzTimes([])
       // Start screen shown when user taps START button on board, not automatically
     } catch (err) {
+      if (seq !== loadSeq.current) return // superseded; nothing to report or fall back from
       setBoardError(err.message)
       // Seed clue states alongside the fallback board. Without them every lookup returns
       // undefined, which is !== 'unanswered', so the whole board drew as already played —
@@ -706,7 +941,7 @@ export default function App() {
       if (!board) { setBoard(SAMPLE_BOARD); setSingleClueStates(initClueStates(SAMPLE_BOARD)) }
       throw err // re-throw so callers can catch and fallback
     } finally {
-      setBoardLoading(false)
+      if (seq === loadSeq.current) setBoardLoading(false)
     }
   }
 
@@ -1120,9 +1355,8 @@ export default function App() {
       return [{ ...game, attempt }, ...kept]
     })
     gameCompleteRef.current = true // mark complete before async updates
-    clearGameState() // game complete, clear saved state
-    // …and the remote copy, or every other device goes on offering this finished game.
-    if (user) clearGameStateRemote().catch(console.error)
+    // Game over: remove it here and — via the synced list — on every other device.
+    forgetGame(gameKey({ episodeMeta }))
   }
 
   function handleFJAnswer(result) {
@@ -1137,7 +1371,6 @@ export default function App() {
       { result, category: episodeData?.finalJeopardy?.category, clue: episodeData?.finalJeopardy?.clue, answer: episodeData?.finalJeopardy?.answer, wager: fjWager },
       finalActualScore // pass final score explicitly
     )
-    clearGameState()
     setWagerAmount(null)
     setShowFJ(false)
   }
@@ -1202,12 +1435,44 @@ export default function App() {
     setCurrentEpIndex(episodeList.findIndex(ep => String(ep.gameId) === String(id)))
   }, [episodeMeta, episodeList])
 
-  if (!authChecked || (boardLoading && !board)) {
+  // Unfinished games other than the one being played on the board right now.
+  const currentGameKey = gameStarted && episodeMeta ? String(episodeMeta.episodeId) : null
+  const unfinishedOthers = listUnfinished(savedGames).filter(g => gameKey(g) !== currentGameKey)
+
+  // Rendered over the loading screen as well, so another device's game is offered the
+  // moment it's known rather than after this device has finished loading its own board.
+  const resumePromptEl = resumePrompt && (
+        <ResumePrompt
+          resumeData={resumePrompt}
+          onResume={() => resumeGame(resumePrompt)}
+          onRestart={() => {
+            const epId = resumePrompt.episodeMeta?.episodeId
+            forgetGame(gameKey(resumePrompt))
+            setResumePrompt(null)
+            if (epId) loadEpisode(epId, false)
+          }}
+          onDiscard={() => {
+            forgetGame(gameKey(resumePrompt))
+            setResumePrompt(null)
+          }}
+          fromOtherDevice={!!resumePrompt.deviceId && resumePrompt.deviceId !== deviceId}
+          onLater={() => {
+            dismissedRemoteGame.current = resumePrompt.savedAt
+            setResumePrompt(null)
+          }}
+        />
+  )
+
+  // A signed-in device also waits (briefly) for the account's history before picking a board.
+  if (!authChecked || (!board && (boardLoading || !historySynced))) {
     return (
+      <>
       <div style={{ background: '#060b1a', minHeight: '100dvh', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#f5c518', fontFamily: "'Bebas Neue', sans-serif", fontSize: 24, letterSpacing: 4, flexDirection: 'column', gap: 12 }}>
         <div>JEO TRAINER</div>
         <div style={{ fontSize: 12, color: '#4060a0', letterSpacing: 3 }}>LOADING LATEST EPISODE...</div>
       </div>
+      {authChecked && resumePromptEl}
+      </>
     )
   }
 
@@ -1236,6 +1501,7 @@ export default function App() {
         syncing={syncing}
         syncError={syncError}
         onAuthClick={() => setShowAuth(true)}
+        onSyncNow={syncNow}
       />
       <NavBar view={view} setView={setView} dueCount={dueCount} />
       {showFontPanel && (
@@ -1298,6 +1564,8 @@ export default function App() {
             coryatScore={coryatScore}
             onShowCache={() => setShowCache(true)}
             onShowCategorySearch={() => setShowCategorySearch(true)}
+            unfinishedCount={unfinishedOthers.length}
+            onShowUnfinished={() => setShowUnfinished(true)}
             gameStarted={gameStarted}
             previousGame={previousGame}
             onShowStartScreen={() => setShowStartScreen(true)}
@@ -1408,6 +1676,8 @@ export default function App() {
           currentEpisodeId={episodeMeta?.episodeId}
           playedIndex={playedIndex}
           lastPlayedGameId={gameHistory.length > 0 ? String(gameHistory[0].gameId) : null}
+          startupPref={startupPref}
+          onStartupPrefChange={v => { setStartupPref(v); setStartupEpisodePref(v) }}
           onSelect={(gameId, episodes, index) => {
             setShowBrowser(false)
             setEpisodeList(episodes)
@@ -1441,47 +1711,14 @@ export default function App() {
           }}
         />
       )}
-      {resumePrompt && (
-        <ResumePrompt
-          resumeData={resumePrompt}
-          onResume={() => {
-            const r = resumePrompt
-            setEpisodeData(r.episodeData)
-            setEpisodeMeta(r.episodeMeta)
-            setBoard(r.board)
-            setRound(r.round)
-            setSingleClueStates(r.singleClueStates)
-            setDoubleClueStates(r.doubleClueStates)
-            setFjAnswered(r.fjAnswered)
-            setActualScore(r.actualScore || 0)
-            setDailyDoubles(r.dailyDoubles || [])
-            setBuzzTimes(r.buzzTimes || [])
-            // These two were saved by autoSaveCurrentGame and then dropped on the way
-            // back in, so a resumed game recorded confidenceRatings: null and lost its
-            // tournament standings — "Confidence vs actual" simply never appeared.
-            setConfidenceRatings(r.confidenceRatings || null)
-            setTournamentState(r.tournamentState || null)
-            if (r.tournamentState) {
-              setTournamentMode(true)
-              tournamentModeRef.current = true
-              setBoardControl('player')
-              boardControlRef.current = 'player'
-            }
-            setGameStarted(true)
-            setResumePrompt(null)
-            clearGameState()
-          }}
-          onRestart={() => {
-            const epId = resumePrompt.episodeMeta?.episodeId
-            clearGameState()
-            setResumePrompt(null)
-            if (epId) loadEpisode(epId, false)
-          }}
-          onDiscard={() => {
-            clearGameState()
-            if (user) clearGameStateRemote().catch(console.error)
-            setResumePrompt(null)
-          }}
+      {resumePromptEl}
+      {showUnfinished && (
+        <UnfinishedGames
+          games={unfinishedOthers}
+          deviceId={deviceId}
+          onResume={resumeGame}
+          onDiscard={g => forgetGame(gameKey(g))}
+          onClose={() => setShowUnfinished(false)}
         />
       )}
 
@@ -1544,6 +1781,9 @@ export default function App() {
         <AuthModal
           user={user}
           syncError={syncError}
+          syncing={syncing}
+          lastSyncedAt={lastSyncedAt}
+          onSyncNow={syncNow}
           onClose={() => setShowAuth(false)}
           onSignOut={() => {
             signingOut.current = true
@@ -1639,7 +1879,7 @@ function SyncBanner({ syncError, storageError, unsyncedSince, syncing, onRetry, 
   )
 }
 
-function Header({ coryatScore, actualScore, correctCount, incorrectCount, passCount, answeredCount, totalClues, episodeMeta, user, syncing, syncError, onAuthClick, largeFont, onToggleFontPanel }) {
+function Header({ coryatScore, actualScore, correctCount, incorrectCount, passCount, answeredCount, totalClues, episodeMeta, user, syncing, syncError, onAuthClick, onSyncNow, largeFont, onToggleFontPanel }) {
   const color = coryatScore >= 0 ? '#f5c518' : '#e74c3c'
   const showActual = actualScore !== 0 || coryatScore !== actualScore
   return (
@@ -1673,9 +1913,20 @@ function Header({ coryatScore, actualScore, correctCount, incorrectCount, passCo
       <div style={{ ...S.headerStats, justifyContent: 'flex-end' }}>
         <div style={S.pill}>{correctCount}✓ {incorrectCount}✗ {passCount}—</div>
         <div style={S.pill}>{answeredCount}/{totalClues}</div>
-        <button style={{ ...S.authBtn, color: syncError ? '#e57373' : user ? '#7cd992' : '#8890c0' }} onClick={onAuthClick} title={syncError ? `Sync error: ${syncError.raw}` : user ? 'Synced' : 'Sign in to sync'}>
-          {syncing ? '⏳' : syncError ? '⚠️' : user ? '☁️' : '🔓'}
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+          {user && (
+            <button
+              style={{ ...S.authBtn, fontSize: 18, color: '#8890c0', opacity: syncing ? 0.4 : 1 }}
+              onClick={onSyncNow}
+              disabled={syncing}
+              title="Sync now"
+              aria-label="Sync now"
+            >⟳</button>
+          )}
+          <button style={{ ...S.authBtn, color: syncError ? '#e57373' : user ? '#7cd992' : '#8890c0' }} onClick={onAuthClick} title={syncError ? `Sync error: ${syncError.raw}` : user ? 'Synced' : 'Sign in to sync'}>
+            {syncing ? '⏳' : syncError ? '⚠️' : user ? '☁️' : '🔓'}
+          </button>
+        </div>
       </div>
     </header>
   )
@@ -1922,7 +2173,7 @@ function NavBar({ view, setView, dueCount }) {
 }
 
 // ─── Auth Modal ───────────────────────────────────────────────────────────────
-function AuthModal({ user, syncError, onClose, onSignOut }) {
+function AuthModal({ user, syncError, syncing, lastSyncedAt, onSyncNow, onClose, onSignOut }) {
   const [authView, setAuthView] = useState('signin') // signin | signup | reset
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -1983,6 +2234,12 @@ function AuthModal({ user, syncError, onClose, onSignOut }) {
                 ⚠️ Sync error: {syncError.raw}
               </div>
             )}
+            <button style={{ ...S.startBtn, marginBottom: 6, opacity: syncing ? 0.6 : 1 }} onClick={onSyncNow} disabled={syncing}>
+              {syncing ? 'Syncing…' : '⟳ Sync now'}
+            </button>
+            <div style={{ fontSize: 11, color: '#4060a0', textAlign: 'center', marginBottom: 14 }}>
+              {lastSyncedAt ? `Last synced ${new Date(lastSyncedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : 'Not synced yet this session'}
+            </div>
             <button style={{ ...S.startBtn, background: '#1e2456', color: '#8890d0', border: '1px solid #2e3476' }} onClick={onSignOut}>
               Sign Out
             </button>
@@ -2058,7 +2315,7 @@ function AuthModal({ user, syncError, onClose, onSignOut }) {
 }
 
 // ─── Board View ───────────────────────────────────────────────────────────────
-function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round, hasDouble, onSwitchRound, onBrowse, singleCoryat, doubleCoryat, fjAnswered, onShowFJ, boardLoading, boardError, onLoadEpisode, canGoPrev, canGoNext, onPrev, onNext, timedMode, onToggleTimedMode, autoMode, onToggleAutoMode, tournamentMode, tournamentState, boardControl, coryatScore, onToggleTournament, onShowCache, onShowCategorySearch, gameStarted, previousGame, onShowStartScreen, largeFont, fontSettings, onRandomGame }) {
+function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round, hasDouble, onSwitchRound, onBrowse, singleCoryat, doubleCoryat, fjAnswered, onShowFJ, boardLoading, boardError, onLoadEpisode, canGoPrev, canGoNext, onPrev, onNext, timedMode, onToggleTimedMode, autoMode, onToggleAutoMode, tournamentMode, tournamentState, boardControl, coryatScore, onToggleTournament, onShowCache, onShowCategorySearch, unfinishedCount = 0, onShowUnfinished, gameStarted, previousGame, onShowStartScreen, largeFont, fontSettings, onRandomGame }) {
   const tileBg = { unanswered: '#0f1e6e', correct: '#1a5c2e', incorrect: '#5c1a1a', pass: '#2a2a4a' }
 
   return (
@@ -2072,6 +2329,9 @@ function BoardView({ board, clueStates, onOpen, episodeMeta, episodeData, round,
         <button style={S.loaderBtn} onClick={onShowCategorySearch} title="Search by category">🔍</button>
         <button style={S.loaderBtn} onClick={onShowCache} title="Offline cache">📥</button>
         <button style={S.loaderBtn} onClick={onRandomGame} title="Random unplayed game">🎲</button>
+        {unfinishedCount > 0 && (
+          <button style={{ ...S.loaderBtn, color: '#f5c518' }} onClick={onShowUnfinished} title="Unfinished games">⏯ {unfinishedCount}</button>
+        )}
         <button style={{ ...S.loaderBtn, opacity: canGoNext ? 1 : 0.3 }} onClick={onNext} disabled={!canGoNext}>Next →</button>
       </div>
       {/* Mode toggles */}
@@ -2257,7 +2517,41 @@ function FinalJeopardyModal({ fj, onAnswer, onClose }) {
 }
 
 // ─── Resume Prompt ───────────────────────────────────────────────────────────
-function ResumePrompt({ resumeData, onResume, onRestart, onDiscard }) {
+function UnfinishedGames({ games, deviceId, onResume, onDiscard, onClose }) {
+  const when = iso => new Date(iso).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+  const progress = g => {
+    const states = [...Object.values(g.singleClueStates || {}), ...Object.values(g.doubleClueStates || {})]
+    return states.filter(s => s && s !== 'unanswered').length
+  }
+  return (
+    <div style={S.overlay} onClick={onClose}>
+      <div style={{ ...S.modal, maxWidth: 420, maxHeight: '80vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: 'flex', alignItems: 'center', marginBottom: 12 }}>
+          <div style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 22, color: '#f5c518', letterSpacing: 3, flex: 1 }}>UNFINISHED GAMES</div>
+          <button style={S.closeX} onClick={onClose}>✕</button>
+        </div>
+        {games.length === 0 && <div style={{ fontSize: 13, color: '#6070a0' }}>Nothing unfinished.</div>}
+        {games.map(g => (
+          <div key={`${g.episodeMeta?.episodeId}-${g.savedAt}`} style={{ background: '#060b1a', border: '1px solid #1a2460', borderRadius: 10, padding: '10px 12px', marginBottom: 8 }}>
+            <div style={{ fontSize: 14, color: '#c0c8e8' }}>#{g.episodeMeta?.episodeNumber} · {g.episodeMeta?.airDate}</div>
+            <div style={{ fontSize: 11, color: '#4060a0', marginTop: 2, letterSpacing: 0.5 }}>
+              {g.round === 'double' ? 'Double Jeopardy' : 'Jeopardy'} · {progress(g)} answered · Coryat {(g.coryatScore || 0) >= 0 ? '+' : ''}{(g.coryatScore || 0).toLocaleString()}
+            </div>
+            <div style={{ fontSize: 11, color: '#4060a0', marginTop: 2 }}>
+              Saved {when(g.savedAt)}{g.deviceId && g.deviceId !== deviceId ? ' · on another device' : ''}
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+              <button style={{ ...S.revealBtn, flex: 2, padding: '8px 0' }} onClick={() => onResume(g)}>Resume →</button>
+              <button style={{ ...S.markBtn, flex: 1, background: '#1e1e1e', color: '#6070a0', border: '1px solid #2a2a2a' }} onClick={() => onDiscard(g)}>Discard</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function ResumePrompt({ resumeData, onResume, onRestart, onDiscard, fromOtherDevice = false, onLater }) {
   const meta = resumeData?.episodeMeta
   const savedAt = resumeData?.savedAt
     ? new Date(resumeData.savedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
@@ -2270,7 +2564,7 @@ function ResumePrompt({ resumeData, onResume, onRestart, onDiscard }) {
           RESUME GAME?
         </div>
         <div style={{ fontSize: 13, color: '#8890c0', lineHeight: 1.6, marginBottom: 16 }}>
-          You have an unfinished game:
+          {fromOtherDevice ? 'Pick up the game you were playing on another device:' : 'You have an unfinished game:'}
         </div>
         <div style={{ background: '#060b1a', borderRadius: 10, padding: '12px 14px', marginBottom: 20, border: '1px solid #1a2460' }}>
           <div style={{ fontSize: 14, color: '#c0c8e8', marginBottom: 4 }}>
@@ -2297,6 +2591,14 @@ function ResumePrompt({ resumeData, onResume, onRestart, onDiscard }) {
           >
             Restart
           </button>
+          {onLater && (
+            <button
+              style={{ ...S.markBtn, background: '#1e2456', color: '#8890d0', border: '1px solid #2e3476', flex: 1 }}
+              onClick={onLater}
+            >
+              Not now
+            </button>
+          )}
           <button
             style={{ ...S.markBtn, background: '#1e1e1e', color: '#6070a0', border: '1px solid #2a2a2a', flex: 1 }}
             onClick={onDiscard}
@@ -2631,7 +2933,7 @@ function CategorySearch({ onSelect, onClose }) {
 }
 
 // ─── Episode Browser Modal ────────────────────────────────────────────────────
-function EpisodeBrowser({ onSelect, onClose, currentEpisodeId, playedIndex, lastPlayedGameId }) {
+function EpisodeBrowser({ onSelect, onClose, currentEpisodeId, playedIndex, lastPlayedGameId, startupPref, onStartupPrefChange }) {
   const [episodes, setEpisodes] = useState([])
   const [seasons, setSeasons] = useState([])
   const [selectedSeason, setSelectedSeason] = useState('')
@@ -2681,6 +2983,19 @@ function EpisodeBrowser({ onSelect, onClose, currentEpisodeId, playedIndex, last
           <div style={S.browserTitle}>📺 BROWSE EPISODES</div>
           <button style={S.closeX} onClick={onClose}>✕</button>
         </div>
+        {onStartupPrefChange && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px 0', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 10, color: '#4060a0', letterSpacing: 2 }}>WHEN THE APP OPENS, LOAD</span>
+            {[['next', 'Next after last finished'], ['latest', 'Latest episode']].map(([v, label]) => (
+              <button key={v} onClick={() => onStartupPrefChange(v)} style={{
+                fontSize: 11, padding: '4px 10px', borderRadius: 6, cursor: 'pointer',
+                border: `1px solid ${startupPref === v ? '#f5c518' : '#2a3460'}`,
+                background: startupPref === v ? 'rgba(245,197,24,0.1)' : 'transparent',
+                color: startupPref === v ? '#f5c518' : '#6070a0',
+              }}>{label}</button>
+            ))}
+          </div>
+        )}
         <div style={S.browserControls}>
           <input style={{ ...S.loaderInput, flex: 1 }} value={search} onChange={e => handleSearch(e.target.value)} placeholder="Search by show # or date..." />
           <select style={S.seasonSelect} value={selectedSeason} onChange={e => setSelectedSeason(e.target.value)}>

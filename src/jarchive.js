@@ -11,7 +11,10 @@ export async function fetchEpisode(episodeId = 'latest') {
 
   const missingDJ = !data.doubleJeopardy
   const incompleteSJ = !data.singleJeopardy || data.singleJeopardy.categories.length < 6
-  const needsClientFetch = isRecent && (missingDJ || incompleteSJ || !res.ok)
+  // A response cached at the edge before the parser could recover a broken Final Jeopardy (or
+  // before j-archive posted one) would otherwise keep serving a game with no ending.
+  const missingFJ = !data.finalJeopardy
+  const needsClientFetch = isRecent && (missingDJ || incompleteSJ || missingFJ || !res.ok)
 
   if (needsClientFetch) {
     const targetId = data.episodeId || episodeId

@@ -1,6 +1,6 @@
 {
   "name": "jeopardy-coryat",
-  "version": "2026.1011.2",
+  "version": "2026.1011.3",
   "type": "module",
   "scripts": {
     "dev": "vite",

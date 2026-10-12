@@ -821,6 +821,18 @@ export default function App() {
       setTournamentMode(false)
       tournamentModeRef.current = false
     }
+    // Saved before the episode had a Final Jeopardy (or before the parser could read it):
+    // fetch it now so the game can be finished.
+    if (!r.episodeData?.finalJeopardy && r.episodeMeta?.episodeId) {
+      const id = String(r.episodeMeta.episodeId)
+      fetchEpisode(id)
+        .then(fresh => {
+          if (!fresh?.finalJeopardy) return
+          saveEpisodeToCache(fresh.episodeId || id, fresh)
+          setEpisodeData(prev => (prev && prev.episodeNumber === fresh.episodeNumber ? { ...prev, finalJeopardy: fresh.finalJeopardy } : prev))
+        })
+        .catch(() => {})
+    }
     setGameStarted(true)
     setResumePrompt(null)
     setShowUnfinished(false)
@@ -902,7 +914,10 @@ export default function App() {
     setActualScore(0)
     try {
       // Check cache first
-      const cached = getEpisodeFromCache(gameId === 'latest' ? gameId : gameId)
+      // A cached episode with no Final Jeopardy is stale — fetch it again rather than serve a
+      // game that can't be finished.
+      const fromCache = getEpisodeFromCache(gameId)
+      const cached = fromCache?.finalJeopardy ? fromCache : null
       const episode = cached || await fetchEpisode(gameId)
       if (seq !== loadSeq.current) return
       // Cache the fetched episode

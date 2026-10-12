@@ -2,7 +2,8 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 // Lives in src/, not beside the function: Netlify treats every file in
 // netlify/functions/ as a deployable endpoint, so a test file there would ship
 // as a function that imports vitest.
-import { probeForward } from '../netlify/functions/jarchive.mjs'
+import { probeForward, parseFinalJeopardy } from '../netlify/functions/jarchive.mjs'
+import { parse } from 'node-html-parser'
 
 // The archive is stubbed as "every id up to `top` exists". probeForward has to return the
 // same answer the old sequential loop did — the highest unbroken run past maxId — while
@@ -51,5 +52,39 @@ describe('probeForward', () => {
       return { ok: id <= 9480 }
     })
     expect(await probeForward(9470)).toBe(9472)
+  })
+})
+
+describe('parseFinalJeopardy', () => {
+  // Shaped like game 9539's markup, down to the mismatched tag in a contestant's response.
+  const page = (response = 'Who is... M<u>ilton</i>?') => `<html><body><div id="content">
+    <div id="double_jeopardy_round"><p>dj</p></div>
+    <div id="final_jeopardy_round"><table class="final_round"><tr><td class="category"><div><table>
+      <tr><td class="category_name">17th CENTURY AUTHORS</td></tr></table></div></td></tr>
+      <tr><td class="clue"><table><tr>
+        <td id="clue_FJ" class="clue_text">A Mayo Clinic study regarding this poet&#39;s health afflictions</td>
+        <td id="clue_FJ_r" class="clue_text" style="display:none;">(Ken: That is correct.)<table><tr>
+          <td class="right">Greg</td><td>${response}</td></tr></table><em class="correct_response">John <i>Milton</i></em></td>
+      </tr></table></td></tr></table></div></div></body></html>`
+  const expected = {
+    category: '17th CENTURY AUTHORS',
+    clue: "A Mayo Clinic study regarding this poet's health afflictions",
+    answer: 'John Milton',
+  }
+
+  it('recovers Final Jeopardy when a broken tag makes the parser drop the round', () => {
+    const html = page()
+    expect(parse(html).querySelector('#final_jeopardy_round')).toBeNull() // the failure being worked around
+    expect(parseFinalJeopardy(parse(html), html)).toEqual(expected)
+  })
+
+  it('reads well-formed pages from the DOM as before', () => {
+    const html = page('Who is Milton?')
+    expect(parseFinalJeopardy(parse(html), html)).toEqual(expected)
+  })
+
+  it('returns null when the page has no Final Jeopardy yet', () => {
+    const html = '<html><body><div id="double_jeopardy_round"></div></body></html>'
+    expect(parseFinalJeopardy(parse(html), html)).toBeNull()
   })
 })

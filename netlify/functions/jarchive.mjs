@@ -37,6 +37,34 @@ export async function probeForward(maxId, span = 20) {
   return highest
 }
 
+// j-archive's transcripts are hand-typed HTML. One mismatched tag in a contestant's written
+// response — game 9539 has `Who is... M<u>ilton</i>?` — is enough for node-html-parser to drop
+// the whole #final_jeopardy_round element, and the game shipped without a Final Jeopardy.
+// When the DOM comes up empty, read the clue straight from the markup instead.
+export function parseFinalJeopardy(doc, html) {
+  const fjEl = doc.querySelector('#final_jeopardy_round')
+  if (fjEl) {
+    const fromDom = {
+      category: fjEl.querySelector('.category_name')?.text?.trim() || 'FINAL JEOPARDY',
+      clue: fjEl.querySelector('.clue_text')?.text?.trim() || '',
+      answer: fjEl.querySelector('[id$="_r"] .correct_response')?.text?.trim() || '',
+    }
+    if (fromDom.clue) return fromDom
+  }
+
+  const start = html.indexOf('id="final_jeopardy_round"')
+  if (start === -1) return null
+  const section = html.slice(start)
+  const text = fragment => (fragment == null ? '' : parse(`<div>${fragment}</div>`).text.trim())
+  const clue = text(section.match(/id="clue_FJ"[^>]*>([\s\S]*?)<\/td>/)?.[1])
+  if (!clue) return null
+  return {
+    category: text(section.match(/class="category_name"[^>]*>([\s\S]*?)<\/td>/)?.[1]) || 'FINAL JEOPARDY',
+    clue,
+    answer: text(section.match(/class="correct_response"[^>]*>([\s\S]*?)<\/em>/)?.[1]),
+  }
+}
+
 export const handler = async (event) => {
   const headers = {
     'Access-Control-Allow-Origin': '*',
@@ -336,15 +364,7 @@ export const handler = async (event) => {
     if (!doubleJeopardy) doubleJeopardy = parseRoundFromClueIds(doc, html, 'DJ', 400)
 
     // ── Final Jeopardy ────────────────────────────────────────────────────────
-    let finalJeopardy = null
-    const fjEl = doc.querySelector('#final_jeopardy_round')
-    if (fjEl) {
-      finalJeopardy = {
-        category: fjEl.querySelector('.category_name')?.text?.trim() || 'FINAL JEOPARDY',
-        clue: fjEl.querySelector('.clue_text')?.text?.trim() || '',
-        answer: fjEl.querySelector('[id$="_r"] .correct_response')?.text?.trim() || '',
-      }
-    }
+    const finalJeopardy = parseFinalJeopardy(doc, html)
 
     // ── Contestant scores ─────────────────────────────────────────────────────
     // J-archive stores final scores in a table with class "score_td"
